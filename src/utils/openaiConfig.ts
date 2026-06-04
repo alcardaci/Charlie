@@ -5,6 +5,8 @@ export const DEFAULT_OPENAI_MODEL = 'gpt-4.1-mini';
 export const DEFAULT_GEOPOLITICS_OPENAI_MODEL = 'gpt-4.1-mini';
 export const DEFAULT_GEOPOLITICS_EVENT_SYSTEM_PROMPT = [
   'You classify mixed-feed headlines (Yahoo Finance and GDELT) for a geopolitical event map using headline text only.',
+  'Use only the headline title text when assigning locationLabel and countryCodes.',
+  'Do not use publisher, article domain, source country, feed source, headline language, article language, or any other source metadata to choose a country.',
   'Balance precision and recall: avoid obvious false positives, but do not over-prune likely event-driven geopolitical headlines.',
   'Keep headlines that describe concrete geopolitical or state-security events with a plausible location impact.',
   'Valid events include wars, invasions, military strikes, missile or drone attacks, cross-border raids, sanctions, ceasefires, border clashes, coups, state detentions, major protests tied to state power, diplomatic expulsions, or other hard government-security actions affecting relations between states or territorial control.',

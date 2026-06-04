@@ -2890,7 +2890,7 @@ async function fetchGeopoliticalMapDataset(
   options: GeopoliticalMapOptions = {}
 ): Promise<GeopoliticalMapDataset> {
   const cacheKey = JSON.stringify({
-    pipelineVersion: 'geopolitics-events-v13-gdelt-sourcecountry-fallback',
+    pipelineVersion: 'geopolitics-events-v14-headline-only-country-attribution',
     lookbackHours,
     enableAI: Boolean(options.enableAI && options.model?.trim()),
     model: options.model?.trim() ?? '',
@@ -3089,12 +3089,10 @@ async function fetchGeopoliticalGdeltHeadlines(
         : '';
       const sourceCountryInfo = resolveSourceCountryMetadata(sourceCountry);
       const countryCodesFromHeadline = collectCountryCodesFromText(title);
-      const countryCodes = countryCodesFromHeadline.length
-        ? countryCodesFromHeadline
-        : sourceCountryInfo.countryCodes;
+      const countryCodes = countryCodesFromHeadline;
       const locationLabel = countryCodes.length
         ? countryCodes.map((code) => COUNTRY_MONITOR_BY_CODE.get(code)?.label ?? code).join(', ')
-        : sourceCountryInfo.sourceCountryLabel || sourceCountry || undefined;
+        : undefined;
 
       if (pipelineDebug) {
         if (sourceCountry) pipelineDebug.fetched.gdeltWithSourceCountry += 1;
@@ -3356,22 +3354,19 @@ async function extractGeopoliticalHeadlineAssessments(
   lookbackHours: number,
   options: GeopoliticalMapOptions
 ): Promise<GeopoliticalHeadlineAssessment[]> {
+  const headlineIds = headlines.map((headline, index) => ({
+    title: headline.title,
+    link: `headline-${index + 1}`,
+    originalLink: headline.link,
+  }));
+  const originalLinkByHeadlineId = new Map(
+    headlineIds.map((headline) => [headline.link, headline.originalLink] as const)
+  );
   const requestBody = {
     model: options.model,
     systemPrompt: options.systemPrompt ?? '',
     lookbackHours,
-    headlines: headlines.map((headline) => ({
-      title: headline.title,
-      publisher: headline.publisher,
-      link: headline.link,
-      publishedAt: headline.publishedAt,
-      feedSource: headline.feedSource ?? null,
-      sourceCountry: headline.sourceCountry ?? null,
-      sourceCountryCode: headline.sourceCountryCode ?? null,
-      sourceCountryLabel: headline.sourceCountryLabel ?? null,
-      locationLabel: headline.locationLabel ?? null,
-      countryCodes: headline.countryCodes ?? null,
-    })),
+    headlines: headlineIds.map(({ title, link }) => ({ title, link })),
     supportedCountries: COUNTRY_NEWS_MONITORS.map((country) => ({
       code: country.countryCode,
       label: country.label,
@@ -3390,7 +3385,18 @@ async function extractGeopoliticalHeadlineAssessments(
     throw new Error(payload?.error ?? `Geopolitical headline extraction failed: ${res.status}`);
   }
 
-  return Array.isArray(payload?.events) ? payload.events : [];
+  if (!Array.isArray(payload?.events)) return [];
+
+  return payload.events.flatMap((event): GeopoliticalHeadlineAssessment[] => {
+    const headlineId = typeof event.link === 'string' ? event.link.trim() : '';
+    const originalLink = originalLinkByHeadlineId.get(headlineId);
+    if (!originalLink) return [];
+
+    return [{
+      ...event,
+      link: originalLink,
+    }];
+  });
 }
 
 function applyHeadlineAssessments(
@@ -3545,19 +3551,11 @@ function normalizeAssessmentCountryCodes(countryCodes?: string[], locationLabel?
 }
 
 function resolveHeadlineCountryCodes(
-  headline: Pick<NewsItem, 'countryCodes' | 'locationLabel' | 'sourceCountry' | 'sourceCountryCode' | 'sourceCountryLabel' | 'title'>
+  headline: Pick<NewsItem, 'countryCodes' | 'locationLabel' | 'title'>
 ): string[] {
   const assessmentCountryCodes = normalizeAssessmentCountryCodes(headline.countryCodes, headline.locationLabel);
   if (assessmentCountryCodes.length) {
     return assessmentCountryCodes;
-  }
-
-  const sourceCountryCodes = normalizeAssessmentCountryCodes(
-    headline.sourceCountryCode ? [headline.sourceCountryCode] : undefined,
-    headline.sourceCountryLabel ?? headline.sourceCountry ?? undefined
-  );
-  if (sourceCountryCodes.length) {
-    return sourceCountryCodes;
   }
 
   return collectCountryCodesFromText(headline.title);

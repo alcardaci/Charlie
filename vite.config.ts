@@ -4061,31 +4061,11 @@ function marketDataMiddleware(): Plugin {
                   .flatMap((item) => {
                     if (!item || typeof item !== 'object') return []
                     const title = typeof item.title === 'string' ? item.title.trim() : ''
-                    const publisher = typeof item.publisher === 'string' ? item.publisher.trim() : ''
                     const link = typeof item.link === 'string' ? item.link.trim() : ''
-                    const publishedAt = typeof item.publishedAt === 'number' ? item.publishedAt : Number.parseInt(String(item.publishedAt ?? '0'), 10)
-                    const feedSource = typeof item.feedSource === 'string' ? item.feedSource.trim() : ''
-                    const sourceCountry = typeof item.sourceCountry === 'string' ? item.sourceCountry.trim() : ''
-                    const sourceCountryCode = typeof item.sourceCountryCode === 'string' ? item.sourceCountryCode.trim().toUpperCase() : ''
-                    const sourceCountryLabel = typeof item.sourceCountryLabel === 'string' ? item.sourceCountryLabel.trim() : ''
-                    const locationLabel = typeof item.locationLabel === 'string' ? item.locationLabel.trim() : ''
-                    const countryCodes = Array.isArray(item.countryCodes)
-                      ? Array.from(new Set(item.countryCodes
-                          .map((value) => String(value ?? '').replace(/[^A-Za-z]/g, '').slice(0, 2).toUpperCase())
-                          .filter((value) => /^[A-Z]{2}$/.test(value))))
-                      : []
                     if (!title || !link) return []
                     return [{
                       title,
-                      publisher,
                       link,
-                      publishedAt,
-                      feedSource: feedSource || undefined,
-                      sourceCountry: sourceCountry || undefined,
-                      sourceCountryCode: /^[A-Z]{2}$/.test(sourceCountryCode) ? sourceCountryCode : undefined,
-                      sourceCountryLabel: sourceCountryLabel || undefined,
-                      locationLabel: locationLabel || undefined,
-                      countryCodes: countryCodes.length ? countryCodes : undefined,
                     }]
                   })
                   .slice(0, 220)
@@ -4110,13 +4090,15 @@ function marketDataMiddleware(): Plugin {
             const countryCatalog = supportedCountries.map((country) => `${country.code}: ${country.label}`).join('\n')
             const input = [
               `Classify these mixed-feed headlines (Yahoo Finance and GDELT) for a geopolitical event map covering the last ${lookbackHours} hours.`,
+              'Use only the headline title text to decide whether a country should be assigned.',
+              'The link value is an opaque headline id for response matching, not a URL or source clue.',
               'Return strict JSON only in this exact shape:',
-              '{"events":[{"link":"https://...","locationLabel":"Country name","countryCodes":["US"],"severityScore":7,"eventKey":"2026-03-14-ir-missile-strike-tehran","eventLabel":"Missile strike in Tehran"}]}',
+              '{"events":[{"link":"headline-1","locationLabel":"Country name","countryCodes":["US"],"severityScore":7,"eventKey":"2026-03-14-ir-missile-strike-tehran","eventLabel":"Missile strike in Tehran"}]}',
               'Rules:',
               '- Include headlines that describe concrete geopolitical events, hard state-security actions, military activity, sanctions actions, cross-border incidents, or credible breaking escalation updates tied to a real-world location.',
               '- Exclude pure opinion/commentary, purely financial market reaction headlines, company/earnings headlines, and headlines that are clearly not describing an underlying geopolitical event.',
-              '- Always return a locationLabel. Return countryCodes using only the supported country list when you can map the location confidently.',
-              '- When a headline already includes feedSource, sourceCountry, sourceCountryCode, sourceCountryLabel, locationLabel, or countryCodes hints, use them as supporting clues rather than discarding them. GDELT headlines may carry useful preclassified geography.',
+              '- Always return a locationLabel. Return countryCodes using only the supported country list when the headline title maps the event location confidently.',
+              '- Do not use publisher, article domain, source country, feed source, headline language, article language, or any other source metadata to choose countryCodes or locationLabel.',
               '- If the headline is likely geopolitical but the location is implicit, infer the most plausible country from the state actor or explicit context and keep severity low unless impact is clearly high.',
               '- You may assign up to 3 country codes to one headline when the headline clearly affects multiple countries.',
               '- severityScore must be an integer from 1 to 10 using these bins only: 1 to 2 = LOW, 3 to 5 = MEDIUM, 6 to 8 = HIGH, 9 to 10 = SEVERE.',
