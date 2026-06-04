@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bot, KeyRound, Link2, Settings2 } from 'lucide-react';
+import { Bot, KeyRound, Link2, Palette, Settings2 } from 'lucide-react';
 import {
   deleteConnectionSecret,
   fetchConnectionStatuses,
@@ -14,6 +14,7 @@ import {
   DEFAULT_OVERVIEW_SUMMARY_SYSTEM_PROMPT,
   OPENAI_MODEL_OPTIONS,
 } from '../utils/openaiConfig';
+import { THEME_ACCENT_OPTIONS, useTheme, type ThemeAccent } from '../utils/theme';
 
 type ProviderDraftState = Record<ConnectionProvider, string>;
 type ProviderVisibilityState = Record<ConnectionProvider, boolean>;
@@ -70,9 +71,13 @@ const PROVIDER_CARDS: Array<{
   },
 ];
 
+const formatAccentRgb = (rgb: string) => `rgb(${rgb.trim().replace(/\s+/g, ', ')})`;
+
 export function SettingsPanel() {
   const queryClient = useQueryClient();
   const { openAISettings, updateOpenAISettings, setActivePanel } = useTerminalStore();
+  const { accent, setAccentPreference } = useTheme();
+  const selectedAccent = THEME_ACCENT_OPTIONS.find((option) => option.key === accent) ?? THEME_ACCENT_OPTIONS[0];
   const [draftModel, setDraftModel] = useState(openAISettings.model);
   const [draftSummaryPrompt, setDraftSummaryPrompt] = useState(
     openAISettings.systemPrompts.comprehensive || DEFAULT_OVERVIEW_SUMMARY_SYSTEM_PROMPT
@@ -162,6 +167,10 @@ export function SettingsPanel() {
     });
 
     setSettingsMessage('AI preferences saved locally. Provider credentials remain stored separately on this machine.');
+  };
+
+  const handleAccentChange = (nextAccent: ThemeAccent) => {
+    setAccentPreference(nextAccent === 'blue' ? null : nextAccent);
   };
 
   return (
@@ -287,6 +296,67 @@ export function SettingsPanel() {
         </div>
 
         <div>
+          <div className="bg-terminal-panel border border-terminal-border rounded p-4 space-y-4 mb-4">
+            <div className="flex items-center gap-2">
+              <Palette size={13} className="text-terminal-accent" />
+              <div>
+                <div className="text-terminal-muted text-xs font-bold tracking-wider">APPEARANCE</div>
+                <div className="text-terminal-faint text-xs mt-1">Brand accent color for the shell, charts, controls, and highlights.</div>
+              </div>
+            </div>
+
+            <div className="rounded border border-terminal-border bg-terminal-elevated px-3 py-3 space-y-3">
+              <div className="flex items-center gap-3">
+                <span
+                  className="inline-flex h-8 w-8 rounded border border-terminal-border"
+                  style={{
+                    backgroundColor: 'var(--terminal-accent)',
+                    boxShadow: '0 0 18px rgb(var(--terminal-accent-rgb) / 0.18)',
+                  }}
+                  aria-hidden="true"
+                />
+                <div>
+                  <div className="text-terminal-text text-xs font-bold tracking-wider">
+                    {selectedAccent.label.toUpperCase()}
+                  </div>
+                  <div className="text-terminal-faint text-[11px] mt-1">
+                    {selectedAccent.description}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {THEME_ACCENT_OPTIONS.map((option) => {
+                  const isActive = option.key === accent;
+                  return (
+                    <button
+                      key={option.key}
+                      onClick={() => handleAccentChange(option.key)}
+                      className={`flex items-center gap-2 rounded border px-2.5 py-2 text-left transition-colors ${
+                        isActive
+                          ? 'border-terminal-accent/60 bg-terminal-accent/12 text-terminal-accent'
+                          : 'border-terminal-border bg-terminal-panel text-terminal-muted hover:border-terminal-accent/40 hover:bg-terminal-hover hover:text-terminal-accent'
+                      }`}
+                      aria-pressed={isActive}
+                    >
+                      <span
+                        className="inline-flex h-4 w-4 flex-shrink-0 rounded-sm border border-terminal-border"
+                        style={{ backgroundColor: formatAccentRgb(option.darkRgb) }}
+                        aria-hidden="true"
+                      />
+                      <span className="min-w-0">
+                        <span className="block text-[11px] font-bold tracking-[0.12em]">{option.label.toUpperCase()}</span>
+                        <span className="block truncate text-[10px] opacity-70">
+                          {option.key === 'blue' ? 'Default' : option.key === 'yellow' ? 'Classic' : 'Accent'}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
           <div className="bg-terminal-panel border border-terminal-border rounded p-4 space-y-4">
             <div className="flex items-center gap-2">
               <Bot size={13} className="text-terminal-accent" />
