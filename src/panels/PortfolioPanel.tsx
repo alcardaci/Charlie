@@ -126,6 +126,10 @@ function parseLotFields(lot: LotFields) {
   return { shares, avgCost, purchaseDate, isValid };
 }
 
+function normalizePortfolioSymbol(symbol: string): string {
+  return symbol.trim().toUpperCase();
+}
+
 function inferPortfolioAssetClass(symbol: string, quote?: Quote): string {
   const type = `${quote?.quoteType ?? ''} ${quote?.typeDisp ?? ''}`.toUpperCase();
 
@@ -421,7 +425,7 @@ export function PortfolioPanel() {
   const editSharesInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const symbols = [...new Set(portfolio.map((position) => position.symbol))];
+  const symbols = [...new Set(portfolio.map((position) => normalizePortfolioSymbol(position.symbol)).filter(Boolean))];
 
   const { data: quotes = [] } = useQuery({
     queryKey: ['portfolio-quotes', symbols],
@@ -445,11 +449,12 @@ export function PortfolioPanel() {
     staleTime: 10000,
   });
 
-  const quoteMap = new Map(quotes.map((quote) => [quote.symbol, quote]));
+  const quoteMap = new Map(quotes.map((quote) => [normalizePortfolioSymbol(quote.symbol), quote]));
 
   const lots: PortfolioLot[] = portfolio.map((position) => {
     const purchaseDate = resolvePurchaseDate(position);
-    const quote = quoteMap.get(position.symbol);
+    const symbol = normalizePortfolioSymbol(position.symbol);
+    const quote = quoteMap.get(symbol);
     const currentPrice = quote?.regularMarketPrice ?? position.avgCost;
     const currentValue = currentPrice * position.shares;
     const totalCost = position.avgCost * position.shares;
@@ -458,6 +463,7 @@ export function PortfolioPanel() {
 
     return {
       ...position,
+      symbol,
       purchaseDate,
       currentPrice,
       currentValue,

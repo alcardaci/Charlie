@@ -1247,12 +1247,9 @@ export async function fetchQuotes(symbols: string[]): Promise<Quote[]> {
   }
 
   const yahooBySymbol = new Map(yahooQuotes.map((quote) => [normalizeLookupSymbol(quote.symbol), quote]));
-  const shouldCheckTeleborsa = symbols.length <= 12;
-  const teleborsaCandidates = shouldCheckTeleborsa
-    ? Array.from(new Set(symbols.map((symbol) => normalizeLookupSymbol(symbol))))
-        .filter((symbol) => looksLikeTeleborsaFundCandidate(symbol))
-        .filter((symbol) => !isYahooFundQuote(yahooBySymbol.get(symbol)))
-    : [];
+  const teleborsaCandidates = Array.from(new Set(symbols.map((symbol) => normalizeLookupSymbol(symbol))))
+    .filter((symbol) => looksLikeTeleborsaFundCandidate(symbol))
+    .filter((symbol) => !isYahooFundQuote(yahooBySymbol.get(symbol)));
 
   const teleborsaQuotes = await Promise.all(teleborsaCandidates.map((symbol) => fetchTeleborsaQuote(symbol)));
   const teleborsaBySymbol = new Map(
