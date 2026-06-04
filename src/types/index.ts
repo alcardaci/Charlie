@@ -3,6 +3,7 @@ export type PanelType =
   | 'opportunities'
   | 'equity'
   | 'chart'
+  | 'multiAsset'
   | 'news'
   | 'geopolitics'
   | 'predictions'

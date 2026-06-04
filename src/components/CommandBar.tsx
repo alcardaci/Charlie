@@ -101,6 +101,7 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
     opportunities: 'OPPORTUNITY INTELLIGENCE',
     equity: `${activeSymbol} EQUITY`,
     chart: `${activeSymbol} CHART`,
+    multiAsset: 'MULTI-ASSET WORKSPACE',
     news: 'NEWS + GEOPOLITICS',
     geopolitics: 'NEWS + GEOPOLITICS',
     predictions: 'PREDICTION MARKETS',

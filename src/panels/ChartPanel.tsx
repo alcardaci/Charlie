@@ -11,12 +11,13 @@ import {
   type TickMarkType,
 } from 'lightweight-charts';
 import { useQuery } from '@tanstack/react-query';
-import { CalendarRange, Star, StarOff } from 'lucide-react';
+import { CalendarRange, FileText, Plus, Star, StarOff } from 'lucide-react';
 import { fetchChartWindow, fetchQuotes } from '../api/finance';
 import { useTerminalStore } from '../store/useTerminalStore';
 import { changeColor, fmt } from '../utils/formatters';
 import { getThemePalette, useTheme } from '../utils/theme';
 import type { ChartInterval, ChartPoint, ChartRange, ChartStyle } from '../types';
+import type { MultiAssetView } from '../store/useTerminalStore';
 
 const TIMEFRAMES: { label: string; range: ChartRange; interval: ChartInterval }[] = [
   { label: '1D', range: '1d', interval: '5m' },
@@ -251,18 +252,27 @@ function applyData(
   chart?.timeScale().fitContent();
 }
 
-export function ChartPanel() {
+type ChartPanelProps = {
+  symbol?: string;
+  embedded?: boolean;
+  onOpenParallel?: (symbol: string, view: MultiAssetView) => void;
+  onSwitchView?: (view: MultiAssetView) => void;
+};
+
+export function ChartPanel({ symbol, embedded = false, onOpenParallel, onSwitchView }: ChartPanelProps = {}) {
   const {
     activeSymbol,
     addToWatchlist,
     removeFromWatchlist,
     watchlist,
     setActivePanel,
+    openMultiAssetView,
     chartStyle,
     setChartStyle,
   } = useTerminalStore();
-  const { mode } = useTheme();
-  const inWatchlist = watchlist.includes(activeSymbol);
+  const selectedSymbol = (symbol ?? activeSymbol).toUpperCase();
+  const { mode, accent } = useTheme();
+  const inWatchlist = watchlist.includes(selectedSymbol);
   const themePalette = getThemePalette();
   const maColors: Record<string, string> = { MA20: themePalette.blue, MA50: themePalette.accent, MA200: themePalette.purple };
 
@@ -293,16 +303,16 @@ export function ChartPanel() {
   const showYearInAxis = shouldShowYearInAxis(tf?.range ?? null, customAppliedRange?.start, customAppliedRange?.end);
 
   const { data: quote } = useQuery({
-    queryKey: ['quote-chart', activeSymbol],
-    queryFn: () => fetchQuotes([activeSymbol]).then((results) => results[0]),
+    queryKey: ['quote-chart', selectedSymbol],
+    queryFn: () => fetchQuotes([selectedSymbol]).then((results) => results[0]),
     refetchInterval: 15000,
     staleTime: 10000,
   });
 
   const { data: chartResult, isLoading } = useQuery({
-    queryKey: ['chart', activeSymbol, tf?.range ?? 'custom', chartInterval, customAppliedRange?.start ?? null, customAppliedRange?.end ?? null],
+    queryKey: ['chart', selectedSymbol, tf?.range ?? 'custom', chartInterval, customAppliedRange?.start ?? null, customAppliedRange?.end ?? null],
     queryFn: () => fetchChartWindow(
-      activeSymbol,
+      selectedSymbol,
       customAppliedRange
         ? {
             interval: chartInterval,
@@ -441,11 +451,11 @@ export function ChartPanel() {
       maSeriesRef.current = new Map();
       chartInstanceRef.current = null;
     };
-  }, [activeSymbol, tfIdx, activeIndicators, chartStyle, mode, showYearInAxis]);
+  }, [selectedSymbol, tfIdx, activeIndicators, chartStyle, mode, accent, showYearInAxis]);
 
   useEffect(() => {
     applyData(chartData, chartStyle, priceSeriesRef.current, volumeSeriesRef.current, maSeriesRef.current, chartInstanceRef.current, themePalette);
-  }, [chartData, chartStyle, mode]);
+  }, [chartData, chartStyle, mode, accent]);
 
   useEffect(() => {
     if (!quote || !chartDataRef.current.length || !priceSeriesRef.current) return;
@@ -460,10 +470,16 @@ export function ChartPanel() {
       <div className="flex items-center justify-between gap-3 px-3 py-2 panel-border-b bg-terminal-panel flex-shrink-0 flex-wrap">
         <div className="flex items-center gap-3">
           <button
-            onClick={() => setActivePanel('equity', activeSymbol)}
+            onClick={() => {
+              if (onSwitchView) {
+                onSwitchView('research');
+                return;
+              }
+              setActivePanel('equity', selectedSymbol);
+            }}
             className="text-terminal-accent font-bold text-sm hover:underline"
           >
-            {activeSymbol}
+            {selectedSymbol}
           </button>
           {quote && (
             <div className="flex items-center gap-2 text-xs">
@@ -544,11 +560,29 @@ export function ChartPanel() {
           </div>
 
           <button
-            onClick={() => (inWatchlist ? removeFromWatchlist(activeSymbol) : addToWatchlist(activeSymbol))}
+            onClick={() => (inWatchlist ? removeFromWatchlist(selectedSymbol) : addToWatchlist(selectedSymbol))}
             className={`ml-1 p-1 rounded hover:bg-terminal-hover ${inWatchlist ? 'text-terminal-accent' : 'text-terminal-faint'}`}
           >
             {inWatchlist ? <Star size={13} fill="currentColor" /> : <StarOff size={13} />}
           </button>
+          {embedded && (
+            <button
+              onClick={() => onSwitchView?.('research')}
+              className="flex items-center gap-1.5 rounded border border-terminal-border px-2 py-1 text-xs text-terminal-muted transition-colors hover:border-terminal-accent/40 hover:bg-terminal-hover hover:text-terminal-accent"
+            >
+              <FileText size={12} />
+              RESEARCH
+            </button>
+          )}
+          {!embedded && (
+            <button
+              onClick={() => (onOpenParallel ?? openMultiAssetView)(selectedSymbol, 'chart')}
+              className="flex items-center gap-1.5 rounded border border-terminal-border px-2 py-1 text-xs text-terminal-muted transition-colors hover:border-terminal-accent/40 hover:bg-terminal-hover hover:text-terminal-accent"
+            >
+              <Plus size={12} />
+              PARALLEL
+            </button>
+          )}
         </div>
       </div>
 

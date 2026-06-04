@@ -5,6 +5,7 @@ import {
   FileText,
   Globe,
   Landmark,
+  Plus,
   Star,
   StarOff,
   TrendingUp,
@@ -14,6 +15,7 @@ import { fetchCompanyFinancials, fetchCompanyWorkbench, fetchQuotes } from '../a
 import { CompanyFinancials, CompanyWorkbench, FinancialPeriodType } from '../types';
 import { useTerminalStore } from '../store/useTerminalStore';
 import { fmt, changeColor } from '../utils/formatters';
+import type { MultiAssetView } from '../store/useTerminalStore';
 
 type WorkspaceTab = 'overview' | 'financials' | 'analysis' | 'ownership' | 'performance' | 'holdings' | 'details';
 
@@ -31,28 +33,36 @@ const FUND_TABS: Array<{ key: WorkspaceTab; label: string }> = [
   { key: 'details', label: 'DETAILS' },
 ];
 
-export function EquityPanel() {
-  const { activeSymbol, setActivePanel, addToWatchlist, removeFromWatchlist, watchlist } = useTerminalStore();
+type EquityPanelProps = {
+  symbol?: string;
+  embedded?: boolean;
+  onOpenParallel?: (symbol: string, view: MultiAssetView) => void;
+  onSwitchView?: (view: MultiAssetView) => void;
+};
+
+export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitchView }: EquityPanelProps = {}) {
+  const { activeSymbol, setActivePanel, openMultiAssetView, addToWatchlist, removeFromWatchlist, watchlist } = useTerminalStore();
+  const selectedSymbol = (symbol ?? activeSymbol).toUpperCase();
   const [tab, setTab] = useState<WorkspaceTab>('overview');
   const [periodType, setPeriodType] = useState<FinancialPeriodType>('annual');
 
-  const inWatchlist = watchlist.includes(activeSymbol);
+  const inWatchlist = watchlist.includes(selectedSymbol);
 
   useEffect(() => {
     setTab('overview');
     setPeriodType('annual');
-  }, [activeSymbol]);
+  }, [selectedSymbol]);
 
   const { data: workbench, isLoading, error } = useQuery({
-    queryKey: ['equity-workbench', activeSymbol],
-    queryFn: () => fetchCompanyWorkbench(activeSymbol),
+    queryKey: ['equity-workbench', selectedSymbol],
+    queryFn: () => fetchCompanyWorkbench(selectedSymbol),
     refetchInterval: 30000,
     staleTime: 15000,
   });
 
   const { data: financials, isLoading: loadingFinancials } = useQuery({
-    queryKey: ['equity-financials', activeSymbol, periodType],
-    queryFn: () => fetchCompanyFinancials(activeSymbol, periodType),
+    queryKey: ['equity-financials', selectedSymbol, periodType],
+    queryFn: () => fetchCompanyFinancials(selectedSymbol, periodType),
     enabled: workbench?.instrumentKind !== 'fund' && tab === 'financials',
     staleTime: 10 * 60 * 1000,
     gcTime: 30 * 60 * 1000,
@@ -75,8 +85,8 @@ export function EquityPanel() {
     }
   }, [tab, workbench]);
 
-  if (isLoading) return <LoadingState symbol={activeSymbol} />;
-  if (error || !workbench) return <ErrorState symbol={activeSymbol} />;
+  if (isLoading) return <LoadingState symbol={selectedSymbol} />;
+  if (error || !workbench) return <ErrorState symbol={selectedSymbol} />;
 
   const isFund = workbench.instrumentKind === 'fund';
   const tabs = isFund ? FUND_TABS : EQUITY_TABS;
@@ -128,14 +138,38 @@ export function EquityPanel() {
 
           <div className="flex items-center gap-2 sm:justify-end">
             <button
-              onClick={() => (inWatchlist ? removeFromWatchlist(activeSymbol) : addToWatchlist(activeSymbol))}
+              onClick={() => (inWatchlist ? removeFromWatchlist(selectedSymbol) : addToWatchlist(selectedSymbol))}
               className={`p-1.5 rounded hover:bg-terminal-hover transition-colors ${inWatchlist ? 'text-terminal-accent' : 'text-terminal-faint'}`}
               title={inWatchlist ? 'Remove from watchlist' : 'Add to watchlist'}
             >
               {inWatchlist ? <Star size={14} fill="currentColor" /> : <StarOff size={14} />}
             </button>
+            {!embedded && (
+              <button
+                onClick={() => (onOpenParallel ?? openMultiAssetView)(selectedSymbol, 'research')}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-terminal-elevated border border-terminal-border rounded hover:bg-terminal-hover transition-colors text-xs text-terminal-text"
+              >
+                <Plus size={12} />
+                PARALLEL
+              </button>
+            )}
+            {embedded && (
+              <button
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-terminal-accent/50 bg-terminal-accent/10 text-terminal-accent transition-colors text-xs"
+                aria-current="page"
+              >
+                <FileText size={12} />
+                RESEARCH
+              </button>
+            )}
             <button
-              onClick={() => setActivePanel('chart', activeSymbol)}
+              onClick={() => {
+                if (onSwitchView) {
+                  onSwitchView('chart');
+                  return;
+                }
+                setActivePanel('chart', selectedSymbol);
+              }}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-terminal-elevated border border-terminal-border rounded hover:bg-terminal-hover transition-colors text-xs text-terminal-text"
             >
               <BarChart2 size={12} />
