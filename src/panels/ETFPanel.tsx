@@ -1,0 +1,143 @@
+import { useQuery } from '@tanstack/react-query';
+import { fetchQuotes } from '../api/finance';
+import { useTerminalStore } from '../store/useTerminalStore';
+import { fmt, changeColor } from '../utils/formatters';
+
+const ETF_GROUPS = [
+  {
+    label: 'BROAD MARKET',
+    etfs: [
+      { symbol: 'SPY',  name: 'S&P 500 ETF' },
+      { symbol: 'QQQ',  name: 'Nasdaq 100 ETF' },
+      { symbol: 'IWM',  name: 'Russell 2000 ETF' },
+      { symbol: 'DIA',  name: 'Dow Jones ETF' },
+      { symbol: 'VTI',  name: 'Total US Market' },
+    ],
+  },
+  {
+    label: 'SECTOR',
+    etfs: [
+      { symbol: 'XLK',  name: 'Technology' },
+      { symbol: 'XLF',  name: 'Financials' },
+      { symbol: 'XLE',  name: 'Energy' },
+      { symbol: 'XLV',  name: 'Health Care' },
+      { symbol: 'XLC',  name: 'Communication' },
+      { symbol: 'XLI',  name: 'Industrials' },
+      { symbol: 'XLY',  name: 'Consumer Disc.' },
+      { symbol: 'XLP',  name: 'Consumer Staples' },
+      { symbol: 'XLRE', name: 'Real Estate' },
+      { symbol: 'XLB',  name: 'Materials' },
+      { symbol: 'XLU',  name: 'Utilities' },
+    ],
+  },
+  {
+    label: 'FIXED INCOME',
+    etfs: [
+      { symbol: 'TLT',  name: '20+ Yr Treasury' },
+      { symbol: 'IEF',  name: '7-10 Yr Treasury' },
+      { symbol: 'SHY',  name: '1-3 Yr Treasury' },
+      { symbol: 'HYG',  name: 'High Yield Corp' },
+      { symbol: 'LQD',  name: 'Inv. Grade Corp' },
+      { symbol: 'BND',  name: 'Total Bond Market' },
+    ],
+  },
+  {
+    label: 'COMMODITIES',
+    etfs: [
+      { symbol: 'GLD',  name: 'Gold' },
+      { symbol: 'SLV',  name: 'Silver' },
+      { symbol: 'USO',  name: 'Crude Oil' },
+      { symbol: 'UNG',  name: 'Natural Gas' },
+      { symbol: 'DJP',  name: 'Commodity ETF' },
+    ],
+  },
+  {
+    label: 'INTERNATIONAL',
+    etfs: [
+      { symbol: 'EFA',  name: 'MSCI EAFE' },
+      { symbol: 'EEM',  name: 'Emerging Markets' },
+      { symbol: 'FXI',  name: 'China Large Cap' },
+      { symbol: 'EWJ',  name: 'Japan' },
+      { symbol: 'EWG',  name: 'Germany' },
+    ],
+  },
+];
+
+const ALL_SYMBOLS = ETF_GROUPS.flatMap((g) => g.etfs.map((e) => e.symbol));
+
+export function ETFPanel() {
+  const { setActivePanel } = useTerminalStore();
+
+  const { data: quotes = [], isLoading } = useQuery({
+    queryKey: ['etf-quotes', ALL_SYMBOLS.join(',')],
+    queryFn: () => fetchQuotes(ALL_SYMBOLS),
+    refetchInterval: 30000,
+    staleTime: 15000,
+  });
+
+  const quoteMap = new Map(quotes.map((q) => [q.symbol, q]));
+
+  return (
+    <div className="h-full flex flex-col overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-2 panel-border-b bg-terminal-panel flex-shrink-0">
+        <div>
+          <span className="text-terminal-accent font-bold text-sm tracking-wider">ETF MONITOR</span>
+          <span className="text-terminal-faint text-xs ml-3">Exchange Traded Funds</span>
+        </div>
+        {isLoading && (
+          <span className="text-terminal-faint text-xs animate-pulse">LOADING...</span>
+        )}
+      </div>
+
+      {/* Scrollable content */}
+      <div className="flex-1 overflow-y-auto p-3 space-y-4">
+        {ETF_GROUPS.map((group) => (
+          <div key={group.label}>
+            {/* Group header */}
+            <div className="flex items-center gap-2 mb-1.5">
+              <span className="text-terminal-accent text-xs font-bold tracking-wider">{group.label}</span>
+              <div className="flex-1 h-px bg-terminal-border/50" />
+            </div>
+
+            {/* ETF rows */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-1">
+              {group.etfs.map(({ symbol, name }) => {
+                const q = quoteMap.get(symbol);
+                const chgColor = changeColor(q?.regularMarketChangePercent);
+                return (
+                  <button
+                    key={symbol}
+                    onClick={() => setActivePanel('equity', symbol)}
+                    className="flex items-center justify-between px-3 py-2 bg-terminal-elevated border border-terminal-border rounded hover:border-terminal-accent/40 hover:bg-terminal-hover transition-colors text-left"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-terminal-accent font-bold text-xs">{symbol}</span>
+                        <span className="text-terminal-faint text-xs truncate hidden sm:block">{name}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 flex-shrink-0">
+                      {q ? (
+                        <>
+                          <span className="text-terminal-text tabular-nums text-xs font-bold">
+                            {fmt.price(q.regularMarketPrice)}
+                          </span>
+                          <span className={`tabular-nums text-xs ${chgColor} w-16 text-right`}>
+                            {fmt.pct(q.regularMarketChangePercent)}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-terminal-faint text-xs">—</span>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
