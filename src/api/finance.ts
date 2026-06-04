@@ -293,7 +293,7 @@ interface GeopoliticalMapDataset {
   regions: RegionalNewsCount[];
 }
 
-interface GeopoliticalMapOptions {
+export interface GeopoliticalMapOptions {
   enableAI?: boolean;
   model?: string;
   systemPrompt?: string;
@@ -314,6 +314,41 @@ interface GeopoliticalCountrySummaryAssessment {
   countryCode: string;
   summary: string;
   sourceLinks?: string[];
+}
+
+export interface GeopoliticalCountrySummaryCacheValue {
+  hotspotSummary: string;
+  sourceLinks: string[];
+}
+
+export interface GeopoliticalCountrySummaryRecord extends GeopoliticalCountrySummaryCacheValue {
+  hotspotSummarySources: NewsItem[];
+}
+
+export interface GeopoliticalCountrySummaryFetchResult {
+  summariesByCountryCode: Record<string, GeopoliticalCountrySummaryRecord>;
+  failedCountryCodes: string[];
+}
+
+interface GeopoliticalHeadlineAssessmentCacheValue {
+  accepted: boolean;
+  locationLabel?: string;
+  countryCodes?: string[];
+  severityScore?: number | null;
+  eventKey?: string;
+  eventLabel?: string;
+}
+
+export interface GeopoliticalHeadlineCandidateDataset {
+  headlines: NewsItem[];
+  source: string;
+  queryLabel: string;
+  requestedCount: number;
+}
+
+export interface GeopoliticalProgressAggregationOptions {
+  isPartial?: boolean;
+  lastClassifiedAt?: number;
 }
 
 interface GeopoliticalPipelineDebugStats {
@@ -353,11 +388,18 @@ interface GdeltGeopoliticsHeadline {
 }
 
 type CachedPromise<T> = { expiresAt: number; promise: Promise<T> };
+type CachedValue<T> = { expiresAt: number; value: T };
 
 let geopoliticsMapCache: Record<string, CachedPromise<GeopoliticalMapDataset> | undefined> = {};
 const geopoliticsPipelineDebugCache: Record<string, GeopoliticalPipelineDebugStats | undefined> = {};
+let geopoliticalCountrySummaryCache: Record<string, CachedValue<GeopoliticalCountrySummaryCacheValue> | undefined> = {};
+let geopoliticalHeadlineAssessmentCache: Record<string, CachedValue<GeopoliticalHeadlineAssessmentCacheValue> | undefined> = {};
 const GEOPOLITICS_MAP_CACHE_TTL_MS = 15 * 60_000;
 const GEOPOLITICS_MAP_CACHE_STORAGE_PREFIX = 'bterminal-geopolitics-map:';
+const GEOPOLITICAL_COUNTRY_SUMMARY_CACHE_STORAGE_PREFIX = 'bterminal-geopolitics-country-summary:';
+const GEOPOLITICAL_COUNTRY_SUMMARY_CACHE_VERSION = 'geopolitics-country-summary-v1';
+const GEOPOLITICAL_HEADLINE_ASSESSMENT_CACHE_STORAGE_PREFIX = 'bterminal-geopolitics-headline-assessment:';
+const GEOPOLITICAL_HEADLINE_ASSESSMENT_CACHE_VERSION = 'geopolitics-headline-assessment-v1';
 
 export function clearGeopoliticalMapCache(): void {
   geopoliticsMapCache = {};
@@ -372,6 +414,50 @@ export function clearGeopoliticalMapCache(): void {
     for (let index = 0; index < window.localStorage.length; index += 1) {
       const key = window.localStorage.key(index);
       if (key?.startsWith(GEOPOLITICS_MAP_CACHE_STORAGE_PREFIX)) {
+        keysToRemove.push(key);
+      }
+    }
+
+    keysToRemove.forEach((key) => {
+      window.localStorage.removeItem(key);
+    });
+  } catch {
+    // Ignore storage access errors and fall back to in-memory cache invalidation.
+  }
+}
+
+export function clearGeopoliticalCountrySummaryCache(): void {
+  geopoliticalCountrySummaryCache = {};
+
+  if (typeof window === 'undefined') return;
+
+  try {
+    const keysToRemove: string[] = [];
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (key?.startsWith(GEOPOLITICAL_COUNTRY_SUMMARY_CACHE_STORAGE_PREFIX)) {
+        keysToRemove.push(key);
+      }
+    }
+
+    keysToRemove.forEach((key) => {
+      window.localStorage.removeItem(key);
+    });
+  } catch {
+    // Ignore storage access errors and fall back to in-memory cache invalidation.
+  }
+}
+
+export function clearGeopoliticalHeadlineAssessmentCache(): void {
+  geopoliticalHeadlineAssessmentCache = {};
+
+  if (typeof window === 'undefined') return;
+
+  try {
+    const keysToRemove: string[] = [];
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (key?.startsWith(GEOPOLITICAL_HEADLINE_ASSESSMENT_CACHE_STORAGE_PREFIX)) {
         keysToRemove.push(key);
       }
     }
@@ -2889,14 +2975,7 @@ async function fetchGeopoliticalMapDataset(
   lookbackHours: number,
   options: GeopoliticalMapOptions = {}
 ): Promise<GeopoliticalMapDataset> {
-  const cacheKey = JSON.stringify({
-    pipelineVersion: 'geopolitics-events-v14-headline-only-country-attribution',
-    lookbackHours,
-    enableAI: Boolean(options.enableAI && options.model?.trim()),
-    model: options.model?.trim() ?? '',
-    systemPrompt: options.systemPrompt?.trim() ?? '',
-    includeHotspotSummaries: options.includeHotspotSummaries !== false,
-  });
+  const cacheKey = buildGeopoliticalMapCacheKey(lookbackHours, options);
   const cached = geopoliticsMapCache[cacheKey];
   if (cached && cached.expiresAt > Date.now()) {
     const cachedDebug = geopoliticsPipelineDebugCache[cacheKey];
@@ -2950,6 +3029,46 @@ async function fetchGeopoliticalMapDataset(
   return promise;
 }
 
+function buildGeopoliticalMapCacheKey(lookbackHours: number, options: GeopoliticalMapOptions = {}): string {
+  return JSON.stringify({
+    pipelineVersion: 'geopolitics-events-v14-headline-only-country-attribution',
+    lookbackHours,
+    enableAI: Boolean(options.enableAI && options.model?.trim()),
+    model: options.model?.trim() ?? '',
+    systemPrompt: options.systemPrompt?.trim() ?? '',
+    includeHotspotSummaries: options.includeHotspotSummaries !== false,
+  });
+}
+
+export function readCachedGeopoliticalMapCountryCounts(
+  lookbackHours: number,
+  options: GeopoliticalMapOptions = {}
+): CountryNewsCount[] | null {
+  const cacheKey = buildGeopoliticalMapCacheKey(lookbackHours, options);
+  const persisted = readPersistedGeopoliticalMapDataset(cacheKey);
+  return persisted?.countries ?? null;
+}
+
+export function writeGeopoliticalMapCountryCountCache(
+  lookbackHours: number,
+  countries: CountryNewsCount[],
+  source: string,
+  query: string,
+  options: GeopoliticalMapOptions = {}
+): void {
+  const cacheKey = buildGeopoliticalMapCacheKey(lookbackHours, options);
+  const dataset: GeopoliticalMapDataset = {
+    countries,
+    regions: buildRegionalDatasetFromCountries(countries, source, query),
+  };
+
+  geopoliticsMapCache[cacheKey] = {
+    expiresAt: Date.now() + GEOPOLITICS_MAP_CACHE_TTL_MS,
+    promise: Promise.resolve(dataset),
+  };
+  writePersistedGeopoliticalMapDataset(cacheKey, dataset);
+}
+
 async function buildGeopoliticalMapDataset(
   lookbackHours: number,
   options: GeopoliticalMapOptions = {}
@@ -2963,30 +3082,7 @@ async function buildGeopoliticalMapDataset(
   pipelineDebug.final.clusteredStories = clusteredStories.length;
   pipelineDebug.final.gdeltClusteredStories = clusteredStories.filter((story) => story.feedSource === 'gdelt').length;
 
-  const baseCountries = COUNTRY_NEWS_MONITORS.map((country): CountryNewsCount => {
-    const countryStories = clusteredStories.filter((story) => story.countryCodes?.includes(country.countryCode));
-    const severityScore = computeCountrySeverityScore(countryStories);
-
-    return {
-      key: country.key,
-      label: country.label,
-      shortLabel: country.shortLabel,
-      countryCode: country.countryCode,
-      region: country.region,
-      count: countryStories.length,
-      severityScore,
-      query: queryLabel,
-      source,
-      latestAt: countryStories[0]?.publishedAt ?? null,
-      x: country.x,
-      y: country.y,
-      labelX: country.labelX,
-      labelY: country.labelY,
-      sampleTitle: countryStories[0]?.title,
-      samplePublisher: countryStories[0]?.publisher,
-      stories: countryStories,
-    };
-  });
+  const baseCountries = buildGeopoliticalCountryCountsFromClusteredStories(clusteredStories, source, queryLabel);
   const countries = options.includeHotspotSummaries === false
     ? baseCountries
     : await annotateCountryHotspotSummaries(baseCountries, lookbackHours, options);
@@ -3001,6 +3097,57 @@ async function buildGeopoliticalMapDataset(
     },
     debug: pipelineDebug,
   };
+}
+
+export function buildEmptyGeopoliticalCountryCounts(
+  source = 'Yahoo Finance News Feed + GDELT DOC 2.0 · progressive scan',
+  query = buildTopicFeedQueries('geopolitics').join(' | ')
+): CountryNewsCount[] {
+  return buildGeopoliticalCountryCountsFromClusteredStories([], source, query);
+}
+
+export function aggregateGeopoliticalStoriesToCountries(
+  stories: NewsItem[],
+  source: string,
+  query: string,
+  options: GeopoliticalProgressAggregationOptions = {}
+): CountryNewsCount[] {
+  const clusteredStories = clusterGeopoliticalStories(stories);
+  return buildGeopoliticalCountryCountsFromClusteredStories(clusteredStories, source, query, options);
+}
+
+function buildGeopoliticalCountryCountsFromClusteredStories(
+  clusteredStories: NewsItem[],
+  source: string,
+  query: string,
+  options: GeopoliticalProgressAggregationOptions = {}
+): CountryNewsCount[] {
+  return COUNTRY_NEWS_MONITORS.map((country): CountryNewsCount => {
+    const countryStories = clusteredStories.filter((story) => story.countryCodes?.includes(country.countryCode));
+    const severityScore = computeCountrySeverityScore(countryStories);
+
+    return {
+      key: country.key,
+      label: country.label,
+      shortLabel: country.shortLabel,
+      countryCode: country.countryCode,
+      region: country.region,
+      count: countryStories.length,
+      severityScore,
+      query,
+      source,
+      latestAt: countryStories[0]?.publishedAt ?? null,
+      x: country.x,
+      y: country.y,
+      labelX: country.labelX,
+      labelY: country.labelY,
+      sampleTitle: countryStories[0]?.title,
+      samplePublisher: countryStories[0]?.publisher,
+      stories: countryStories,
+      isPartial: options.isPartial,
+      lastClassifiedAt: options.lastClassifiedAt,
+    };
+  });
 }
 
 function computeCountrySeverityScore(stories: NewsItem[]): number | null {
@@ -3049,6 +3196,121 @@ async function fetchGeopoliticalHeadlines(
   }
 
   return filtered.slice(0, requestedCount);
+}
+
+export async function fetchGeopoliticalHeadlineCandidates(
+  lookbackHours: number,
+  debugMode = false
+): Promise<GeopoliticalHeadlineCandidateDataset> {
+  const requestedCount = resolveGeopoliticalHeadlineRequestCount(lookbackHours);
+  const pipelineDebug = createGeopoliticalPipelineDebugStats(lookbackHours, requestedCount);
+  const headlines = await fetchGeopoliticalHeadlines(lookbackHours, pipelineDebug);
+  const source = formatGeopoliticalFeedSourceLabel(headlines);
+  const queryLabel = buildTopicFeedQueries('geopolitics').join(' | ');
+
+  recordOpenAIDebugPayload('geopolitical-pipeline', {
+    ...pipelineDebug,
+    progressive: {
+      stage: 'candidate-fetch',
+      source,
+      queryLabel,
+    },
+  });
+
+  if (debugMode) {
+    console.debug('[geopolitics-map] progressive candidates', {
+      lookbackHours,
+      requestedCount,
+      yahooHeadlines: pipelineDebug.fetched.yahooHeadlines,
+      gdeltHeadlines: pipelineDebug.fetched.gdeltHeadlines,
+      candidateHeadlines: headlines.length,
+    });
+  }
+
+  return {
+    headlines,
+    source,
+    queryLabel,
+    requestedCount,
+  };
+}
+
+export function rankGeopoliticalHeadlineCandidates(headlines: NewsItem[]): NewsItem[] {
+  if (!headlines.length) return [];
+
+  const latestAt = Math.max(...headlines.map((headline) => headline.publishedAt || 0));
+  const oldestAt = Math.min(...headlines.map((headline) => headline.publishedAt || latestAt));
+  const timeRange = Math.max(1, latestAt - oldestAt);
+
+  return [...headlines].sort((left, right) => {
+    const rightScore = scoreGeopoliticalHeadlineCandidate(right, latestAt, timeRange);
+    const leftScore = scoreGeopoliticalHeadlineCandidate(left, latestAt, timeRange);
+    if (rightScore !== leftScore) return rightScore - leftScore;
+    return right.publishedAt - left.publishedAt;
+  });
+}
+
+function scoreGeopoliticalHeadlineCandidate(headline: NewsItem, latestAt: number, timeRange: number): number {
+  const recencyScore = ((headline.publishedAt || 0) - (latestAt - timeRange)) / timeRange;
+  const severityScore = normalizeGeopoliticalSeverityScore(headline.severityScore ?? estimateHeadlineSeverityScore(headline.title));
+  const explicitCountryScore = collectCountryCodesFromText(headline.title).length > 0 ? 1 : 0;
+  const feedDiversityScore = headline.feedSource === 'gdelt' ? 0.2 : 0;
+
+  return (recencyScore * 50) + (severityScore * 5) + (explicitCountryScore * 18) + feedDiversityScore;
+}
+
+export async function classifyGeopoliticalHeadlineBatch(
+  headlines: NewsItem[],
+  lookbackHours: number,
+  options: GeopoliticalMapOptions
+): Promise<NewsItem[]> {
+  if (!headlines.length || !options.enableAI || !options.model?.trim()) return [];
+
+  const cachedAssessments: GeopoliticalHeadlineAssessment[] = [];
+  const missingHeadlines: NewsItem[] = [];
+
+  headlines.forEach((headline) => {
+    const cached = readGeopoliticalHeadlineAssessmentCacheValue(headline, options);
+    if (!cached) {
+      missingHeadlines.push(headline);
+      return;
+    }
+
+    if (cached.accepted) {
+      cachedAssessments.push({
+        link: headline.link,
+        locationLabel: cached.locationLabel,
+        countryCodes: cached.countryCodes,
+        severityScore: cached.severityScore,
+        eventKey: cached.eventKey,
+        eventLabel: cached.eventLabel,
+      });
+    }
+  });
+
+  const freshAssessments = missingHeadlines.length
+    ? await extractGeopoliticalHeadlineAssessments(missingHeadlines, lookbackHours, options)
+    : [];
+  const freshAssessmentByLink = new Map(
+    freshAssessments.map((assessment) => [canonicalizeStoryLink(assessment.link), assessment] as const)
+  );
+
+  missingHeadlines.forEach((headline) => {
+    const assessment = freshAssessmentByLink.get(canonicalizeStoryLink(headline.link));
+    writeGeopoliticalHeadlineAssessmentCacheValue(headline, options, assessment
+      ? {
+          accepted: true,
+          locationLabel: assessment.locationLabel,
+          countryCodes: assessment.countryCodes,
+          severityScore: assessment.severityScore,
+          eventKey: assessment.eventKey,
+          eventLabel: assessment.eventLabel,
+        }
+      : { accepted: false }
+    );
+  });
+
+  return applyHeadlineAssessments(headlines, [...cachedAssessments, ...freshAssessments], { skipLexicalGate: true });
 }
 
 async function fetchGeopoliticalYahooHeadlines(lookbackHours: number): Promise<NewsItem[]> {
@@ -3203,6 +3465,7 @@ async function annotateGeopoliticalHeadlines(
 const GEOPOLITICAL_COUNTRY_SUMMARY_CHUNK_SIZE = 8;
 const GEOPOLITICAL_COUNTRY_SUMMARY_SOURCE_LIMIT = 8;
 const GEOPOLITICAL_COUNTRY_SUMMARY_DISPLAY_SOURCE_LIMIT = 6;
+const GEOPOLITICAL_COUNTRY_SUMMARY_MAX_CONCURRENCY = 3;
 
 async function annotateCountryHotspotSummaries(
   countries: CountryNewsCount[],
@@ -3214,19 +3477,43 @@ async function annotateCountryHotspotSummaries(
 
   if (options.enableAI && options.model?.trim()) {
     try {
-      const assessments: GeopoliticalCountrySummaryAssessment[] = [];
       const chunks = chunkArray(countriesWithStories, GEOPOLITICAL_COUNTRY_SUMMARY_CHUNK_SIZE);
-      for (const chunk of chunks) {
-        const chunkAssessments = await extractGeopoliticalCountrySummaries(chunk, lookbackHours, options);
-        assessments.push(...chunkAssessments);
-      }
+      const chunkResults = await runGeopoliticalCountrySummaryChunks(chunks, lookbackHours, options);
+      const assessments = chunkResults.flat();
       return applyCountryHotspotSummaries(countries, assessments);
     } catch (error) {
-      console.warn('[geopolitics-map] Country hotspot summary generation failed, using deterministic fallback.', error);
+      console.warn('[geopolitics-map] Country hotspot summary generation failed, leaving summaries empty.', error);
     }
   }
 
   return applyCountryHotspotSummaries(countries, []);
+}
+
+async function runGeopoliticalCountrySummaryChunks(
+  chunks: CountryNewsCount[][],
+  lookbackHours: number,
+  options: GeopoliticalMapOptions,
+  onChunkComplete?: (assessments: GeopoliticalCountrySummaryAssessment[]) => void
+): Promise<GeopoliticalCountrySummaryAssessment[][]> {
+  if (!chunks.length) return [];
+
+  const results: GeopoliticalCountrySummaryAssessment[][] = new Array(chunks.length).fill(null).map(() => []);
+  let nextIndex = 0;
+  const workerCount = Math.min(GEOPOLITICAL_COUNTRY_SUMMARY_MAX_CONCURRENCY, chunks.length);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < chunks.length) {
+        const chunkIndex = nextIndex;
+        nextIndex += 1;
+        const assessments = await extractGeopoliticalCountrySummaries(chunks[chunkIndex], lookbackHours, options);
+        results[chunkIndex] = assessments;
+        onChunkComplete?.(assessments);
+      }
+    })
+  );
+
+  return results;
 }
 
 async function extractGeopoliticalCountrySummaries(
@@ -3295,13 +3582,139 @@ function applyCountryHotspotSummaries(
 
     const assessment = assessmentByCountryCode.get(country.countryCode.toUpperCase());
     const summary = typeof assessment?.summary === 'string' ? assessment.summary.trim() : '';
-    const hotspotSummary = summary || buildFallbackCountryHotspotSummary(country);
 
     return {
       ...country,
-      hotspotSummary,
-      hotspotSummarySources: resolveCountrySummarySources(dedupedStories, assessment?.sourceLinks),
+      hotspotSummary: summary || undefined,
+      hotspotSummarySources: summary ? resolveCountrySummarySources(dedupedStories, assessment?.sourceLinks) : undefined,
     };
+  });
+}
+
+export function getCachedGeopoliticalCountrySummaries(
+  countries: CountryNewsCount[],
+  lookbackHours: number,
+  model: string
+): Record<string, GeopoliticalCountrySummaryRecord> {
+  return countries.reduce<Record<string, GeopoliticalCountrySummaryRecord>>((acc, country) => {
+    if (country.count <= 0 || (country.stories ?? []).length === 0) return acc;
+
+    const cacheKey = buildGeopoliticalCountrySummaryCacheKey(country, lookbackHours, model);
+    const cached = readGeopoliticalCountrySummaryCacheValue(cacheKey);
+    if (!cached?.hotspotSummary) return acc;
+
+    acc[country.countryCode.toUpperCase()] = {
+      hotspotSummary: cached.hotspotSummary,
+      sourceLinks: cached.sourceLinks,
+      hotspotSummarySources: resolveCountrySummarySources(
+        dedupeStories(country.stories ?? []),
+        cached.sourceLinks
+      ),
+    };
+    return acc;
+  }, {});
+}
+
+export async function fetchGeopoliticalCountrySummaries(
+  countries: CountryNewsCount[],
+  lookbackHours: number,
+  model: string,
+  onChunkComplete?: (summariesByCountryCode: Record<string, GeopoliticalCountrySummaryRecord>) => void
+): Promise<GeopoliticalCountrySummaryFetchResult> {
+  const pendingCountries = countries.filter((country) => {
+    if (country.count <= 0 || (country.stories ?? []).length === 0) return false;
+    const cacheKey = buildGeopoliticalCountrySummaryCacheKey(country, lookbackHours, model);
+    return !readGeopoliticalCountrySummaryCacheValue(cacheKey)?.hotspotSummary;
+  });
+
+  if (!pendingCountries.length) {
+    return {
+      summariesByCountryCode: {},
+      failedCountryCodes: [],
+    };
+  }
+
+  const chunks = chunkArray(pendingCountries, GEOPOLITICAL_COUNTRY_SUMMARY_CHUNK_SIZE);
+  const summariesByCountryCode: Record<string, GeopoliticalCountrySummaryRecord> = {};
+  const failedCountryCodes = new Set<string>();
+
+  await runGeopoliticalCountrySummaryChunks(
+    chunks,
+    lookbackHours,
+    { model },
+    (assessments) => {
+      const chunkSummaries = buildGeopoliticalCountrySummaryRecords(pendingCountries, lookbackHours, model, assessments);
+      Object.assign(summariesByCountryCode, chunkSummaries);
+      onChunkComplete?.(chunkSummaries);
+    }
+  ).catch((error) => {
+    console.warn('[geopolitics-map] Background country summary generation failed.', error);
+  });
+
+  const resolvedCountryCodes = new Set(Object.keys(summariesByCountryCode));
+  pendingCountries.forEach((country) => {
+    const countryCode = country.countryCode.toUpperCase();
+    if (!resolvedCountryCodes.has(countryCode)) {
+      failedCountryCodes.add(countryCode);
+    }
+  });
+
+  return {
+    summariesByCountryCode,
+    failedCountryCodes: Array.from(failedCountryCodes),
+  };
+}
+
+function buildGeopoliticalCountrySummaryRecords(
+  countries: CountryNewsCount[],
+  lookbackHours: number,
+  model: string,
+  assessments: GeopoliticalCountrySummaryAssessment[]
+): Record<string, GeopoliticalCountrySummaryRecord> {
+  const countriesByCode = new Map(
+    countries.map((country) => [country.countryCode.toUpperCase(), country] as const)
+  );
+  const records: Record<string, GeopoliticalCountrySummaryRecord> = {};
+
+  assessments.forEach((assessment) => {
+    const countryCode = String(assessment.countryCode ?? '').toUpperCase();
+    const country = countriesByCode.get(countryCode);
+    const summary = typeof assessment.summary === 'string' ? assessment.summary.trim() : '';
+    if (!country || !summary) return;
+
+    const sourceLinks = Array.isArray(assessment.sourceLinks)
+      ? Array.from(new Set(assessment.sourceLinks.map((link) => canonicalizeStoryLink(String(link ?? ''))).filter(Boolean))) as string[]
+      : [];
+    const dedupedStories = dedupeStories(country.stories ?? []);
+    const cacheKey = buildGeopoliticalCountrySummaryCacheKey(country, lookbackHours, model);
+    const cacheValue: GeopoliticalCountrySummaryCacheValue = {
+      hotspotSummary: summary,
+      sourceLinks,
+    };
+    writeGeopoliticalCountrySummaryCacheValue(cacheKey, cacheValue);
+
+    records[countryCode] = {
+      ...cacheValue,
+      hotspotSummarySources: resolveCountrySummarySources(dedupedStories, sourceLinks),
+    };
+  });
+
+  return records;
+}
+
+function buildGeopoliticalCountrySummaryCacheKey(
+  country: CountryNewsCount,
+  lookbackHours: number,
+  model: string
+): string {
+  const dedupedStories = dedupeStories(country.stories ?? []).slice(0, GEOPOLITICAL_COUNTRY_SUMMARY_SOURCE_LIMIT);
+  return JSON.stringify({
+    pipelineVersion: GEOPOLITICAL_COUNTRY_SUMMARY_CACHE_VERSION,
+    lookbackHours,
+    model: model.trim(),
+    countryCode: country.countryCode.toUpperCase(),
+    latestPublishedAt: dedupedStories[0]?.publishedAt ?? null,
+    sourceLinks: dedupedStories.map((story) => canonicalizeStoryLink(story.link)),
   });
 }
 
@@ -3325,28 +3738,6 @@ function resolveCountrySummarySources(stories: NewsItem[], sourceLinks?: string[
   if (selectedSources.length > 0) return selectedSources;
 
   return dedupedStories.slice(0, GEOPOLITICAL_COUNTRY_SUMMARY_DISPLAY_SOURCE_LIMIT);
-}
-
-function buildFallbackCountryHotspotSummary(country: CountryNewsCount): string {
-  const dedupedStories = dedupeStories(country.stories ?? []);
-  const topEventLabels = dedupedStories
-    .slice(0, 3)
-    .map((story) => (story.eventLabel?.trim() || story.title.trim()).replace(/\.$/, ''))
-    .filter(Boolean);
-
-  if (!topEventLabels.length) {
-    return `In ${country.label}, recent reporting indicates active geopolitical tension, but specific event detail is limited in the current feed.`;
-  }
-
-  if (topEventLabels.length === 1) {
-    return `In ${country.label}, current reporting is centered on ${topEventLabels[0]}.`;
-  }
-
-  if (topEventLabels.length === 2) {
-    return `In ${country.label}, current reporting highlights ${topEventLabels[0]} and ${topEventLabels[1]}.`;
-  }
-
-  return `In ${country.label}, current reporting highlights ${topEventLabels[0]}, ${topEventLabels[1]}, and ${topEventLabels[2]}.`;
 }
 
 async function extractGeopoliticalHeadlineAssessments(
@@ -3734,6 +4125,141 @@ function writePersistedGeopoliticalMapDataset(cacheKey: string, dataset: Geopoli
   } catch {
     // Ignore storage quota or serialization errors and fall back to in-memory caching.
   }
+}
+
+function readGeopoliticalCountrySummaryCacheValue(cacheKey: string): GeopoliticalCountrySummaryCacheValue | null {
+  const cached = geopoliticalCountrySummaryCache[cacheKey];
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.value;
+  }
+
+  if (cached) {
+    delete geopoliticalCountrySummaryCache[cacheKey];
+  }
+
+  if (typeof window === 'undefined') return null;
+
+  try {
+    const rawValue = window.localStorage.getItem(`${GEOPOLITICAL_COUNTRY_SUMMARY_CACHE_STORAGE_PREFIX}${encodeURIComponent(cacheKey)}`);
+    if (!rawValue) return null;
+
+    const payload = JSON.parse(rawValue) as { expiresAt?: number; value?: GeopoliticalCountrySummaryCacheValue } | null;
+    if (!payload?.value || typeof payload.expiresAt !== 'number') return null;
+    if (payload.expiresAt <= Date.now()) {
+      window.localStorage.removeItem(`${GEOPOLITICAL_COUNTRY_SUMMARY_CACHE_STORAGE_PREFIX}${encodeURIComponent(cacheKey)}`);
+      return null;
+    }
+
+    geopoliticalCountrySummaryCache[cacheKey] = {
+      expiresAt: payload.expiresAt,
+      value: payload.value,
+    };
+    return payload.value;
+  } catch {
+    return null;
+  }
+}
+
+function writeGeopoliticalCountrySummaryCacheValue(
+  cacheKey: string,
+  value: GeopoliticalCountrySummaryCacheValue
+): void {
+  const expiresAt = Date.now() + GEOPOLITICS_MAP_CACHE_TTL_MS;
+  geopoliticalCountrySummaryCache[cacheKey] = {
+    expiresAt,
+    value,
+  };
+
+  if (typeof window === 'undefined') return;
+
+  try {
+    window.localStorage.setItem(
+      `${GEOPOLITICAL_COUNTRY_SUMMARY_CACHE_STORAGE_PREFIX}${encodeURIComponent(cacheKey)}`,
+      JSON.stringify({
+        expiresAt,
+        value,
+      })
+    );
+  } catch {
+    // Ignore storage quota or serialization errors and fall back to in-memory caching.
+  }
+}
+
+function readGeopoliticalHeadlineAssessmentCacheValue(
+  headline: NewsItem,
+  options: GeopoliticalMapOptions
+): GeopoliticalHeadlineAssessmentCacheValue | null {
+  const cacheKey = buildGeopoliticalHeadlineAssessmentCacheKey(headline, options);
+  const cached = geopoliticalHeadlineAssessmentCache[cacheKey];
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.value;
+  }
+
+  if (cached) {
+    delete geopoliticalHeadlineAssessmentCache[cacheKey];
+  }
+
+  if (typeof window === 'undefined') return null;
+
+  try {
+    const rawValue = window.localStorage.getItem(`${GEOPOLITICAL_HEADLINE_ASSESSMENT_CACHE_STORAGE_PREFIX}${encodeURIComponent(cacheKey)}`);
+    if (!rawValue) return null;
+
+    const payload = JSON.parse(rawValue) as { expiresAt?: number; value?: GeopoliticalHeadlineAssessmentCacheValue } | null;
+    if (!payload?.value || typeof payload.expiresAt !== 'number') return null;
+    if (payload.expiresAt <= Date.now()) {
+      window.localStorage.removeItem(`${GEOPOLITICAL_HEADLINE_ASSESSMENT_CACHE_STORAGE_PREFIX}${encodeURIComponent(cacheKey)}`);
+      return null;
+    }
+
+    geopoliticalHeadlineAssessmentCache[cacheKey] = {
+      expiresAt: payload.expiresAt,
+      value: payload.value,
+    };
+    return payload.value;
+  } catch {
+    return null;
+  }
+}
+
+function writeGeopoliticalHeadlineAssessmentCacheValue(
+  headline: NewsItem,
+  options: GeopoliticalMapOptions,
+  value: GeopoliticalHeadlineAssessmentCacheValue
+): void {
+  const cacheKey = buildGeopoliticalHeadlineAssessmentCacheKey(headline, options);
+  const expiresAt = Date.now() + GEOPOLITICS_MAP_CACHE_TTL_MS;
+  geopoliticalHeadlineAssessmentCache[cacheKey] = {
+    expiresAt,
+    value,
+  };
+
+  if (typeof window === 'undefined') return;
+
+  try {
+    window.localStorage.setItem(
+      `${GEOPOLITICAL_HEADLINE_ASSESSMENT_CACHE_STORAGE_PREFIX}${encodeURIComponent(cacheKey)}`,
+      JSON.stringify({
+        expiresAt,
+        value,
+      })
+    );
+  } catch {
+    // Ignore storage quota or serialization errors and fall back to in-memory caching.
+  }
+}
+
+function buildGeopoliticalHeadlineAssessmentCacheKey(
+  headline: NewsItem,
+  options: GeopoliticalMapOptions
+): string {
+  return JSON.stringify({
+    pipelineVersion: GEOPOLITICAL_HEADLINE_ASSESSMENT_CACHE_VERSION,
+    model: options.model?.trim() ?? '',
+    systemPrompt: options.systemPrompt?.trim() ?? '',
+    title: normalizeHeadlineForMatching(headline.title),
+    link: canonicalizeStoryLink(headline.link),
+  });
 }
 
 function collectCountryCodesFromText(value: string): string[] {

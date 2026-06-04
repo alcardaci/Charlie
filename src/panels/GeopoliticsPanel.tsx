@@ -1,18 +1,28 @@
 import { useEffect, useRef, useState } from 'react';
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Bug, ExternalLink, Globe2, Info, Minus, RefreshCw, ShieldAlert, TrendingDown, TrendingUp } from 'lucide-react';
 import {
+  aggregateGeopoliticalStoriesToCountries,
+  buildEmptyGeopoliticalCountryCounts,
+  classifyGeopoliticalHeadlineBatch,
+  clearGeopoliticalCountrySummaryCache,
+  clearGeopoliticalHeadlineAssessmentCache,
   clearGeopoliticalMapCache,
-  fetchCountryNewsCounts,
+  fetchGeopoliticalHeadlineCandidates,
+  fetchGeopoliticalCountrySummaries,
+  getCachedGeopoliticalCountrySummaries,
+  rankGeopoliticalHeadlineCandidates,
+  readCachedGeopoliticalMapCountryCounts,
   fetchGeopoliticalRiskSnapshot,
   fetchOpenAIKeyStatus,
   getOpenAIDebugPayload,
+  writeGeopoliticalMapCountryCountCache,
 } from '../api/finance';
 import type { OpenAIDebugPayloadEntry } from '../api/finance';
 import { CountryHotspotsSection, RegionalNewsMap } from '../components/RegionalNewsMap';
 import { useTerminalStore } from '../store/useTerminalStore';
-import type { OpenAISettings, PanelType } from '../types';
+import type { CountryNewsCount, GeopoliticalScanStatus, NewsItem, OpenAISettings, PanelType } from '../types';
 import { GeopoliticalRiskPoint, GeopoliticalRiskSnapshot } from '../types';
 import { fmt } from '../utils/formatters';
 import { DEFAULT_GEOPOLITICS_OPENAI_MODEL } from '../utils/openaiConfig';
@@ -484,10 +494,17 @@ type GeopoliticsMonitorState = {
   geopoliticalPipelinePayload: OpenAIDebugPayloadEntry | null;
   geopoliticalEventsPayload: OpenAIDebugPayloadEntry | null;
   countrySummariesPayload: OpenAIDebugPayloadEntry | null;
-  countryCounts: Awaited<ReturnType<typeof fetchCountryNewsCounts>>;
+  countryCounts: CountryNewsCount[];
   loadingCountryCounts: boolean;
   refetchCountryCounts: () => void;
   fetchingCountryCounts: boolean;
+  scanStatus: GeopoliticalScanStatus;
+  classifiedCount: number;
+  candidateCount: number;
+  completedBatchCount: number;
+  totalBatchCount: number;
+  loadingCountrySummaries: boolean;
+  fetchingCountrySummaries: boolean;
   riskSnapshot: GeopoliticalRiskSnapshot | undefined;
   loadingRiskSnapshot: boolean;
   riskSnapshotError: boolean;
@@ -495,6 +512,384 @@ type GeopoliticsMonitorState = {
   fetchingRiskSnapshot: boolean;
   openAISettings: OpenAISettings;
 };
+
+type GeopoliticalCountrySummaryState = {
+  countryCounts: CountryNewsCount[];
+  loadingCountrySummaries: boolean;
+  fetchingCountrySummaries: boolean;
+};
+
+type ProgressiveGeopoliticalScanState = {
+  countryCounts: CountryNewsCount[];
+  loadingCountryCounts: boolean;
+  fetchingCountryCounts: boolean;
+  refetchCountryCounts: () => void;
+  scanStatus: GeopoliticalScanStatus;
+  classifiedCount: number;
+  candidateCount: number;
+  completedBatchCount: number;
+  totalBatchCount: number;
+};
+
+const FIRST_GEOPOLITICAL_CLASSIFICATION_BATCH_SIZE = 40;
+const GEOPOLITICAL_CLASSIFICATION_BATCH_SIZE = 60;
+const GEOPOLITICAL_CLASSIFICATION_MAX_CONCURRENCY = 2;
+
+function buildGeopoliticalClassificationBatches(headlines: NewsItem[]): NewsItem[][] {
+  if (!headlines.length) return [];
+
+  const [firstBatch, ...remaining] = headlines;
+  const batches: NewsItem[][] = [[firstBatch]];
+  for (let index = 0; index < Math.min(FIRST_GEOPOLITICAL_CLASSIFICATION_BATCH_SIZE - 1, remaining.length); index += 1) {
+    batches[0].push(remaining[index]);
+  }
+
+  for (
+    let index = Math.max(0, FIRST_GEOPOLITICAL_CLASSIFICATION_BATCH_SIZE - 1);
+    index < remaining.length;
+    index += GEOPOLITICAL_CLASSIFICATION_BATCH_SIZE
+  ) {
+    batches.push(remaining.slice(index, index + GEOPOLITICAL_CLASSIFICATION_BATCH_SIZE));
+  }
+
+  return batches.filter((batch) => batch.length > 0);
+}
+
+function useProgressiveGeopoliticalCountryCounts({
+  lookbackHours,
+  model,
+  systemPrompt,
+  enabled,
+  debugMode,
+}: {
+  lookbackHours: number;
+  model: string;
+  systemPrompt: string;
+  enabled: boolean;
+  debugMode: boolean;
+}): ProgressiveGeopoliticalScanState {
+  const [countryCounts, setCountryCounts] = useState<CountryNewsCount[]>(() => buildEmptyGeopoliticalCountryCounts());
+  const [scanStatus, setScanStatus] = useState<GeopoliticalScanStatus>('idle');
+  const [loadingCountryCounts, setLoadingCountryCounts] = useState(false);
+  const [fetchingCountryCounts, setFetchingCountryCounts] = useState(false);
+  const [classifiedCount, setClassifiedCount] = useState(0);
+  const [candidateCount, setCandidateCount] = useState(0);
+  const [completedBatchCount, setCompletedBatchCount] = useState(0);
+  const [totalBatchCount, setTotalBatchCount] = useState(0);
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  const requestVersionRef = useRef(0);
+
+  useEffect(() => {
+    if (!enabled) {
+      requestVersionRef.current += 1;
+      setCountryCounts(buildEmptyGeopoliticalCountryCounts());
+      setScanStatus('idle');
+      setLoadingCountryCounts(false);
+      setFetchingCountryCounts(false);
+      setClassifiedCount(0);
+      setCandidateCount(0);
+      setCompletedBatchCount(0);
+      setTotalBatchCount(0);
+      return;
+    }
+
+    const requestVersion = requestVersionRef.current + 1;
+    requestVersionRef.current = requestVersion;
+    const classifiedStories: NewsItem[] = [];
+    let completedBatches = 0;
+    let classifiedHeadlines = 0;
+    let source = 'Yahoo Finance News Feed + GDELT DOC 2.0 · progressive scan';
+    let queryLabel = GEOPOLITICS_TOPIC_QUERY;
+    let sawLaterBatchFailure = false;
+
+    const isCurrentRequest = () => requestVersionRef.current === requestVersion;
+    const buildProgressCountries = (isComplete: boolean) => aggregateGeopoliticalStoriesToCountries(
+      classifiedStories,
+      source,
+      queryLabel,
+      {
+        isPartial: !isComplete,
+        lastClassifiedAt: Date.now(),
+      }
+    );
+    const setProgressCountries = (isComplete: boolean) => {
+      if (!isCurrentRequest()) return null;
+      const nextCountryCounts = buildProgressCountries(isComplete);
+      setCountryCounts(nextCountryCounts);
+      return nextCountryCounts;
+    };
+
+    setCountryCounts(buildEmptyGeopoliticalCountryCounts());
+    setScanStatus('fetching-feeds');
+    setLoadingCountryCounts(true);
+    setFetchingCountryCounts(true);
+    setClassifiedCount(0);
+    setCandidateCount(0);
+    setCompletedBatchCount(0);
+    setTotalBatchCount(0);
+
+    const runScan = async () => {
+      try {
+        const cacheOptions = {
+          enableAI: true,
+          model,
+          systemPrompt,
+          debugMode,
+          includeHotspotSummaries: false,
+        };
+        const cachedCountryCounts = readCachedGeopoliticalMapCountryCounts(lookbackHours, cacheOptions);
+        if (cachedCountryCounts) {
+          if (!isCurrentRequest()) return;
+          setCountryCounts(cachedCountryCounts);
+          setScanStatus('complete');
+          setLoadingCountryCounts(false);
+          setFetchingCountryCounts(false);
+          setClassifiedCount(0);
+          setCandidateCount(0);
+          setCompletedBatchCount(0);
+          setTotalBatchCount(0);
+          return;
+        }
+
+        const candidateDataset = await fetchGeopoliticalHeadlineCandidates(lookbackHours, debugMode);
+        if (!isCurrentRequest()) return;
+
+        source = candidateDataset.source;
+        queryLabel = candidateDataset.queryLabel;
+        const rankedCandidates = rankGeopoliticalHeadlineCandidates(candidateDataset.headlines);
+        const batches = buildGeopoliticalClassificationBatches(rankedCandidates);
+        setCandidateCount(rankedCandidates.length);
+        setTotalBatchCount(batches.length);
+        setCountryCounts(buildEmptyGeopoliticalCountryCounts(source, queryLabel));
+
+        if (!batches.length) {
+          setScanStatus('complete');
+          setLoadingCountryCounts(false);
+          setFetchingCountryCounts(false);
+          return;
+        }
+
+        setScanStatus('classifying');
+
+        const classifyBatch = async (batch: NewsItem[]) => {
+          const batchStories = await classifyGeopoliticalHeadlineBatch(batch, lookbackHours, {
+            ...cacheOptions,
+          });
+          if (!isCurrentRequest()) return;
+          classifiedStories.push(...batchStories);
+          completedBatches += 1;
+          classifiedHeadlines += batch.length;
+          setCompletedBatchCount(completedBatches);
+          setClassifiedCount(classifiedHeadlines);
+        };
+
+        try {
+          await classifyBatch(batches[0]);
+        } catch (error) {
+          console.warn('[geopolitics-map] First classification batch failed.', error);
+          if (!isCurrentRequest()) return;
+          setScanStatus('error');
+          setLoadingCountryCounts(false);
+          setFetchingCountryCounts(false);
+          setProgressCountries(false);
+          return;
+        }
+
+        if (!isCurrentRequest()) return;
+        setLoadingCountryCounts(false);
+        if (batches.length === 1) {
+          setScanStatus('complete');
+          const completeCountryCounts = setProgressCountries(true);
+          if (completeCountryCounts) {
+            writeGeopoliticalMapCountryCountCache(lookbackHours, completeCountryCounts, source, queryLabel, cacheOptions);
+          }
+          setFetchingCountryCounts(false);
+          return;
+        }
+
+        setScanStatus('partial');
+        setProgressCountries(false);
+
+        let nextBatchIndex = 1;
+        const workerCount = Math.min(GEOPOLITICAL_CLASSIFICATION_MAX_CONCURRENCY, Math.max(0, batches.length - 1));
+        await Promise.all(
+          Array.from({ length: workerCount }, async () => {
+            while (nextBatchIndex < batches.length) {
+              const batchIndex = nextBatchIndex;
+              nextBatchIndex += 1;
+              try {
+                await classifyBatch(batches[batchIndex]);
+              } catch (error) {
+                if (!isCurrentRequest()) return;
+                sawLaterBatchFailure = true;
+                completedBatches += 1;
+                setCompletedBatchCount(completedBatches);
+                console.warn('[geopolitics-map] Classification batch failed; preserving partial results.', error);
+              }
+
+              if (!isCurrentRequest()) return;
+              setScanStatus('partial');
+              setProgressCountries(false);
+            }
+          })
+        );
+
+        if (!isCurrentRequest()) return;
+        setScanStatus(sawLaterBatchFailure ? 'partial' : 'complete');
+        const completeCountryCounts = setProgressCountries(!sawLaterBatchFailure);
+        if (!sawLaterBatchFailure && completeCountryCounts) {
+          writeGeopoliticalMapCountryCountCache(lookbackHours, completeCountryCounts, source, queryLabel, cacheOptions);
+        }
+        setFetchingCountryCounts(false);
+      } catch (error) {
+        console.warn('[geopolitics-map] Progressive scan failed.', error);
+        if (!isCurrentRequest()) return;
+        setScanStatus('error');
+        setLoadingCountryCounts(false);
+        setFetchingCountryCounts(false);
+        setCountryCounts(buildEmptyGeopoliticalCountryCounts(source, queryLabel));
+      }
+    };
+
+    void runScan();
+
+    return () => {
+      if (requestVersionRef.current === requestVersion) {
+        requestVersionRef.current += 1;
+      }
+    };
+  }, [debugMode, enabled, lookbackHours, model, refreshNonce, systemPrompt]);
+
+  return {
+    countryCounts,
+    loadingCountryCounts,
+    fetchingCountryCounts,
+    refetchCountryCounts: () => setRefreshNonce((current) => current + 1),
+    scanStatus,
+    classifiedCount,
+    candidateCount,
+    completedBatchCount,
+    totalBatchCount,
+  };
+}
+
+function useGeopoliticalCountrySummaryState(
+  baseCountryCounts: CountryNewsCount[],
+  lookbackHours: number,
+  model: string,
+  enabled: boolean
+): GeopoliticalCountrySummaryState {
+  const [summaryRecords, setSummaryRecords] = useState<Record<string, {
+    hotspotSummary: string;
+    hotspotSummarySources: NonNullable<CountryNewsCount['hotspotSummarySources']>;
+  }>>({});
+  const [summaryStatuses, setSummaryStatuses] = useState<Record<string, NonNullable<CountryNewsCount['hotspotSummaryStatus']>>>({});
+  const [loadingCountrySummaries, setLoadingCountrySummaries] = useState(false);
+  const [fetchingCountrySummaries, setFetchingCountrySummaries] = useState(false);
+  const requestVersionRef = useRef(0);
+
+  useEffect(() => {
+    const activeCountries = baseCountryCounts.filter((country) => country.count > 0 && (country.stories ?? []).length > 0);
+
+    if (!enabled || !activeCountries.length) {
+      requestVersionRef.current += 1;
+      setSummaryRecords({});
+      setSummaryStatuses({});
+      setLoadingCountrySummaries(false);
+      setFetchingCountrySummaries(false);
+      return;
+    }
+
+    const requestVersion = requestVersionRef.current + 1;
+    requestVersionRef.current = requestVersion;
+    const cachedSummaries = getCachedGeopoliticalCountrySummaries(activeCountries, lookbackHours, model);
+    const cachedCountryCodes = new Set(Object.keys(cachedSummaries));
+
+    setSummaryRecords(cachedSummaries);
+    setSummaryStatuses(
+      activeCountries.reduce<Record<string, NonNullable<CountryNewsCount['hotspotSummaryStatus']>>>((acc, country) => {
+        const countryCode = country.countryCode.toUpperCase();
+        acc[countryCode] = cachedCountryCodes.has(countryCode) ? 'ready' : 'loading';
+        return acc;
+      }, {})
+    );
+
+    const missingCountries = activeCountries.filter(
+      (country) => !cachedCountryCodes.has(country.countryCode.toUpperCase())
+    );
+
+    if (!missingCountries.length) {
+      setLoadingCountrySummaries(false);
+      setFetchingCountrySummaries(false);
+      return;
+    }
+
+    setLoadingCountrySummaries(cachedCountryCodes.size === 0);
+    setFetchingCountrySummaries(true);
+
+    void fetchGeopoliticalCountrySummaries(
+      missingCountries,
+      lookbackHours,
+      model,
+      (chunkSummaries) => {
+        if (requestVersionRef.current !== requestVersion || !Object.keys(chunkSummaries).length) return;
+
+        setSummaryRecords((current) => ({ ...current, ...chunkSummaries }));
+        setSummaryStatuses((current) => ({
+          ...current,
+          ...Object.fromEntries(
+            Object.keys(chunkSummaries).map((countryCode) => [countryCode, 'ready'] as const)
+          ),
+        }));
+        setLoadingCountrySummaries(false);
+      }
+    ).then(({ summariesByCountryCode, failedCountryCodes }) => {
+      if (requestVersionRef.current !== requestVersion) return;
+
+      if (Object.keys(summariesByCountryCode).length) {
+        setSummaryRecords((current) => ({ ...current, ...summariesByCountryCode }));
+      }
+
+      setSummaryStatuses((current) => {
+        const nextStatuses = { ...current };
+        Object.keys(summariesByCountryCode).forEach((countryCode) => {
+          nextStatuses[countryCode] = 'ready';
+        });
+        failedCountryCodes.forEach((countryCode) => {
+          if (!nextStatuses[countryCode] || nextStatuses[countryCode] === 'loading') {
+            nextStatuses[countryCode] = 'error';
+          }
+        });
+        return nextStatuses;
+      });
+      setLoadingCountrySummaries(false);
+      setFetchingCountrySummaries(false);
+    });
+
+    return () => {
+      if (requestVersionRef.current === requestVersion) {
+        requestVersionRef.current += 1;
+      }
+    };
+  }, [baseCountryCounts, enabled, lookbackHours, model]);
+
+  return {
+    countryCounts: baseCountryCounts.map((country) => {
+      const countryCode = country.countryCode.toUpperCase();
+      const summaryRecord = summaryRecords[countryCode];
+      const hasStories = country.count > 0 && (country.stories ?? []).length > 0;
+
+      return {
+        ...country,
+        hotspotSummary: summaryRecord?.hotspotSummary,
+        hotspotSummarySources: summaryRecord?.hotspotSummarySources,
+        hotspotSummaryStatus: hasStories ? (summaryStatuses[countryCode] ?? 'idle') : 'idle',
+      };
+    }),
+    loadingCountrySummaries,
+    fetchingCountrySummaries,
+  };
+}
 
 function useGeopoliticsMonitorState(): GeopoliticsMonitorState {
   const [timeframe, setTimeframe] = useState<TimeframeOption>(TIMEFRAMES[2]);
@@ -527,35 +922,33 @@ function useGeopoliticsMonitorState(): GeopoliticsMonitorState {
   const countrySummariesPayload = getOpenAIDebugPayload('geopolitical-country-summaries');
 
   const {
-    data: countryCounts = [],
-    isLoading: loadingCountryCounts,
-    refetch: refetchCountryCounts,
-    isFetching: fetchingCountryCounts,
-  } = useQuery({
-    queryKey: [
-      'geopolitics-country-news-counts',
-      GEOPOLITICS_TOPIC_QUERY,
-      timeframe.hours,
-      geopoliticsModel,
-      openAISettings.geopoliticsSystemPrompt,
-      openAISettings.hasStoredApiKey,
-    ],
-    queryFn: () =>
-      fetchCountryNewsCounts(GEOPOLITICS_TOPIC_QUERY, timeframe.hours, {
-        enableAI: openAISettings.hasStoredApiKey,
-        model: geopoliticsModel,
-        systemPrompt: openAISettings.geopoliticsSystemPrompt,
-        debugMode,
-      }),
-    placeholderData: keepPreviousData,
+    countryCounts: baseCountryCounts,
+    loadingCountryCounts,
+    refetchCountryCounts,
+    fetchingCountryCounts,
+    scanStatus,
+    classifiedCount,
+    candidateCount,
+    completedBatchCount,
+    totalBatchCount,
+  } = useProgressiveGeopoliticalCountryCounts({
+    lookbackHours: timeframe.hours,
+    model: geopoliticsModel,
+    systemPrompt: openAISettings.geopoliticsSystemPrompt,
     enabled: openAISettings.hasStoredApiKey,
-    refetchInterval: 15 * 60 * 1000,
-    refetchOnMount: false,
-    refetchOnReconnect: false,
-    refetchOnWindowFocus: false,
-    staleTime: 15 * 60 * 1000,
-    gcTime: 30 * 60 * 1000,
+    debugMode,
   });
+
+  const {
+    countryCounts,
+    loadingCountrySummaries,
+    fetchingCountrySummaries,
+  } = useGeopoliticalCountrySummaryState(
+    baseCountryCounts,
+    timeframe.hours,
+    geopoliticsModel,
+    openAISettings.hasStoredApiKey && scanStatus === 'complete'
+  );
 
   const {
     data: riskSnapshot,
@@ -588,6 +981,13 @@ function useGeopoliticsMonitorState(): GeopoliticsMonitorState {
     loadingCountryCounts,
     refetchCountryCounts,
     fetchingCountryCounts,
+    scanStatus,
+    classifiedCount,
+    candidateCount,
+    completedBatchCount,
+    totalBatchCount,
+    loadingCountrySummaries,
+    fetchingCountrySummaries,
     riskSnapshot,
     loadingRiskSnapshot,
     riskSnapshotError,
@@ -611,6 +1011,7 @@ function GeopoliticsMonitorControls({
     showPayloadDebug,
     setShowPayloadDebug,
     fetchingCountryCounts,
+    fetchingCountrySummaries,
     fetchingRiskSnapshot,
     refetchCountryCounts,
     refetchRiskSnapshot,
@@ -651,6 +1052,8 @@ function GeopoliticsMonitorControls({
         <button
           onClick={() => {
             clearGeopoliticalMapCache();
+            clearGeopoliticalCountrySummaryCache();
+            clearGeopoliticalHeadlineAssessmentCache();
             void state.refetchCountryCounts();
             void state.refetchRiskSnapshot();
           }}
@@ -659,7 +1062,7 @@ function GeopoliticsMonitorControls({
         >
           <RefreshCw
             size={11}
-            className={fetchingCountryCounts || fetchingRiskSnapshot ? 'animate-spin' : ''}
+            className={fetchingCountryCounts || fetchingCountrySummaries || fetchingRiskSnapshot ? 'animate-spin' : ''}
           />
           REFRESH
         </button>
@@ -726,6 +1129,34 @@ function GeopoliticsDebugPanels({
   );
 }
 
+function formatGeopoliticalScanStatusLabel(status: GeopoliticalScanStatus): string {
+  switch (status) {
+    case 'fetching-feeds':
+      return 'Fetching feeds';
+    case 'classifying':
+      return 'Classifying events';
+    case 'partial':
+      return 'Partial results';
+    case 'complete':
+      return 'Complete';
+    case 'error':
+      return 'Refresh failed';
+    case 'idle':
+    default:
+      return 'Idle';
+  }
+}
+
+function formatGeopoliticalScanProgress(state: Pick<
+  GeopoliticsMonitorState,
+  'classifiedCount' | 'candidateCount' | 'completedBatchCount' | 'totalBatchCount'
+>): string {
+  if (state.candidateCount <= 0) return '';
+  const headlineProgress = `${Math.min(state.classifiedCount, state.candidateCount)}/${state.candidateCount} HEADLINES`;
+  if (state.totalBatchCount <= 0) return headlineProgress;
+  return `${headlineProgress} · ${state.completedBatchCount}/${state.totalBatchCount} BATCHES`;
+}
+
 function GeopoliticsMapSection({
   state,
   onCountrySelect,
@@ -740,8 +1171,8 @@ function GeopoliticsMapSection({
     hasStoredApiKey,
     setActivePanel,
     countryCounts,
-    loadingCountryCounts,
     fetchingCountryCounts,
+    scanStatus,
   } = state;
 
   return hasStoredApiKey ? (
@@ -758,7 +1189,10 @@ function GeopoliticsMapSection({
       onCountrySelect={onCountrySelect}
       showDebugSources={debugMode}
       isRefreshing={fetchingCountryCounts && countryCounts.length > 0}
-      isLoading={loadingCountryCounts && countryCounts.length === 0}
+      isLoading={false}
+      scanStatus={scanStatus}
+      scanStatusLabel={formatGeopoliticalScanStatusLabel(scanStatus)}
+      scanProgressLabel={formatGeopoliticalScanProgress(state)}
       showHotspotsSection={false}
       headerActions={<GeopoliticsMonitorControls state={state} />}
     />
