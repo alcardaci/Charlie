@@ -14,6 +14,7 @@
     "build:icon": "node scripts/build-desktop-assets.mjs",
     "build:desktop": "npm run build && npm run build:icon && node scripts/package-desktop.mjs dir",
     "dist:desktop": "npm run build && npm run build:icon && node scripts/package-desktop.mjs dist",
+    "dist:desktop:win": "npm run build && npm run build:icon && electron-builder --win nsis portable --x64 --arm64",
     "preview": "vite preview",
     "check:secrets": "node scripts/check-secrets.mjs",
     "verify:desktop": "node scripts/verify-macos-build.mjs"
@@ -102,6 +103,12 @@
           ]
         }
       ]
+    },
+    "nsis": {
+      "artifactName": "Charlie-Setup-${version}-${arch}.${ext}"
+    },
+    "portable": {
+      "artifactName": "Charlie-Portable-${version}-${arch}.${ext}"
     },
     "linux": {
       "artifactName": "Charlie-${version}-${arch}.${ext}",
