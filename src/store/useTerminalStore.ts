@@ -20,6 +20,7 @@ import {
 
 const DEFAULT_WATCHLIST = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'JPM', 'BRK-B', 'V'];
 const DEFAULT_FOREX_PAIRS = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'USD/CHF', 'AUD/USD', 'USD/CAD', 'EUR/GBP', 'DKK/EUR'];
+const DEFAULT_PORTFOLIO_CURRENCY = 'USD';
 const OBSOLETE_OVERVIEW_PROMPT_TEXTS = [
   'Combine market tone, macro interpretation, and risk framing into one concise terminal-style summary.',
   'Combine market tone, macro interpretation, and risk framing into one concise but comprehensive terminal-style summary. Use 5 to 8 bullet points max.',
@@ -59,6 +60,7 @@ interface TerminalState {
   chartSymbol: string;
   chartStyle: ChartStyle;
   forexPairs: string[];
+  portfolioDisplayCurrency: string;
   openAISettings: OpenAISettings;
   marketOverviewSummary: AIMarketSummary | null;
   marketOverviewSummaryCollapsed: boolean;
@@ -76,6 +78,7 @@ interface TerminalState {
   goHome: () => void;
   setChartStyle: (style: ChartStyle) => void;
   setForexPairs: (pairs: string[]) => void;
+  setPortfolioDisplayCurrency: (currency: string) => void;
   updateOpenAISettings: (updates: Partial<OpenAISettings>) => void;
   setMarketOverviewSummary: (summary: AIMarketSummary | null) => void;
   setMarketOverviewSummaryCollapsed: (collapsed: boolean) => void;
@@ -85,6 +88,7 @@ interface TerminalState {
   addPortfolioPosition: (pos: Omit<PortfolioPosition, 'id'>) => void;
   addPortfolioPositions: (positions: Omit<PortfolioPosition, 'id'>[]) => void;
   updatePortfolioPosition: (id: string, updates: Partial<Omit<PortfolioPosition, 'id' | 'addedAt'>>) => void;
+  updatePortfolioAssetCurrency: (symbol: string, currency: string) => void;
   removePortfolioPosition: (id: string) => void;
   clearPortfolio: () => void;
   executeCommand: (cmd: string) => void;
@@ -96,8 +100,13 @@ interface TerminalState {
 
 type PersistedTerminalState = Pick<
   TerminalState,
-  'watchlistSidebarVisible' | 'watchlist' | 'portfolio' | 'commandHistory' | 'activeSymbol' | 'chartStyle' | 'forexPairs' | 'openAISettings'
+  'watchlistSidebarVisible' | 'watchlist' | 'portfolio' | 'commandHistory' | 'activeSymbol' | 'chartStyle' | 'forexPairs' | 'portfolioDisplayCurrency' | 'openAISettings'
 >;
+
+function normalizeCurrencyCode(currency?: string | null): string {
+  const normalized = (currency ?? '').trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(normalized) ? normalized : DEFAULT_PORTFOLIO_CURRENCY;
+}
 
 function isObsoleteOverviewPrompt(prompt: string): boolean {
   return OBSOLETE_OVERVIEW_PROMPT_TEXTS.includes(prompt.trim() as (typeof OBSOLETE_OVERVIEW_PROMPT_TEXTS)[number]);
@@ -184,6 +193,7 @@ function normalizeAIMarketSummary(value?: Partial<AIMarketSummary> | null): AIMa
 function createPortfolioEntry(position: Omit<PortfolioPosition, 'id'>): PortfolioPosition {
   return {
     ...position,
+    currency: normalizeCurrencyCode(position.currency),
     id: `${position.symbol}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   };
 }
@@ -202,6 +212,7 @@ export const useTerminalStore = create<TerminalState>()(
       historyIndex: -1,
       chartStyle: 'candlestick',
       forexPairs: DEFAULT_FOREX_PAIRS,
+      portfolioDisplayCurrency: DEFAULT_PORTFOLIO_CURRENCY,
       openAISettings: DEFAULT_OPENAI_SETTINGS,
       marketOverviewSummary: null,
       marketOverviewSummaryCollapsed: false,
@@ -332,6 +343,10 @@ export const useTerminalStore = create<TerminalState>()(
         set({ forexPairs: normalizedPairs.length ? normalizedPairs : DEFAULT_FOREX_PAIRS });
       },
 
+      setPortfolioDisplayCurrency: (currency) => {
+        set({ portfolioDisplayCurrency: normalizeCurrencyCode(currency) });
+      },
+
       updateOpenAISettings: (updates) => {
         set((state) => ({
           openAISettings: (() => {
@@ -398,6 +413,24 @@ export const useTerminalStore = create<TerminalState>()(
               ? {
                   ...position,
                   ...updates,
+                  ...(updates.currency ? { currency: normalizeCurrencyCode(updates.currency) } : {}),
+                }
+              : position
+          ),
+        }));
+      },
+
+      updatePortfolioAssetCurrency: (symbol, currency) => {
+        const normalizedSymbol = symbol.trim().toUpperCase();
+        const normalizedCurrency = normalizeCurrencyCode(currency);
+        if (!normalizedSymbol) return;
+
+        set((state) => ({
+          portfolio: state.portfolio.map((position) =>
+            position.symbol.toUpperCase() === normalizedSymbol
+              ? {
+                  ...position,
+                  currency: normalizedCurrency,
                 }
               : position
           ),
@@ -475,6 +508,7 @@ export const useTerminalStore = create<TerminalState>()(
           ...currentState,
           ...persisted,
           debugMode: false,
+          portfolioDisplayCurrency: normalizeCurrencyCode(persisted.portfolioDisplayCurrency),
           openAISettings: normalizeOpenAISettings(persisted.openAISettings),
         };
       },
@@ -490,6 +524,7 @@ export const useTerminalStore = create<TerminalState>()(
         activeSymbol: state.activeSymbol,
         chartStyle: state.chartStyle,
         forexPairs: state.forexPairs,
+        portfolioDisplayCurrency: state.portfolioDisplayCurrency,
         openAISettings: state.openAISettings,
       }),
     }

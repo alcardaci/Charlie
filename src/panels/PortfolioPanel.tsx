@@ -1,8 +1,8 @@
 import { Fragment, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronUp, DollarSign, Download, Pencil, Plus, Trash2, TrendingDown, TrendingUp, Upload } from 'lucide-react';
-import { Area, AreaChart, CartesianGrid, Cell, Legend, Line, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { fetchChart, fetchQuotes, searchSymbols } from '../api/finance';
+import { Area, CartesianGrid, Cell, ComposedChart, Legend, Line, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { fetchChart, fetchForexPairs, fetchQuotes, searchSymbols } from '../api/finance';
 import { useTerminalStore } from '../store/useTerminalStore';
 import { ChartInterval, ChartPoint, ChartRange, PortfolioPosition, Quote } from '../types';
 import { changeColor, fmt } from '../utils/formatters';
@@ -10,6 +10,10 @@ import { importPortfolioCsv } from '../utils/portfolioImport';
 import { getThemePalette, useTheme } from '../utils/theme';
 
 const COLORS = ['#f0a500', '#58a6ff', '#3fb950', '#d2a8ff', '#f85149', '#ffa657', '#39d353', '#a5d6ff'];
+const DEFAULT_PORTFOLIO_CURRENCY = 'USD';
+const PORTFOLIO_CURRENCIES = ['USD', 'EUR', 'GBP', 'JPY', 'CHF', 'CAD', 'AUD', 'NZD', 'DKK', 'SEK', 'NOK', 'HKD', 'SGD'] as const;
+const MARKET_BENCHMARK_SYMBOL = '^GSPC';
+const MARKET_BENCHMARK_LABEL = 'S&P 500';
 
 type LotFields = {
   shares: string;
@@ -28,21 +32,33 @@ type EditLotDraft = LotFields & {
 
 type PortfolioLot = PortfolioPosition & {
   purchaseDate: string;
+  currency: string;
   currentPrice: number;
   currentValue: number;
+  displayCurrentPrice: number;
+  displayCurrentValue: number;
+  displayTotalCost: number;
+  displayGainLoss: number;
   totalCost: number;
   gainLoss: number;
   gainLossPct: number;
   shortName: string;
+  conversionRate: number | null;
 };
 
 type GroupedPosition = {
   symbol: string;
   shortName: string;
+  currency: string;
   shares: number;
   avgCost: number;
   currentPrice: number;
   currentValue: number;
+  displayAvgCost: number;
+  displayCurrentPrice: number;
+  displayCurrentValue: number;
+  displayTotalCost: number;
+  displayGainLoss: number;
   totalCost: number;
   gainLoss: number;
   gainLossPct: number;
@@ -62,6 +78,7 @@ type PortfolioSortKey =
 
 type SortDirection = 'asc' | 'desc';
 type HistorySelectionMode = 'all' | 'custom' | 'none';
+type PortfolioValueMode = 'aggregate' | 'byCurrency';
 
 type PortfolioHistoryPoint = {
   timestamp: number;
@@ -70,6 +87,10 @@ type PortfolioHistoryPoint = {
   cost: number;
   gainLoss: number;
   gainLossPct: number;
+};
+
+type PortfolioChartPoint = PortfolioHistoryPoint & {
+  benchmarkClose?: number;
 };
 
 const PORTFOLIO_HISTORY_TIMEFRAMES: Array<{ label: string; range: ChartRange; interval: ChartInterval; lookbackDays?: number }> = [
@@ -130,6 +151,15 @@ function normalizePortfolioSymbol(symbol: string): string {
   return symbol.trim().toUpperCase();
 }
 
+function normalizePortfolioCurrency(currency?: string | null): string {
+  const normalized = (currency ?? '').trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(normalized) ? normalized : DEFAULT_PORTFOLIO_CURRENCY;
+}
+
+function getCurrencyOptions(activeCurrencies: string[]): string[] {
+  return Array.from(new Set([...PORTFOLIO_CURRENCIES, ...activeCurrencies.map(normalizePortfolioCurrency)])).sort();
+}
+
 function inferPortfolioAssetClass(symbol: string, quote?: Quote): string {
   const type = `${quote?.quoteType ?? ''} ${quote?.typeDisp ?? ''}`.toUpperCase();
 
@@ -170,8 +200,28 @@ function comparePortfolioRows(
 ): number {
   const direction = sortDirection === 'asc' ? 1 : -1;
 
-  const leftValue = sortKey === 'symbol' ? left.symbol : left[sortKey];
-  const rightValue = sortKey === 'symbol' ? right.symbol : right[sortKey];
+  const leftValue = sortKey === 'symbol'
+    ? left.symbol
+    : sortKey === 'avgCost'
+      ? left.displayAvgCost
+      : sortKey === 'currentPrice'
+        ? left.displayCurrentPrice
+        : sortKey === 'currentValue'
+          ? left.displayCurrentValue
+          : sortKey === 'gainLoss'
+            ? left.displayGainLoss
+            : left[sortKey];
+  const rightValue = sortKey === 'symbol'
+    ? right.symbol
+    : sortKey === 'avgCost'
+      ? right.displayAvgCost
+      : sortKey === 'currentPrice'
+        ? right.displayCurrentPrice
+        : sortKey === 'currentValue'
+          ? right.displayCurrentValue
+          : sortKey === 'gainLoss'
+            ? right.displayGainLoss
+            : right[sortKey];
 
   if (typeof leftValue === 'string' && typeof rightValue === 'string') {
     return leftValue.localeCompare(rightValue) * direction;
@@ -240,9 +290,10 @@ function buildPortfolioHistory(
         hasIncompleteCoverage = true;
         break;
       }
+      const conversionRate = lot.conversionRate ?? 0;
       hasActiveLots = true;
-      value += lot.shares * price;
-      cost += lot.shares * lot.avgCost;
+      value += lot.shares * price * conversionRate;
+      cost += lot.shares * lot.avgCost * conversionRate;
     }
 
     if (!hasActiveLots || hasIncompleteCoverage) continue;
@@ -284,6 +335,32 @@ function trimPortfolioHistory(points: PortfolioHistoryPoint[], lookbackDays?: nu
     return previousPoint ? [previousPoint, trimmed[0]] : trimmed;
   }
   return trimmed;
+}
+
+function buildBenchmarkOverlay(history: PortfolioHistoryPoint[], benchmarkPoints: ChartPoint[]): PortfolioChartPoint[] {
+  if (!history.length || !benchmarkPoints.length) return history;
+
+  const sortedBenchmarkPoints = [...benchmarkPoints]
+    .filter((point) => Number.isFinite(point.close) && point.close > 0)
+    .sort((left, right) => left.timestamp - right.timestamp);
+  if (!sortedBenchmarkPoints.length) return history;
+
+  let benchmarkCursor = 0;
+  let latestClose: number | null = null;
+
+  return history.map((point) => {
+    while (benchmarkCursor < sortedBenchmarkPoints.length && sortedBenchmarkPoints[benchmarkCursor].timestamp <= point.timestamp) {
+      latestClose = sortedBenchmarkPoints[benchmarkCursor].close;
+      benchmarkCursor += 1;
+    }
+
+    if (latestClose == null) return point;
+
+    return {
+      ...point,
+      benchmarkClose: latestClose,
+    };
+  });
 }
 
 type AxisScale = {
@@ -358,9 +435,23 @@ function buildAdaptiveAxisScale(
   };
 }
 
-function formatRoundedCurrencyAxisTick(value: number, step: number): string {
+function formatCompactCurrencyAmount(value: number, currency: string, decimals = 2): string {
   if (!Number.isFinite(value)) return '—';
-  if (value === 0) return '$0';
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency,
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    }).format(value);
+  } catch {
+    return `${currency} ${fmt.price(value, decimals)}`;
+  }
+}
+
+function formatRoundedCurrencyAxisTick(value: number, step: number, currency: string): string {
+  if (!Number.isFinite(value)) return '—';
+  if (value === 0) return formatCompactCurrencyAmount(0, currency, 0);
   const absolute = Math.abs(value);
   const sign = value < 0 ? '-' : '';
   const units = [
@@ -376,17 +467,59 @@ function formatRoundedCurrencyAxisTick(value: number, step: number): string {
   const scaledStep = Math.abs(step) / divisor;
   const decimals = scaledStep >= 1 ? 0 : scaledStep >= 0.1 ? 1 : scaledStep >= 0.01 ? 2 : 3;
 
-  return `${sign}$${new Intl.NumberFormat('en-US', {
+  const formatted = new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  }).format(scaledValue);
+
+  return `${sign}${formatted.replace('-', '')}${suffix}`;
+}
+
+function formatCurrencyAmount(value: number, currency: string, decimals = 2): string {
+  return formatCompactCurrencyAmount(value, currency, decimals);
+}
+
+function formatRoundedNumberAxisTick(value: number, step: number): string {
+  if (!Number.isFinite(value)) return '—';
+  const absolute = Math.abs(value);
+  const sign = value < 0 ? '-' : '';
+  const units = [
+    { threshold: 1e12, divisor: 1e12, suffix: 'T' },
+    { threshold: 1e9, divisor: 1e9, suffix: 'B' },
+    { threshold: 1e6, divisor: 1e6, suffix: 'M' },
+    { threshold: 1e3, divisor: 1e3, suffix: 'K' },
+  ];
+  const unit = units.find((item) => absolute >= item.threshold);
+  const divisor = unit?.divisor ?? 1;
+  const suffix = unit?.suffix ?? '';
+  const scaledValue = absolute / divisor;
+  const scaledStep = Math.abs(step) / divisor;
+  const decimals = scaledStep >= 1 ? 0 : scaledStep >= 0.1 ? 1 : scaledStep >= 0.01 ? 2 : 3;
+
+  return `${sign}${new Intl.NumberFormat('en-US', {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   }).format(scaledValue)}${suffix}`;
 }
 
-function formatCurrencyAmount(value: number, decimals = 2): string {
-  if (!Number.isFinite(value)) return '—';
-  const absolute = Math.abs(value);
-  const sign = value < 0 ? '-' : '';
-  return `${sign}$${fmt.price(absolute, decimals)}`;
+function buildFxRateMap(displayCurrency: string, fxPairs: Awaited<ReturnType<typeof fetchForexPairs>>): Map<string, number> {
+  const rates = new Map<string, number>();
+  rates.set(`${displayCurrency}:${displayCurrency}`, 1);
+
+  for (const pair of fxPairs) {
+    if (pair.rate > 0) {
+      rates.set(`${pair.base}:${pair.quote}`, pair.rate);
+    }
+  }
+
+  return rates;
+}
+
+function getConversionRate(currency: string, displayCurrency: string, fxRateMap: Map<string, number>): number | null {
+  if (currency === displayCurrency) return 1;
+  return fxRateMap.get(`${currency}:${displayCurrency}`) ?? null;
 }
 
 function downloadCsvFile(filename: string, content: string): void {
@@ -402,9 +535,21 @@ function downloadCsvFile(filename: string, content: string): void {
 export function PortfolioPanel() {
   useTheme();
   const themePalette = getThemePalette();
-  const { portfolio, addPortfolioPositions, updatePortfolioPosition, removePortfolioPosition, clearPortfolio, setActivePanel } = useTerminalStore();
+  const {
+    portfolio,
+    addPortfolioPositions,
+    updatePortfolioPosition,
+    updatePortfolioAssetCurrency,
+    removePortfolioPosition,
+    clearPortfolio,
+    setActivePanel,
+    portfolioDisplayCurrency: displayCurrency,
+    setPortfolioDisplayCurrency,
+  } = useTerminalStore();
   const [showAdd, setShowAdd] = useState(false);
   const [symbolInput, setSymbolInput] = useState('');
+  const [addCurrency, setAddCurrency] = useState(DEFAULT_PORTFOLIO_CURRENCY);
+  const [portfolioValueMode, setPortfolioValueMode] = useState<PortfolioValueMode>('aggregate');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [lotDrafts, setLotDrafts] = useState<LotDraft[]>([createLotDraft()]);
   const [editingLot, setEditingLot] = useState<EditLotDraft | null>(null);
@@ -418,6 +563,7 @@ export function PortfolioPanel() {
   const [historyLookbackDays, setHistoryLookbackDays] = useState<number | undefined>(undefined);
   const [historySelectionMode, setHistorySelectionMode] = useState<HistorySelectionMode>('all');
   const [selectedHistorySymbols, setSelectedHistorySymbols] = useState<string[]>([]);
+  const [showMarketBenchmark, setShowMarketBenchmark] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const sharesInputRef = useRef<HTMLInputElement>(null);
@@ -426,6 +572,24 @@ export function PortfolioPanel() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const symbols = [...new Set(portfolio.map((position) => normalizePortfolioSymbol(position.symbol)).filter(Boolean))];
+  const assetCurrencyMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const position of portfolio) {
+      const symbol = normalizePortfolioSymbol(position.symbol);
+      if (!symbol || map.has(symbol)) continue;
+      map.set(symbol, normalizePortfolioCurrency(position.currency));
+    }
+    return map;
+  }, [portfolio]);
+  const activeCurrencies = useMemo(
+    () => Array.from(new Set(portfolio.map((position) => normalizePortfolioCurrency(position.currency)))),
+    [portfolio]
+  );
+  const currencyOptions = useMemo(
+    () => getCurrencyOptions([...activeCurrencies, addCurrency, displayCurrency]),
+    [activeCurrencies, addCurrency, displayCurrency]
+  );
+  const activeCurrencyKey = useMemo(() => [...activeCurrencies].sort().join(','), [activeCurrencies]);
 
   const { data: quotes = [] } = useQuery({
     queryKey: ['portfolio-quotes', symbols],
@@ -449,28 +613,54 @@ export function PortfolioPanel() {
     staleTime: 10000,
   });
 
+  const { data: fxPairs = [], isLoading: loadingFxRates } = useQuery({
+    queryKey: ['portfolio-fx-rates', activeCurrencyKey, displayCurrency],
+    queryFn: () =>
+      fetchForexPairs(
+        activeCurrencies
+          .filter((currency) => currency !== displayCurrency)
+          .map((currency) => ({
+            base: currency,
+            quote: displayCurrency,
+          }))
+      ),
+    enabled: activeCurrencies.some((currency) => currency !== displayCurrency),
+    staleTime: 300000,
+    refetchInterval: 300000,
+  });
+  const fxRateMap = useMemo(() => buildFxRateMap(displayCurrency, fxPairs), [displayCurrency, fxPairs]);
+
   const quoteMap = new Map(quotes.map((quote) => [normalizePortfolioSymbol(quote.symbol), quote]));
 
   const lots: PortfolioLot[] = portfolio.map((position) => {
     const purchaseDate = resolvePurchaseDate(position);
     const symbol = normalizePortfolioSymbol(position.symbol);
+    const currency = normalizePortfolioCurrency(position.currency);
+    const conversionRate = getConversionRate(currency, displayCurrency, fxRateMap);
     const quote = quoteMap.get(symbol);
     const currentPrice = quote?.regularMarketPrice ?? position.avgCost;
     const currentValue = currentPrice * position.shares;
     const totalCost = position.avgCost * position.shares;
     const gainLoss = currentValue - totalCost;
     const gainLossPct = totalCost ? (gainLoss / totalCost) * 100 : 0;
+    const displayMultiplier = conversionRate ?? 0;
 
     return {
       ...position,
       symbol,
+      currency,
       purchaseDate,
       currentPrice,
       currentValue,
       totalCost,
       gainLoss,
       gainLossPct,
+      displayCurrentPrice: currentPrice * displayMultiplier,
+      displayCurrentValue: currentValue * displayMultiplier,
+      displayTotalCost: totalCost * displayMultiplier,
+      displayGainLoss: gainLoss * displayMultiplier,
       shortName: quote?.shortName ?? quote?.longName ?? position.symbol,
+      conversionRate,
     };
   });
 
@@ -482,6 +672,9 @@ export function PortfolioPanel() {
       existing.totalCost += lot.totalCost;
       existing.currentValue += lot.currentValue;
       existing.gainLoss += lot.gainLoss;
+      existing.displayTotalCost += lot.displayTotalCost;
+      existing.displayCurrentValue += lot.displayCurrentValue;
+      existing.displayGainLoss += lot.displayGainLoss;
       existing.lotCount += 1;
       existing.lots.push(lot);
       continue;
@@ -490,10 +683,16 @@ export function PortfolioPanel() {
     groupedMap.set(lot.symbol, {
       symbol: lot.symbol,
       shortName: lot.shortName,
+      currency: lot.currency,
       shares: lot.shares,
       avgCost: 0,
       currentPrice: lot.currentPrice,
       currentValue: lot.currentValue,
+      displayAvgCost: 0,
+      displayCurrentPrice: lot.displayCurrentPrice,
+      displayCurrentValue: lot.displayCurrentValue,
+      displayTotalCost: lot.displayTotalCost,
+      displayGainLoss: lot.displayGainLoss,
       totalCost: lot.totalCost,
       gainLoss: lot.gainLoss,
       gainLossPct: 0,
@@ -509,12 +708,16 @@ export function PortfolioPanel() {
           const avgCost = position.shares ? position.totalCost / position.shares : 0;
           const currentPrice = position.shares ? position.currentValue / position.shares : 0;
           const gainLossPct = position.totalCost ? (position.gainLoss / position.totalCost) * 100 : 0;
+          const displayAvgCost = position.shares ? position.displayTotalCost / position.shares : 0;
+          const displayCurrentPrice = position.shares ? position.displayCurrentValue / position.shares : 0;
           const lotsByDate = [...position.lots].sort((left, right) => right.purchaseDate.localeCompare(left.purchaseDate));
 
           return {
             ...position,
             avgCost,
             currentPrice,
+            displayAvgCost,
+            displayCurrentPrice,
             gainLossPct,
             lots: lotsByDate,
           };
@@ -523,13 +726,36 @@ export function PortfolioPanel() {
     [groupedMap, sortDirection, sortKey]
   );
 
-  const totalValue = positions.reduce((acc, position) => acc + position.currentValue, 0);
-  const totalCost = positions.reduce((acc, position) => acc + position.totalCost, 0);
+  const totalValue = positions.reduce((acc, position) => acc + position.displayCurrentValue, 0);
+  const totalCost = positions.reduce((acc, position) => acc + position.displayTotalCost, 0);
   const totalGainLoss = totalValue - totalCost;
   const totalGainLossPct = totalCost ? (totalGainLoss / totalCost) * 100 : 0;
   const totalLots = positions.reduce((acc, position) => acc + position.lotCount, 0);
   const currentFormSymbol = symbolInput.trim().toUpperCase();
   const isAddingToExistingPosition = currentFormSymbol.length > 0 && symbols.includes(currentFormSymbol);
+  const missingFxCurrencies = Array.from(
+    new Set(lots.filter((lot) => lot.conversionRate == null).map((lot) => lot.currency))
+  );
+  const totalsByCurrency = Array.from(
+    lots.reduce((groups, lot) => {
+      const existing = groups.get(lot.currency) ?? {
+        currency: lot.currency,
+        currentValue: 0,
+        totalCost: 0,
+        gainLoss: 0,
+      };
+      existing.currentValue += lot.currentValue;
+      existing.totalCost += lot.totalCost;
+      existing.gainLoss += lot.gainLoss;
+      groups.set(lot.currency, existing);
+      return groups;
+    }, new Map<string, { currency: string; currentValue: number; totalCost: number; gainLoss: number }>())
+  )
+    .map(([, value]) => ({
+      ...value,
+      gainLossPct: value.totalCost ? (value.gainLoss / value.totalCost) * 100 : 0,
+    }))
+    .sort((left, right) => right.currentValue - left.currentValue);
 
   const parsedDrafts = lotDrafts.map(parseLotFields);
   const validDraftCount = parsedDrafts.filter((draft) => draft.isValid).length;
@@ -553,13 +779,13 @@ export function PortfolioPanel() {
   const historyTotalValue = useMemo(
     () => positions
       .filter((position) => effectiveHistorySymbols.includes(position.symbol))
-      .reduce((acc, position) => acc + position.currentValue, 0),
+      .reduce((acc, position) => acc + position.displayCurrentValue, 0),
     [effectiveHistorySymbols, positions]
   );
   const historyTotalCost = useMemo(
     () => positions
       .filter((position) => effectiveHistorySymbols.includes(position.symbol))
-      .reduce((acc, position) => acc + position.totalCost, 0),
+      .reduce((acc, position) => acc + position.displayTotalCost, 0),
     [effectiveHistorySymbols, positions]
   );
   const selectedTotalValue = historyTotalValue;
@@ -572,7 +798,7 @@ export function PortfolioPanel() {
       ? 'NO CHART ASSETS'
       : `${effectiveHistorySymbols.length} CHART ASSET${effectiveHistorySymbols.length === 1 ? '' : 'S'}`;
   const historySeed = historyLots
-    .map((lot) => `${lot.id}:${lot.symbol}:${lot.shares}:${lot.avgCost}:${lot.purchaseDate}`)
+    .map((lot) => `${lot.id}:${lot.symbol}:${lot.shares}:${lot.avgCost}:${lot.purchaseDate}:${lot.currency}:${lot.conversionRate ?? 'missing'}`)
     .sort()
     .join('|');
 
@@ -592,11 +818,22 @@ export function PortfolioPanel() {
       return trimPortfolioHistory(history, activeHistoryTimeframe.lookbackDays);
     },
   });
+  const { data: marketBenchmarkHistory = [], isLoading: loadingMarketBenchmark } = useQuery({
+    queryKey: ['portfolio-market-benchmark', MARKET_BENCHMARK_SYMBOL, activeHistoryTimeframe.range, activeHistoryTimeframe.interval],
+    enabled: showMarketBenchmark && portfolioHistory.length > 0,
+    staleTime: 60000,
+    queryFn: () => fetchChart(MARKET_BENCHMARK_SYMBOL, activeHistoryTimeframe.range, activeHistoryTimeframe.interval),
+  });
+  const portfolioChartData = useMemo<PortfolioChartPoint[]>(
+    () => (showMarketBenchmark ? buildBenchmarkOverlay(portfolioHistory, marketBenchmarkHistory) : portfolioHistory),
+    [marketBenchmarkHistory, portfolioHistory, showMarketBenchmark]
+  );
+  const hasMarketBenchmarkData = portfolioChartData.some((point) => Number.isFinite(point.benchmarkClose));
   const isShortHistoryWindow = Boolean(activeHistoryTimeframe.lookbackDays && activeHistoryTimeframe.lookbackDays <= 30);
   const valueAxisScale = useMemo(
     () =>
       buildAdaptiveAxisScale(
-        portfolioHistory.map((point) => point.value),
+        portfolioChartData.map((point) => point.value),
         {
           clampMinToZero: true,
           tickCount: 5,
@@ -604,24 +841,24 @@ export function PortfolioPanel() {
           flatPaddingPct: isShortHistoryWindow ? 0.015 : 0.02,
         }
       ),
-    [isShortHistoryWindow, portfolioHistory]
+    [isShortHistoryWindow, portfolioChartData]
   );
-  const pnlAxisScale = useMemo(
-    () => buildAdaptiveAxisScale(portfolioHistory.map((point) => point.gainLoss), { tickCount: 5 }),
-    [portfolioHistory]
+  const benchmarkAxisScale = useMemo(
+    () => buildAdaptiveAxisScale(portfolioChartData.map((point) => point.benchmarkClose ?? Number.NaN), { tickCount: 5 }),
+    [portfolioChartData]
   );
 
   const pieData = positions.map((position) => ({
     name: position.symbol,
-    value: position.currentValue,
-    pct: totalValue ? (position.currentValue / totalValue) * 100 : 0,
+    value: position.displayCurrentValue,
+    pct: totalValue ? (position.displayCurrentValue / totalValue) * 100 : 0,
   }));
   const assetClassData = Array.from(
     positions.reduce((groups, position) => {
       const quote = quoteMap.get(position.symbol);
       const assetClass = inferPortfolioAssetClass(position.symbol, quote);
       const existing = groups.get(assetClass) ?? { name: assetClass, value: 0, pct: 0 };
-      existing.value += position.currentValue;
+      existing.value += position.displayCurrentValue;
       groups.set(assetClass, existing);
       return groups;
     }, new Map<string, { name: string; value: number; pct: number }>())
@@ -716,6 +953,7 @@ export function PortfolioPanel() {
       'Symbol',
       'Name',
       'Asset Class',
+      'Currency',
       'Shares',
       'Average Cost',
       'Purchase Date',
@@ -732,6 +970,7 @@ export function PortfolioPanel() {
         lot.symbol,
         lot.shortName,
         inferPortfolioAssetClass(lot.symbol, quote),
+        lot.currency,
         lot.shares,
         lot.avgCost,
         lot.purchaseDate,
@@ -749,7 +988,9 @@ export function PortfolioPanel() {
   };
 
   const resetAddForm = (nextSymbol = '') => {
-    setSymbolInput(nextSymbol);
+    const normalizedSymbol = nextSymbol.trim().toUpperCase();
+    setSymbolInput(normalizedSymbol);
+    setAddCurrency(assetCurrencyMap.get(normalizedSymbol) ?? DEFAULT_PORTFOLIO_CURRENCY);
     setLotDrafts([createLotDraft()]);
     setShowSuggestions(false);
   };
@@ -797,7 +1038,9 @@ export function PortfolioPanel() {
 
   const handleSelectSymbol = (symbol?: string) => {
     if (!symbol) return;
-    setSymbolInput(symbol.toUpperCase());
+    const normalizedSymbol = symbol.toUpperCase();
+    setSymbolInput(normalizedSymbol);
+    setAddCurrency(assetCurrencyMap.get(normalizedSymbol) ?? addCurrency);
     setShowSuggestions(false);
   };
 
@@ -852,12 +1095,17 @@ export function PortfolioPanel() {
     const nextLots = lotDrafts.map(parseLotFields);
     if (!nextLots.length || nextLots.some((lot) => !lot.isValid)) return;
 
+    const currency = normalizePortfolioCurrency(addCurrency);
     const addedAt = new Date().toISOString();
+    if (isAddingToExistingPosition) {
+      updatePortfolioAssetCurrency(symbol, currency);
+    }
     addPortfolioPositions(
       nextLots.map((lot) => ({
         symbol,
         shares: lot.shares,
         avgCost: lot.avgCost,
+        currency,
         purchaseDate: lot.purchaseDate,
         addedAt,
       }))
@@ -883,6 +1131,10 @@ export function PortfolioPanel() {
     closeEditForm();
   };
 
+  const handleAssetCurrencyChange = (symbol: string, currency: string) => {
+    updatePortfolioAssetCurrency(symbol, normalizePortfolioCurrency(currency));
+  };
+
   const openImportPicker = () => {
     fileInputRef.current?.click();
   };
@@ -899,6 +1151,7 @@ export function PortfolioPanel() {
       addPortfolioPositions(
         result.lots.map((lot) => ({
           ...lot,
+          currency: normalizePortfolioCurrency(lot.currency),
           addedAt,
         }))
       );
@@ -911,7 +1164,7 @@ export function PortfolioPanel() {
 
       setImportFeedback({
         tone: result.skippedRows > 0 ? 'warning' : 'success',
-        message: `Imported ${result.lots.length} lot${result.lots.length === 1 ? '' : 's'} across ${importedAssetCount} symbol${importedAssetCount === 1 ? '' : 's'} from ${result.sourceLabel}.${skippedSuffix}`,
+        message: `Imported ${result.lots.length} lot${result.lots.length === 1 ? '' : 's'} across ${importedAssetCount} symbol${importedAssetCount === 1 ? '' : 's'} from ${result.sourceLabel}. Lots without a CSV currency column defaulted to USD.${skippedSuffix}`,
       });
     } catch (error) {
       setImportFeedback({
@@ -990,7 +1243,7 @@ export function PortfolioPanel() {
       </div>
 
       <div className="text-terminal-faint text-xs">
-        Import appends new lots from Yahoo Finance or compatible CSV exports with symbol, quantity, purchase price, and trade date columns. Export downloads the current lot-level portfolio snapshot as a CSV file.
+        Import appends new lots from Yahoo Finance or compatible CSV exports with symbol, quantity, purchase price, and trade date columns. Imported lots default to USD unless the CSV includes a currency column.
       </div>
 
       {showClearPortfolioConfirm && (
@@ -1096,7 +1349,9 @@ export function PortfolioPanel() {
               />
             </div>
             <div>
-              <label className="text-terminal-faint text-xs block mb-1">PURCHASE PRICE</label>
+              <label className="text-terminal-faint text-xs block mb-1">
+                PURCHASE PRICE ({assetCurrencyMap.get(normalizePortfolioSymbol(editingLot.symbol)) ?? DEFAULT_PORTFOLIO_CURRENCY})
+              </label>
               <input
                 value={editingLot.avgCost}
                 onChange={(event) => handleEditingLotChange('avgCost', event.target.value)}
@@ -1171,6 +1426,8 @@ export function PortfolioPanel() {
               onChange={(event) => {
                 const value = event.target.value.toUpperCase();
                 setSymbolInput(value);
+                const existingCurrency = assetCurrencyMap.get(value.trim().toUpperCase());
+                if (existingCurrency) setAddCurrency(existingCurrency);
                 setShowSuggestions(value.length >= 1);
               }}
               onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
@@ -1205,10 +1462,28 @@ export function PortfolioPanel() {
             )}
           </div>
 
+          <div className="mt-3 max-w-xs">
+            <label className="text-terminal-faint text-xs block mb-1">ASSET CURRENCY</label>
+            <select
+              value={addCurrency}
+              onChange={(event) => setAddCurrency(event.target.value)}
+              className="w-full bg-terminal-elevated border border-terminal-border rounded px-2 py-[0.43rem] text-xs text-terminal-text focus:outline-none focus:border-terminal-accent/50"
+            >
+              {currencyOptions.map((currency) => (
+                <option key={`add-${currency}`} value={currency}>{currency}</option>
+              ))}
+            </select>
+            {isAddingToExistingPosition && (
+              <div className="text-terminal-faint text-[11px] mt-1">
+                Saving with a different currency will update every {currentFormSymbol} lot.
+              </div>
+            )}
+          </div>
+
           <div className="mt-3 space-y-2">
             <div className="hidden md:grid md:grid-cols-[1.1fr_1.1fr_1.1fr_auto] gap-2 px-1">
               <span className="text-terminal-faint text-[11px] tracking-wide">SHARES</span>
-              <span className="text-terminal-faint text-[11px] tracking-wide">PURCHASE PRICE</span>
+              <span className="text-terminal-faint text-[11px] tracking-wide">PURCHASE PRICE ({addCurrency})</span>
               <span className="text-terminal-faint text-[11px] tracking-wide">PURCHASE DATE</span>
               <span className="text-terminal-faint text-[11px] tracking-wide text-right">LOT</span>
             </div>
@@ -1228,7 +1503,7 @@ export function PortfolioPanel() {
                   />
                 </div>
                 <div>
-                  <label className="text-terminal-faint text-xs block mb-1 md:hidden">PURCHASE PRICE</label>
+                  <label className="text-terminal-faint text-xs block mb-1 md:hidden">PURCHASE PRICE ({addCurrency})</label>
                   <input
                     value={lot.avgCost}
                     onChange={(event) => handleLotDraftChange(lot.id, 'avgCost', event.target.value)}
@@ -1295,23 +1570,110 @@ export function PortfolioPanel() {
       ) : (
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
           <div className="xl:col-span-2 space-y-3">
+            <div className="bg-terminal-panel border border-terminal-border rounded p-3">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <div className="text-terminal-muted text-xs font-bold tracking-wider">VALUE DISPLAY</div>
+                  <div className="text-terminal-faint text-xs mt-1">
+                    {portfolioValueMode === 'aggregate'
+                      ? `Aggregated totals use the latest available FX rates into ${displayCurrency}.`
+                      : 'Totals are separated by each asset currency.'}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex rounded border border-terminal-border overflow-hidden">
+                    <button
+                      onClick={() => setPortfolioValueMode('aggregate')}
+                      className={`px-3 py-1.5 text-xs transition-colors ${
+                        portfolioValueMode === 'aggregate'
+                          ? 'bg-terminal-accent/20 text-terminal-accent'
+                          : 'text-terminal-faint hover:text-terminal-accent hover:bg-terminal-hover'
+                      }`}
+                    >
+                      AGGREGATE
+                    </button>
+                    <button
+                      onClick={() => setPortfolioValueMode('byCurrency')}
+                      className={`px-3 py-1.5 text-xs border-l border-terminal-border transition-colors ${
+                        portfolioValueMode === 'byCurrency'
+                          ? 'bg-terminal-accent/20 text-terminal-accent'
+                          : 'text-terminal-faint hover:text-terminal-accent hover:bg-terminal-hover'
+                      }`}
+                    >
+                      BY CURRENCY
+                    </button>
+                  </div>
+                  <select
+                    value={displayCurrency}
+                    onChange={(event) => setPortfolioDisplayCurrency(event.target.value)}
+                    disabled={portfolioValueMode !== 'aggregate'}
+                    className="bg-terminal-elevated border border-terminal-border rounded px-2 py-1.5 text-xs text-terminal-text focus:outline-none focus:border-terminal-accent/50 disabled:opacity-50"
+                  >
+                    {currencyOptions.map((currency) => (
+                      <option key={`display-${currency}`} value={currency}>{currency}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              {portfolioValueMode === 'aggregate' && missingFxCurrencies.length > 0 && (
+                <div className="mt-2 rounded border border-terminal-negative/30 bg-terminal-negative/10 px-2 py-1.5 text-xs text-terminal-negative">
+                  Missing FX rates for {missingFxCurrencies.join(', ')} to {displayCurrency}; those assets are excluded from aggregated totals until a rate is available.
+                </div>
+              )}
+            </div>
+
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               <div className="bg-terminal-panel border border-terminal-border rounded p-3">
                 <div className="text-terminal-faint text-xs mb-1">TOTAL VALUE</div>
-                <div className="text-terminal-text font-bold text-lg tabular-nums">{fmt.marketCap(selectedTotalValue)}</div>
-                <div className="text-terminal-faint text-[10px] mt-1">{selectionScopeLabel}</div>
+                {portfolioValueMode === 'aggregate' ? (
+                  <div className="text-terminal-text font-bold text-lg tabular-nums">{formatCurrencyAmount(totalValue, displayCurrency, 2)}</div>
+                ) : (
+                  <div className="space-y-1">
+                    {totalsByCurrency.map((total) => (
+                      <div key={`value-${total.currency}`} className="flex items-center justify-between gap-2 text-xs">
+                        <span className="text-terminal-faint">{total.currency}</span>
+                        <span className="text-terminal-text font-bold tabular-nums">{formatCurrencyAmount(total.currentValue, total.currency, 2)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="text-terminal-faint text-[10px] mt-1">ALL ASSETS</div>
               </div>
               <div className="bg-terminal-panel border border-terminal-border rounded p-3">
                 <div className="text-terminal-faint text-xs mb-1">TOTAL COST</div>
-                <div className="text-terminal-text font-bold text-lg tabular-nums">{fmt.marketCap(selectedTotalCost)}</div>
-                <div className="text-terminal-faint text-[10px] mt-1">{selectionScopeLabel}</div>
+                {portfolioValueMode === 'aggregate' ? (
+                  <div className="text-terminal-text font-bold text-lg tabular-nums">{formatCurrencyAmount(totalCost, displayCurrency, 2)}</div>
+                ) : (
+                  <div className="space-y-1">
+                    {totalsByCurrency.map((total) => (
+                      <div key={`cost-${total.currency}`} className="flex items-center justify-between gap-2 text-xs">
+                        <span className="text-terminal-faint">{total.currency}</span>
+                        <span className="text-terminal-text font-bold tabular-nums">{formatCurrencyAmount(total.totalCost, total.currency, 2)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="text-terminal-faint text-[10px] mt-1">ALL ASSETS</div>
               </div>
-              <div className={`bg-terminal-panel border rounded p-3 ${selectedTotalGainLoss >= 0 ? 'border-terminal-positive/30' : 'border-terminal-negative/30'}`}>
+              <div className={`bg-terminal-panel border rounded p-3 ${totalGainLoss >= 0 ? 'border-terminal-positive/30' : 'border-terminal-negative/30'}`}>
                 <div className="text-terminal-faint text-xs mb-1">TOTAL P&amp;L</div>
-                <div className={`font-bold text-lg tabular-nums ${selectedTotalGainLoss >= 0 ? 'text-terminal-positive' : 'text-terminal-negative'}`}>
-                  {fmt.change(selectedTotalGainLoss)} <span className="text-sm">({fmt.pct(selectedTotalGainLossPct)})</span>
-                </div>
-                <div className="text-terminal-faint text-[10px] mt-1">{selectionScopeLabel}</div>
+                {portfolioValueMode === 'aggregate' ? (
+                  <div className={`font-bold text-lg tabular-nums ${totalGainLoss >= 0 ? 'text-terminal-positive' : 'text-terminal-negative'}`}>
+                    {formatCurrencyAmount(totalGainLoss, displayCurrency, 2)} <span className="text-sm">({fmt.pct(totalGainLossPct)})</span>
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    {totalsByCurrency.map((total) => (
+                      <div key={`pnl-${total.currency}`} className="flex items-center justify-between gap-2 text-xs">
+                        <span className="text-terminal-faint">{total.currency}</span>
+                        <span className={`font-bold tabular-nums ${changeColor(total.gainLoss)}`}>
+                          {formatCurrencyAmount(total.gainLoss, total.currency, 2)} ({fmt.pct(total.gainLossPct)})
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="text-terminal-faint text-[10px] mt-1">ALL ASSETS</div>
               </div>
               <div className="bg-terminal-panel border border-terminal-border rounded p-3">
                 <div className="text-terminal-faint text-xs mb-1">ASSETS / LOTS</div>
@@ -1326,10 +1688,21 @@ export function PortfolioPanel() {
                 <div>
                   <div className="text-terminal-muted text-xs font-bold tracking-wider">PORTFOLIO VALUE &amp; GROWTH</div>
                   <div className="text-terminal-faint text-xs mt-1">
-                    Historical portfolio value, cumulative cost basis, and net P&amp;L derived from your dated lots for the selected assets.
+                    Historical portfolio value and cumulative cost basis for selected assets, converted to {displayCurrency} with the latest available FX rates. The {MARKET_BENCHMARK_LABEL} overlay uses its own right-side scale.
                   </div>
                 </div>
-                <div className="flex flex-wrap gap-1">
+                <div className="flex flex-wrap items-center gap-1">
+                  <button
+                    onClick={() => setShowMarketBenchmark((current) => !current)}
+                    className={`px-2 py-1 text-[11px] rounded border transition-colors ${
+                      showMarketBenchmark
+                        ? 'border-terminal-blue/40 bg-terminal-blue/15 text-terminal-blue'
+                        : 'border-terminal-border text-terminal-faint hover:text-terminal-blue hover:border-terminal-blue/30 hover:bg-terminal-hover'
+                    }`}
+                    title={`Overlay ${MARKET_BENCHMARK_LABEL} on its own right-side scale`}
+                  >
+                    {MARKET_BENCHMARK_LABEL}
+                  </button>
                   {PORTFOLIO_HISTORY_TIMEFRAMES.map((option) => (
                     <button
                       key={`${option.label}-${option.range}-${option.lookbackDays ?? 'full'}`}
@@ -1399,7 +1772,7 @@ export function PortfolioPanel() {
                   </div>
                 ) : (
                   <ResponsiveContainer width="100%" height={280}>
-                    <AreaChart data={portfolioHistory} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+                    <ComposedChart data={portfolioChartData} margin={{ top: 8, right: showMarketBenchmark && hasMarketBenchmarkData ? 24 : 12, left: 12, bottom: 0 }}>
                       <defs>
                         <linearGradient id="portfolio-value-fill" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="0%" stopColor={themePalette.accent} stopOpacity={0.32} />
@@ -1418,23 +1791,31 @@ export function PortfolioPanel() {
                         yAxisId="value"
                         domain={valueAxisScale.domain}
                         ticks={valueAxisScale.ticks}
-                        label={{ value: 'VALUE ($)', angle: -90, position: 'insideLeft', fill: themePalette.muted, fontSize: 10, dx: -4 }}
+                        label={{ value: `VALUE (${displayCurrency})`, angle: -90, position: 'insideLeft', fill: themePalette.muted, fontSize: 10, dx: 8 }}
                         tick={{ fill: themePalette.muted, fontSize: 11 }}
-                        tickFormatter={(value: number) => formatRoundedCurrencyAxisTick(value, valueAxisScale.step)}
+                        tickFormatter={(value: number) => formatRoundedCurrencyAxisTick(value, valueAxisScale.step, displayCurrency)}
                         tickLine={false}
                         axisLine={false}
-                        width={78}
+                        width={86}
                       />
-                      <YAxis
-                        yAxisId="pnl"
-                        orientation="right"
-                        domain={pnlAxisScale.domain}
-                        hide
-                      />
+                      {showMarketBenchmark && hasMarketBenchmarkData && (
+                        <YAxis
+                          yAxisId="benchmark"
+                          orientation="right"
+                          domain={benchmarkAxisScale.domain}
+                          ticks={benchmarkAxisScale.ticks}
+                          label={{ value: MARKET_BENCHMARK_LABEL, angle: 90, position: 'insideRight', fill: themePalette.purple, fontSize: 10, dx: -6 }}
+                          tick={{ fill: themePalette.purple, fontSize: 11 }}
+                          tickFormatter={(value: number) => formatRoundedNumberAxisTick(value, benchmarkAxisScale.step)}
+                          tickLine={false}
+                          axisLine={{ stroke: themePalette.purple, strokeOpacity: 0.65 }}
+                          width={82}
+                        />
+                      )}
                       <Tooltip
                         formatter={(value: number, name: string) => {
-                          if (name === 'Net P&L') return [formatCurrencyAmount(value, 2), name];
-                          return [fmt.marketCap(value), name];
+                          if (name === MARKET_BENCHMARK_LABEL) return [fmt.price(value, 2), name];
+                          return [formatCurrencyAmount(value, displayCurrency, 2), name];
                         }}
                         labelFormatter={(_, payload) => {
                           const point = payload?.[0]?.payload as PortfolioHistoryPoint | undefined;
@@ -1454,6 +1835,8 @@ export function PortfolioPanel() {
                         stroke={themePalette.accent}
                         strokeWidth={2}
                         fill="url(#portfolio-value-fill)"
+                        dot={false}
+                        isAnimationActive={false}
                         yAxisId="value"
                       />
                       <Line
@@ -1464,19 +1847,32 @@ export function PortfolioPanel() {
                         strokeWidth={1.6}
                         strokeDasharray="5 4"
                         dot={false}
+                        isAnimationActive={false}
                         yAxisId="value"
                       />
-                      <Line
-                        type="monotone"
-                        dataKey="gainLoss"
-                        name="Net P&L"
-                        stroke={themePalette.positive}
-                        strokeWidth={1.8}
-                        dot={false}
-                        yAxisId="pnl"
-                      />
-                    </AreaChart>
+                      {showMarketBenchmark && hasMarketBenchmarkData && (
+                        <Line
+                          type="monotone"
+                          dataKey="benchmarkClose"
+                          name={MARKET_BENCHMARK_LABEL}
+                          stroke={themePalette.purple}
+                          strokeWidth={1.8}
+                          strokeDasharray="3 3"
+                          dot={false}
+                          connectNulls
+                          isAnimationActive={false}
+                          legendType="line"
+                          yAxisId="benchmark"
+                        />
+                      )}
+                    </ComposedChart>
                   </ResponsiveContainer>
+                )}
+                {showMarketBenchmark && loadingMarketBenchmark && (
+                  <div className="text-terminal-faint text-[11px] mt-1">Loading {MARKET_BENCHMARK_LABEL} overlay...</div>
+                )}
+                {showMarketBenchmark && !loadingMarketBenchmark && !hasMarketBenchmarkData && (
+                  <div className="text-terminal-faint text-[11px] mt-1">{MARKET_BENCHMARK_LABEL} overlay is unavailable for this timeframe.</div>
                 )}
               </div>
             </div>
@@ -1517,6 +1913,7 @@ export function PortfolioPanel() {
                           SHARES {renderSortIcon('shares')}
                         </button>
                       </th>
+                      <th>CURRENCY</th>
                       <th>
                         <button onClick={() => handleSort('avgCost')} className="inline-flex items-center gap-1 hover:text-terminal-accent">
                           AVG COST {renderSortIcon('avgCost')}
@@ -1563,10 +1960,22 @@ export function PortfolioPanel() {
                             </td>
                             <td className="tabular-nums">{position.lotCount}</td>
                             <td className="tabular-nums">{formatShares(position.shares)}</td>
-                            <td className="tabular-nums">${fmt.price(position.avgCost)}</td>
-                            <td className="tabular-nums">${fmt.price(position.currentPrice)}</td>
-                            <td className="tabular-nums font-bold">{fmt.marketCap(position.currentValue)}</td>
-                            <td className={`tabular-nums ${changeColor(position.gainLoss)}`}>{fmt.change(position.gainLoss, 2)}</td>
+                            <td>
+                              <select
+                                value={position.currency}
+                                onChange={(event) => handleAssetCurrencyChange(position.symbol, event.target.value)}
+                                className="bg-terminal-elevated border border-terminal-border rounded px-1.5 py-1 text-xs text-terminal-text focus:outline-none focus:border-terminal-accent/50"
+                                title={`Currency for all ${position.symbol} lots`}
+                              >
+                                {currencyOptions.map((currency) => (
+                                  <option key={`${position.symbol}-${currency}`} value={currency}>{currency}</option>
+                                ))}
+                              </select>
+                            </td>
+                            <td className="tabular-nums">{formatCurrencyAmount(position.avgCost, position.currency, 2)}</td>
+                            <td className="tabular-nums">{formatCurrencyAmount(position.currentPrice, position.currency, 2)}</td>
+                            <td className="tabular-nums font-bold">{formatCurrencyAmount(position.currentValue, position.currency, 2)}</td>
+                            <td className={`tabular-nums ${changeColor(position.gainLoss)}`}>{formatCurrencyAmount(position.gainLoss, position.currency, 2)}</td>
                             <td className={`tabular-nums font-bold ${changeColor(position.gainLossPct)}`}>
                               <div className="flex items-center gap-1 justify-end">
                                 {position.gainLossPct >= 0 ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
@@ -1595,11 +2004,11 @@ export function PortfolioPanel() {
                           </tr>
                           {isExpanded && (
                             <tr>
-                              <td colSpan={9} className="bg-terminal-elevated/50 px-3 py-3">
+                              <td colSpan={10} className="bg-terminal-elevated/50 px-3 py-3">
                                 <div className="rounded border border-terminal-border overflow-hidden">
                                   <div className="px-3 py-2 panel-border-b bg-terminal-panel/80 flex items-center justify-between gap-3">
                                     <span className="text-terminal-muted text-xs font-bold tracking-wider">
-                                      {position.symbol} LOTS
+                                      {position.symbol} LOTS - {position.currency}
                                     </span>
                                     <div className="flex items-center gap-2">
                                       <span className="text-terminal-faint text-xs">
@@ -1632,11 +2041,11 @@ export function PortfolioPanel() {
                                           <tr key={lot.id} className="border-b border-terminal-border/30 last:border-0">
                                             <td className="px-3 py-2 text-terminal-text">{formatPortfolioDate(lot.purchaseDate)}</td>
                                             <td className="px-3 py-2 text-terminal-text text-right tabular-nums">{formatShares(lot.shares)}</td>
-                                            <td className="px-3 py-2 text-terminal-text text-right tabular-nums">${fmt.price(lot.avgCost)}</td>
-                                            <td className="px-3 py-2 text-terminal-text text-right tabular-nums">{fmt.marketCap(lot.totalCost)}</td>
-                                            <td className="px-3 py-2 text-terminal-text text-right tabular-nums">{fmt.marketCap(lot.currentValue)}</td>
+                                            <td className="px-3 py-2 text-terminal-text text-right tabular-nums">{formatCurrencyAmount(lot.avgCost, lot.currency, 2)}</td>
+                                            <td className="px-3 py-2 text-terminal-text text-right tabular-nums">{formatCurrencyAmount(lot.totalCost, lot.currency, 2)}</td>
+                                            <td className="px-3 py-2 text-terminal-text text-right tabular-nums">{formatCurrencyAmount(lot.currentValue, lot.currency, 2)}</td>
                                             <td className={`px-3 py-2 text-right tabular-nums ${changeColor(lot.gainLoss)}`}>
-                                              {fmt.change(lot.gainLoss, 2)} ({fmt.pct(lot.gainLossPct)})
+                                              {formatCurrencyAmount(lot.gainLoss, lot.currency, 2)} ({fmt.pct(lot.gainLossPct)})
                                             </td>
                                             <td className="px-3 py-2 text-right">
                                               <div className="flex items-center justify-end gap-1">
@@ -1676,7 +2085,7 @@ export function PortfolioPanel() {
 
           <div className="space-y-3">
             <div className="bg-terminal-panel border border-terminal-border rounded p-3">
-              <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">ALLOCATION BY SYMBOL</div>
+              <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">ALLOCATION BY SYMBOL ({displayCurrency})</div>
               <ResponsiveContainer width="100%" height={200}>
                 <PieChart>
                   <Pie data={pieData} cx="50%" cy="50%" innerRadius={50} outerRadius={85} paddingAngle={2} dataKey="value">
@@ -1685,7 +2094,7 @@ export function PortfolioPanel() {
                     ))}
                   </Pie>
                   <Tooltip
-                    formatter={(value: number) => [`${fmt.marketCap(value)}`, 'Value']}
+                    formatter={(value: number) => [formatCurrencyAmount(value, displayCurrency, 2), 'Value']}
                     contentStyle={{ background: themePalette.elevated, border: `1px solid ${themePalette.border}`, borderRadius: '4px', fontSize: '11px' }}
                     labelStyle={{ color: themePalette.text }}
                     itemStyle={{ color: themePalette.muted }}
@@ -1706,7 +2115,7 @@ export function PortfolioPanel() {
             </div>
 
             <div className="bg-terminal-panel border border-terminal-border rounded p-3">
-              <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">ALLOCATION BY ASSET CLASS</div>
+              <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">ALLOCATION BY ASSET CLASS ({displayCurrency})</div>
               <ResponsiveContainer width="100%" height={200}>
                 <PieChart>
                   <Pie data={assetClassData} cx="50%" cy="50%" innerRadius={50} outerRadius={85} paddingAngle={2} dataKey="value">
@@ -1715,7 +2124,7 @@ export function PortfolioPanel() {
                     ))}
                   </Pie>
                   <Tooltip
-                    formatter={(value: number) => [`${fmt.marketCap(value)}`, 'Value']}
+                    formatter={(value: number) => [formatCurrencyAmount(value, displayCurrency, 2), 'Value']}
                     contentStyle={{ background: themePalette.elevated, border: `1px solid ${themePalette.border}`, borderRadius: '4px', fontSize: '11px' }}
                     labelStyle={{ color: themePalette.text }}
                     itemStyle={{ color: themePalette.muted }}

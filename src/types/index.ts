@@ -363,6 +363,7 @@ export interface PortfolioPosition {
   symbol: string;
   shares: number;
   avgCost: number;
+  currency?: string;
   purchaseDate?: string;
   addedAt: string;
 }

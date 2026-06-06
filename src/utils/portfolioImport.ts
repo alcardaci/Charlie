@@ -2,6 +2,7 @@ export interface ImportedPortfolioLot {
   symbol: string;
   shares: number;
   avgCost: number;
+  currency?: string;
   purchaseDate: string;
 }
 
@@ -15,6 +16,7 @@ const HEADER_ALIASES = {
   symbol: ['symbol', 'ticker', 'security', 'asset'],
   shares: ['quantity', 'qty', 'shares', 'share', 'units'],
   avgCost: ['purchaseprice', 'avgcost', 'averagecost', 'averageprice', 'costbasis', 'costpershare', 'pricepaid'],
+  currency: ['currency', 'ccy', 'curr', 'pricecurrency', 'costcurrency'],
   purchaseDate: ['tradedate', 'purchasedate', 'acquiredon', 'acquisitiondate', 'date'],
   transactionType: ['transactiontype', 'action', 'type', 'side'],
 } as const;
@@ -179,6 +181,11 @@ function normalizeSymbol(value: string): string {
   return value.trim().toUpperCase().replace(/\s+/g, '');
 }
 
+function normalizeCurrency(value: string): string | undefined {
+  const currency = value.trim().toUpperCase().replace(/[^A-Z]/g, '');
+  return currency.length === 3 ? currency : undefined;
+}
+
 function isUnsupportedTransaction(value: string): boolean {
   const normalized = normalizeHeader(value);
   if (!normalized) return false;
@@ -198,6 +205,7 @@ export function importPortfolioCsv(text: string): PortfolioImportResult {
   const symbolIndex = findHeaderIndex(normalizedHeaders, HEADER_ALIASES.symbol);
   const sharesIndex = findHeaderIndex(normalizedHeaders, HEADER_ALIASES.shares);
   const avgCostIndex = findHeaderIndex(normalizedHeaders, HEADER_ALIASES.avgCost);
+  const currencyIndex = findHeaderIndex(normalizedHeaders, HEADER_ALIASES.currency);
   const purchaseDateIndex = findHeaderIndex(normalizedHeaders, HEADER_ALIASES.purchaseDate);
   const transactionTypeIndex = findHeaderIndex(normalizedHeaders, HEADER_ALIASES.transactionType);
 
@@ -224,6 +232,7 @@ export function importPortfolioCsv(text: string): PortfolioImportResult {
     const symbol = normalizeSymbol(row[symbolIndex] ?? '');
     const shares = parseNumericValue(row[sharesIndex] ?? '');
     const avgCost = parseNumericValue(row[avgCostIndex] ?? '');
+    const currency = currencyIndex === -1 ? undefined : normalizeCurrency(row[currencyIndex] ?? '');
     const purchaseDate = parseDateValue(row[purchaseDateIndex] ?? '');
 
     if (!symbol || !shares || shares <= 0 || !avgCost || avgCost <= 0 || !purchaseDate) {
@@ -235,6 +244,7 @@ export function importPortfolioCsv(text: string): PortfolioImportResult {
       symbol,
       shares,
       avgCost,
+      ...(currency ? { currency } : {}),
       purchaseDate,
     });
   }
