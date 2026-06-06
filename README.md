@@ -80,3 +80,26 @@ Expected outputs:
 - Linux: unpacked app from `build:desktop`, plus `AppImage` and `.tar.gz` from `dist:desktop`
 
 Build on the native OS for the most reliable results.
+
+## Publish a GitHub Release
+
+GitHub Actions publishes desktop installers when a version tag matching `v*` is pushed. The release workflow builds macOS on a macOS runner with `npm run dist:desktop`, builds Windows on a Windows runner with `npm run dist:desktop:win`, then creates a GitHub Release and attaches the generated `.dmg`, `.zip`, and `.exe` files.
+
+To publish a new release, update the package version, commit it, and push a matching tag:
+
+```bash
+npm version 1.0.0 --no-git-tag-version
+git add package.json package-lock.json
+git commit -m "Release v1.0.0"
+git tag v1.0.0
+git push origin main
+git push origin v1.0.0
+```
+
+Replace `1.0.0` with the version you are publishing. Users can download the latest installers from <https://github.com/alcardaci/Charlie/releases/latest>.
+
+Current limitations:
+
+- The release workflow does not add auto-update metadata or in-app update checks.
+- The release workflow does not add code signing or notarization. macOS Gatekeeper and Windows SmartScreen may warn users that Charlie is from an unidentified or unknown publisher.
+- The current macOS build configuration publishes Apple Silicon (`arm64`) artifacts.
