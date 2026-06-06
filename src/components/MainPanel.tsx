@@ -13,6 +13,7 @@ import { CryptoPanel } from '../panels/CryptoPanel';
 import { HelpPanel } from '../panels/HelpPanel';
 import { ETFPanel } from '../panels/ETFPanel';
 import { SettingsPanel } from '../panels/SettingsPanel';
+import { MultiAssetPanel } from '../panels/MultiAssetPanel';
 
 export function MainPanel() {
   const { activePanel } = useTerminalStore();
@@ -22,6 +23,7 @@ export function MainPanel() {
     opportunities: <OpportunitiesPanel />,
     equity: <EquityPanel />,
     chart: <ChartPanel />,
+    multiAsset: <MultiAssetPanel />,
     news: <NewsGeopoliticsPanel />,
     geopolitics: <NewsGeopoliticsPanel />,
     predictions: <PredictionPanel />,

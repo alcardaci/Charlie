@@ -39,6 +39,14 @@ const DEFAULT_OPENAI_SETTINGS: OpenAISettings = {
 
 interface NavEntry { panel: PanelType; symbol: string }
 
+export type MultiAssetView = 'research' | 'chart';
+
+export interface MultiAssetTile {
+  id: string;
+  symbol: string;
+  view: MultiAssetView;
+}
+
 interface TerminalState {
   activePanel: PanelType;
   activeSymbol: string;
@@ -56,8 +64,13 @@ interface TerminalState {
   marketOverviewSummaryCollapsed: boolean;
   navHistory: NavEntry[];
   companionOpen: boolean;
+  multiAssetTiles: MultiAssetTile[];
 
   setActivePanel: (panel: PanelType, symbol?: string) => void;
+  openMultiAssetView: (symbol: string, view?: MultiAssetView) => void;
+  addMultiAssetTile: (symbol: string, view?: MultiAssetView) => void;
+  removeMultiAssetTile: (id: string) => void;
+  setMultiAssetTileView: (id: string, view: MultiAssetView) => void;
   toggleWatchlistSidebar: () => void;
   setWatchlistSidebarVisible: (visible: boolean) => void;
   goHome: () => void;
@@ -194,6 +207,7 @@ export const useTerminalStore = create<TerminalState>()(
       marketOverviewSummaryCollapsed: false,
       navHistory: [],
       companionOpen: false,
+      multiAssetTiles: [],
 
       setActivePanel: (panel, symbol) => {
         const upper = symbol?.toUpperCase();
@@ -205,6 +219,75 @@ export const useTerminalStore = create<TerminalState>()(
           navHistory: prev.panel === panel && prev.symbol === (upper ?? get().activeSymbol)
             ? state.navHistory
             : [prev, ...state.navHistory.slice(0, 29)],
+        }));
+      },
+
+      openMultiAssetView: (symbol, view = 'research') => {
+        const upper = symbol.trim().toUpperCase();
+        if (!upper) return;
+        const prev: NavEntry = { panel: get().activePanel, symbol: get().activeSymbol };
+        set((state) => {
+          const existingTiles = state.multiAssetTiles.length
+            ? state.multiAssetTiles
+            : [{ id: `${upper}-${Date.now()}`, symbol: upper, view }];
+          const hasSymbol = existingTiles.some((tile) => tile.symbol === upper);
+          const nextTiles = hasSymbol
+            ? existingTiles.map((tile) => tile.symbol === upper ? { ...tile, view } : tile)
+            : [
+                ...existingTiles,
+                { id: `${upper}-${Date.now()}`, symbol: upper, view },
+              ].slice(0, 4);
+
+          return {
+            activePanel: 'multiAsset',
+            activeSymbol: upper,
+            chartSymbol: upper,
+            multiAssetTiles: nextTiles,
+            navHistory: prev.panel === 'multiAsset'
+              ? state.navHistory
+              : [prev, ...state.navHistory.slice(0, 29)],
+          };
+        });
+      },
+
+      addMultiAssetTile: (symbol, view = 'research') => {
+        const upper = symbol.trim().toUpperCase();
+        if (!upper) return;
+        set((state) => {
+          const existingTile = state.multiAssetTiles.find((tile) => tile.symbol === upper);
+          if (existingTile) {
+            return {
+              activeSymbol: upper,
+              chartSymbol: upper,
+              multiAssetTiles: state.multiAssetTiles.map((tile) =>
+                tile.id === existingTile.id ? { ...tile, view } : tile
+              ),
+            };
+          }
+          if (state.multiAssetTiles.length >= 4) return {};
+
+          return {
+            activeSymbol: upper,
+            chartSymbol: upper,
+            multiAssetTiles: [
+              ...state.multiAssetTiles,
+              { id: `${upper}-${Date.now()}`, symbol: upper, view },
+            ],
+          };
+        });
+      },
+
+      removeMultiAssetTile: (id) => {
+        set((state) => ({
+          multiAssetTiles: state.multiAssetTiles.filter((tile) => tile.id !== id),
+        }));
+      },
+
+      setMultiAssetTileView: (id, view) => {
+        set((state) => ({
+          multiAssetTiles: state.multiAssetTiles.map((tile) =>
+            tile.id === id ? { ...tile, view } : tile
+          ),
         }));
       },
 

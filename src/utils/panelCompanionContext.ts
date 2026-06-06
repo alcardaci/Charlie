@@ -67,6 +67,7 @@ const PANEL_LABELS: Record<PanelType, string> = {
   opportunities: 'Opportunities',
   equity: 'Equity Workspace',
   chart: 'Chart View',
+  multiAsset: 'Multi-Asset Workspace',
   news: 'News Feed',
   geopolitics: 'Geopolitics',
   predictions: 'Prediction Markets',

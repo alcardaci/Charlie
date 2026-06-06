@@ -2,7 +2,7 @@ import type { MutableRefObject, ReactNode } from 'react';
 import { useRef, useState } from 'react';
 import { ComposableMap, Geographies, Geography, Marker, ZoomableGroup } from 'react-simple-maps';
 import { Globe2, Loader2, Minus, Plus, RefreshCw, Zap } from 'lucide-react';
-import { CountryNewsCount, NewsItem } from '../types';
+import type { CountryNewsCount, GeopoliticalScanStatus, NewsItem } from '../types';
 import worldCountries110m from '../data/worldCountries110m.json';
 import { fmt } from '../utils/formatters';
 
@@ -29,6 +29,9 @@ interface RegionalNewsMapProps {
   showDebugSources?: boolean;
   isRefreshing?: boolean;
   isLoading?: boolean;
+  scanStatus?: GeopoliticalScanStatus;
+  scanStatusLabel?: string;
+  scanProgressLabel?: string;
   showHotspotsSection?: boolean;
   headerActions?: ReactNode;
 }
@@ -197,6 +200,9 @@ export function RegionalNewsMap({
   showDebugSources = false,
   isRefreshing = false,
   isLoading = false,
+  scanStatus = 'idle',
+  scanStatusLabel,
+  scanProgressLabel,
   showHotspotsSection = true,
   headerActions,
 }: RegionalNewsMapProps) {
@@ -243,6 +249,13 @@ export function RegionalNewsMap({
   const feedStatusTone = gdeltActive
     ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
     : 'border-terminal-accent/30 bg-terminal-accent/10 text-terminal-accent';
+  const scanStatusTone = scanStatus === 'error'
+    ? 'border-terminal-negative/35 bg-terminal-negative/10 text-terminal-negative'
+    : scanStatus === 'complete'
+      ? 'border-terminal-positive/35 bg-terminal-positive/10 text-terminal-positive'
+      : scanStatus === 'partial'
+        ? 'border-terminal-accent/35 bg-terminal-accent/10 text-terminal-accent'
+        : 'border-terminal-border bg-terminal-hover text-terminal-muted';
 
   // Build numeric-id → country lookup for Geography coloring
   const countryByNum = new Map<number, CountryNewsCount>();
@@ -283,7 +296,7 @@ export function RegionalNewsMap({
             <Loader2 size={20} className="animate-spin text-terminal-accent" />
             <div className="text-[11px] font-bold tracking-[0.24em] text-terminal-accent">SCANNING GLOBAL FEEDS</div>
             <div className="max-w-xs text-center text-[11px] text-terminal-faint leading-relaxed">
-              Pulling live geopolitical headlines, matching them to countries, and generating hotspot summaries.
+              Pulling live geopolitical headlines and matching them to countries.
             </div>
           </div>
         </div>
@@ -301,6 +314,12 @@ export function RegionalNewsMap({
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2 text-[11px] text-terminal-faint">
           <span>{timeframeLabel}</span>
+          {scanStatusLabel ? (
+            <span className={`rounded border px-2 py-0.5 font-bold tracking-[0.18em] ${scanStatusTone}`}>
+              {scanStatusLabel.toUpperCase()}
+            </span>
+          ) : null}
+          {scanProgressLabel ? <span className="text-terminal-faint/70">{scanProgressLabel}</span> : null}
           {showDebugSources && (
             <>
               <span className={`rounded border px-2 py-0.5 font-bold tracking-[0.18em] ${feedStatusTone}`}>
@@ -643,6 +662,7 @@ export function CountryHotspotsSection({
             const chip = SEVERITY_CHIP[level];
             const fillColor = getCountryFill(severityScore, 10);
             const summarySourceEntries = collectSummarySourceEntries(country.hotspotSummarySources ?? country.stories ?? []);
+            const showSummaryLoading = country.hotspotSummaryStatus === 'loading' && !country.hotspotSummary;
 
             return (
               <div
@@ -673,6 +693,11 @@ export function CountryHotspotsSection({
                       >
                         {chip.label}
                       </span>
+                      {country.isPartial ? (
+                        <span className="rounded border border-terminal-accent/35 bg-terminal-accent/10 px-1.5 py-0.5 text-[9px] font-bold tracking-[0.18em] text-terminal-accent">
+                          PARTIAL
+                        </span>
+                      ) : null}
                     </div>
                     <div className="mt-1 text-[10px] text-terminal-faint/60">
                       {country.latestAt ? fmt.timeAgo(country.latestAt) : `No recent ${isGeoView ? 'events' : 'stories'}`}
@@ -740,6 +765,14 @@ export function CountryHotspotsSection({
                         ))}
                       </div>
                     )}
+                  </div>
+                ) : showSummaryLoading ? (
+                  <div className="mt-3 rounded border border-terminal-border/60 bg-terminal-panel/45 px-2.5 py-2.5">
+                    <div className="text-[9px] font-bold tracking-[0.18em] text-terminal-faint/55">SUMMARY</div>
+                    <div className="mt-1.5 inline-flex items-center gap-2 text-[11px] text-terminal-faint/85">
+                      <Loader2 size={12} className="animate-spin text-terminal-accent" />
+                      Generating summary...
+                    </div>
                   </div>
                 ) : null}
               </div>

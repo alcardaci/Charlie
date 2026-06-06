@@ -13,17 +13,12 @@ The intake step is intentionally broader than the final map. Headlines from both
 
 ## 2. How The AI Classifies Headlines
 
-Each accepted candidate headline is sent to the OpenAI geopolitics classifier route with headline-level metadata plus any deterministic geography hints already attached upstream:
+Each accepted candidate headline is sent to the OpenAI geopolitics classifier route with only the headline title plus an opaque id used to match the response back to the original story:
 
 - `title`
-- `publisher`
-- `link`
-- `publishedAt`
-- `feedSource`
-- `locationLabel`
-- `countryCodes`
+- opaque `link` id, such as `headline-1`
 
-The model used for this classification is `gpt-4.1-mini`. The system prompt tells it to keep only concrete geopolitical or state-security events, exclude commentary and market reactions, and return strict JSON.
+The model used for this classification is `gpt-4.1-mini`. The system prompt tells it to keep only concrete geopolitical or state-security events, exclude commentary and market reactions, return strict JSON, and assign countries from headline text only. Source country, publisher, article domain, feed source, headline language, and article language are not used for country attribution.
 
 For each headline the model is expected to produce:
 
@@ -40,7 +35,7 @@ The severity scale is grouped into four bins:
 - `6-8` = `HIGH`
 - `9-10` = `SEVERE`
 
-The model still does not read the full article, so it has to infer geography and severity from limited context, but the deterministic source/location hints improve recall for GDELT items that already arrive with usable country metadata.
+The model still does not read the full article, so it has to infer geography and severity from limited context. Ambiguous headlines are intentionally left unmapped instead of falling back to the outlet's country or language.
 
 ## 3. Deduplication And Clustering
 

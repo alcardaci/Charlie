@@ -3,6 +3,7 @@ export type PanelType =
   | 'opportunities'
   | 'equity'
   | 'chart'
+  | 'multiAsset'
   | 'news'
   | 'geopolitics'
   | 'predictions'
@@ -188,7 +189,18 @@ export interface CountryNewsCount {
   stories?: NewsItem[];
   hotspotSummary?: string;
   hotspotSummarySources?: NewsItem[];
+  hotspotSummaryStatus?: 'idle' | 'loading' | 'ready' | 'error';
+  isPartial?: boolean;
+  lastClassifiedAt?: number;
 }
+
+export type GeopoliticalScanStatus =
+  | 'idle'
+  | 'fetching-feeds'
+  | 'classifying'
+  | 'partial'
+  | 'complete'
+  | 'error';
 
 export interface TradeDisruptionEvent {
   id: string;
