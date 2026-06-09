@@ -320,6 +320,22 @@ function SectionErrorState({
   );
 }
 
+function ExperimentalFeatureNotice() {
+  return (
+    <section className="mb-4 rounded border border-amber-400/35 bg-amber-400/10 p-4">
+      <div className="flex items-start gap-3">
+        <AlertTriangle size={16} className="mt-0.5 flex-shrink-0 text-amber-300" />
+        <div className="min-w-0">
+          <div className="text-xs font-bold tracking-[0.18em] text-amber-300">EXPERIMENTAL FEATURE</div>
+          <div className="mt-2 text-sm leading-relaxed text-terminal-muted">
+            This opportunity workspace is experimental. The generated themes and insights are not very good yet, can be noisy or wrong, and should be used with caution rather than treated as investment guidance.
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function DiscoveryPane({
   dashboard,
   isLoading,
@@ -915,6 +931,7 @@ export function OpportunitiesPanel() {
   if (!openAISettings.hasStoredApiKey) {
     return (
       <div className="h-full overflow-y-auto p-4">
+        <ExperimentalFeatureNotice />
         <section className="rounded border border-terminal-border bg-terminal-panel p-6">
           <div className="flex items-center gap-2 text-terminal-accent text-sm font-bold tracking-wider">
             <AlertTriangle size={15} />
@@ -944,6 +961,7 @@ export function OpportunitiesPanel() {
 
   return (
     <div className="h-full overflow-y-auto p-4 xl:overflow-hidden">
+      <ExperimentalFeatureNotice />
       {debugMode && (
         <div className="mb-3 flex flex-col gap-2">
           <div className="flex justify-end gap-2">
