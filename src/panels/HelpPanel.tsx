@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { useTerminalStore } from '../store/useTerminalStore';
+import { useAppVersion } from '../utils/appVersion';
 
 const WORKSPACES = [
   { title: 'Market Overview', command: 'HOME', summary: 'Cross-asset pulse, movers, sentiment, portfolio snapshot, macro calendar, and prediction-market forecasts.' },
@@ -101,6 +102,7 @@ function SectionCard({
 
 export function HelpPanel() {
   const { executeCommand } = useTerminalStore();
+  const appVersion = useAppVersion();
   const workspaces = WORKSPACES;
 
   return (
@@ -109,7 +111,9 @@ export function HelpPanel() {
         <section className="rounded border border-terminal-border bg-terminal-panel p-5">
           <div className="flex flex-wrap items-center gap-3">
             <span className="text-terminal-accent font-bold text-3xl tracking-widest">CHARLIE</span>
-            <span className="text-terminal-faint font-mono text-xs tracking-wider">1.0.0</span>
+            {appVersion && (
+              <span className="text-terminal-faint font-mono text-xs tracking-wider">{appVersion}</span>
+            )}
             <span className="text-terminal-muted text-sm">Professional market data workspace</span>
           </div>
           <p className="mt-3 text-terminal-muted text-xs leading-relaxed">

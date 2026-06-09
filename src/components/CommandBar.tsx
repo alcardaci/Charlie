@@ -5,6 +5,7 @@ import { searchSymbols } from '../api/finance';
 import { useTerminalStore } from '../store/useTerminalStore';
 import { shouldUseSearch } from '../utils/commandParsing';
 import { fmt, isMarketOpen } from '../utils/formatters';
+import { useAppVersion } from '../utils/appVersion';
 import { useTheme } from '../utils/theme';
 
 interface CommandBarProps {
@@ -15,7 +16,6 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
   const [input, setInput] = useState('');
   const [histIdx, setHistIdx] = useState(-1);
   const [showSearch, setShowSearch] = useState(false);
-  const [appVersion, setAppVersion] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const {
     executeCommand,
@@ -34,6 +34,7 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
     toggleCompanionOpen,
   } = useTerminalStore();
   const { mode, toggleTheme } = useTheme();
+  const appVersion = useAppVersion();
   const isElectronDesktop = typeof navigator !== 'undefined' && navigator.userAgent.includes('Electron');
   const electronDragStyle: CSSProperties | undefined = isElectronDesktop
     ? ({ WebkitAppRegion: 'drag' } as CSSProperties)
@@ -46,22 +47,6 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
   useEffect(() => {
     const id = setInterval(() => setClock(fmt.time()), 1000);
     return () => clearInterval(id);
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-
-    window.charlie?.getVersion()
-      .then((version) => {
-        if (active && version.trim()) {
-          setAppVersion(version.trim());
-        }
-      })
-      .catch(() => undefined);
-
-    return () => {
-      active = false;
-    };
   }, []);
 
   const trimmedInput = input.trim();
