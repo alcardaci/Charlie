@@ -1242,10 +1242,6 @@ export function PortfolioPanel() {
         </div>
       </div>
 
-      <div className="text-terminal-faint text-xs">
-        Import appends new lots from Yahoo Finance or compatible CSV exports with symbol, quantity, purchase price, and trade date columns. Imported lots default to USD unless the CSV includes a currency column.
-      </div>
-
       {showClearPortfolioConfirm && (
         <div className="rounded border border-terminal-negative/40 bg-terminal-negative/10 p-3">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -1688,7 +1684,7 @@ export function PortfolioPanel() {
                 <div>
                   <div className="text-terminal-muted text-xs font-bold tracking-wider">PORTFOLIO VALUE &amp; GROWTH</div>
                   <div className="text-terminal-faint text-xs mt-1">
-                    Historical portfolio value and cumulative cost basis for selected assets, converted to {displayCurrency} with the latest available FX rates. The {MARKET_BENCHMARK_LABEL} overlay uses its own right-side scale.
+                    Historical portfolio value and cumulative cost basis for selected assets, converted to {displayCurrency} with the latest available FX rates.
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-1">

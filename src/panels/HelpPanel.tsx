@@ -114,7 +114,7 @@ export function HelpPanel() {
           </div>
           <p className="mt-3 text-terminal-muted text-xs leading-relaxed">
             Charlie brings near-real-time market data, charts, news, analytics, macro monitoring, geopolitics coverage,
-            and public prediction-market forecasts into one terminal. Use the command bar for fast jumps, the shortcut
+            and public prediction-market forecasts into one platform. Use the command bar for fast jumps, the shortcut
             bar for the core workspaces, and Settings for local provider credentials and AI preferences.
           </p>
         </section>
@@ -138,7 +138,7 @@ export function HelpPanel() {
         </SectionCard>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <SectionCard title="KEYBOARD SHORTCUTS" subtitle="Fastest ways to move without touching the mouse">
+          <SectionCard title="KEYBOARD SHORTCUTS">
             <div className="space-y-2">
               {KEYBOARD.map(({ key, desc }) => (
                 <div key={key} className="flex items-start gap-3 rounded border border-terminal-border bg-terminal-elevated px-3 py-2">
@@ -151,7 +151,7 @@ export function HelpPanel() {
             </div>
           </SectionCard>
 
-          <SectionCard title="DATA SOURCES" subtitle="What powers the different workspaces">
+          <SectionCard title="DATA SOURCES">
             <div className="space-y-2">
               {DATA_SOURCES.map(({ name, coverage, note }) => (
                 <div key={name} className="rounded border border-terminal-border bg-terminal-elevated px-3 py-2.5">
@@ -165,7 +165,7 @@ export function HelpPanel() {
             </div>
           </SectionCard>
 
-          <SectionCard title="INTERNATIONAL TICKERS" subtitle="Examples for non-US symbols and ETFs">
+          <SectionCard title="INTERNATIONAL TICKERS">
             <div className="rounded border border-terminal-border bg-terminal-elevated px-3 py-2 text-terminal-faint text-xs leading-relaxed">
               Non-US listings usually need an exchange suffix. Examples:
               {' '}<span className="text-terminal-blue font-mono">VWCE.DE</span>,
@@ -188,7 +188,7 @@ export function HelpPanel() {
             Charlie is an open-source market terminal built with React, Vite, and Tailwind CSS.
             Market data and event intelligence flow through Yahoo Finance, Teleborsa/FIDA, CoinGecko, Polymarket, FRED, Finnhub,
             Caldara-Iacoviello GPR, and GDELT.
-            External keys stay server-side behind local proxy routes where required. Quote updates are near-real-time
+            Quote updates are near-real-time
             (provider and polling dependent), not guaranteed tick-level streaming.
           </div>
         </section>

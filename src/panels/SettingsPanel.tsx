@@ -183,7 +183,7 @@ export function SettingsPanel() {
           </div>
           <p className="text-terminal-faint text-xs mt-1 leading-relaxed">
             Charlie runs public/no-key sources out of the box. Add your own OpenAI, FRED, and Finnhub
-            credentials below to unlock the keyed workflows on this device. Secrets are stored locally on the machine running Charlie.
+            credentials below to unlock the keyed workflows on this device.
           </p>
         </div>
 
@@ -409,7 +409,7 @@ export function SettingsPanel() {
 
             <div className="flex items-center justify-between gap-3">
               <div className="text-terminal-faint text-xs">
-                {settingsMessage ?? 'AI preferences are persisted locally. Secrets are handled separately through the Connections section.'}
+                {settingsMessage ?? 'AI preferences are persisted locally.'}
               </div>
               <button
                 onClick={handleSaveSettings}
