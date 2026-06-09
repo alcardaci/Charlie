@@ -463,7 +463,29 @@ export function ChartPanel({ symbol, embedded = false, onOpenParallel, onSwitchV
     updateLivePriceSeries(chartStyle, priceSeriesRef.current, lastPoint, quote.regularMarketPrice);
   }, [chartStyle, quote]);
 
-  const chgColor = changeColor(quote?.regularMarketChangePercent);
+  const timeframePriceMove = useMemo(() => {
+    if (chartData.length < 2) return null;
+
+    const firstPoint = chartData[0];
+    const lastPoint = chartData[chartData.length - 1];
+    const today = toInputDate(new Date());
+    const actualEnd = chartResult?.actualEnd ?? customAppliedRange?.end ?? null;
+    const shouldUseLivePrice = Boolean(quote && (!customAppliedRange || !actualEnd || actualEnd >= today));
+    const currentPrice = shouldUseLivePrice ? quote!.regularMarketPrice : lastPoint.close;
+    const change = currentPrice - firstPoint.close;
+    const changePct = firstPoint.close ? (change / firstPoint.close) * 100 : null;
+
+    return {
+      currentPrice,
+      change,
+      changePct,
+    };
+  }, [chartData, chartResult?.actualEnd, customAppliedRange, quote]);
+
+  const displayedPrice = timeframePriceMove?.currentPrice ?? quote?.regularMarketPrice ?? null;
+  const displayedChange = timeframePriceMove?.change ?? quote?.regularMarketChange ?? null;
+  const displayedChangePct = timeframePriceMove?.changePct ?? quote?.regularMarketChangePercent ?? null;
+  const chgColor = changeColor(displayedChangePct);
 
   return (
     <div className="h-full flex flex-col">
@@ -481,13 +503,13 @@ export function ChartPanel({ symbol, embedded = false, onOpenParallel, onSwitchV
           >
             {selectedSymbol}
           </button>
-          {quote && (
+          {displayedPrice !== null && (
             <div className="flex items-center gap-2 text-xs">
               <span className="text-terminal-text tabular-nums font-bold">
-                {fmt.price(quote.regularMarketPrice)}
+                {fmt.price(displayedPrice)}
               </span>
               <span className={`tabular-nums ${chgColor}`}>
-                {fmt.change(quote.regularMarketChange)} ({fmt.pct(quote.regularMarketChangePercent)})
+                {fmt.change(displayedChange)} ({fmt.pct(displayedChangePct)})
               </span>
             </div>
           )}
