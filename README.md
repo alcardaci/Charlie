@@ -2,6 +2,14 @@
 
 Charlie is a local-first desktop market workspace built with React, Vite, and Electron. It runs as a native app on macOS, Windows, and Linux, and keeps your workspace data, preferences, watchlists, and provider connections local to the machine you are using.
 
+## Screenshots
+
+| Market Overview | News + Geopolitics |
+| --- | --- |
+| ![Charlie market overview](docs/screenshots/charlie-overview.png) | ![News and geopolitics workspace](docs/screenshots/news-geopolitics.png) |
+| AAPL Research | AAPL Chart |
+| ![AAPL research workspace](docs/screenshots/aapl-research.png) | ![AAPL chart workspace](docs/screenshots/aapl-chart.png) |
+
 ## Current Feature Set
 
 - Command-driven terminal UI with a top command bar, live market ticker, watchlist sidebar, main panel, status bar, and optional live player.
