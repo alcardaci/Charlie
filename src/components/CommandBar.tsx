@@ -15,6 +15,7 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
   const [input, setInput] = useState('');
   const [histIdx, setHistIdx] = useState(-1);
   const [showSearch, setShowSearch] = useState(false);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const {
     executeCommand,
@@ -45,6 +46,22 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
   useEffect(() => {
     const id = setInterval(() => setClock(fmt.time()), 1000);
     return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    window.charlie?.getVersion()
+      .then((version) => {
+        if (active && version.trim()) {
+          setAppVersion(version.trim());
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   const trimmedInput = input.trim();
@@ -137,7 +154,9 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
         >
           <span className="text-terminal-accent font-bold text-base tracking-wider">C</span>
           <span className="text-terminal-text font-bold text-sm tracking-widest">HARLIE</span>
-          <span className="hidden sm:inline text-terminal-faint font-mono text-[10px] tracking-wider">1.0.0</span>
+          {appVersion && (
+            <span className="hidden sm:inline text-terminal-faint font-mono text-[10px] tracking-wider">{appVersion}</span>
+          )}
         </button>
         <div className="hidden md:block h-4 w-px bg-terminal-border" />
       </div>

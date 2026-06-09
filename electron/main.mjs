@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { access } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +7,7 @@ import { createServer, preview } from 'vite';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(__dirname, '..');
 const DEFAULT_PACKAGED_PREVIEW_PORT = 4173;
+const preloadPath = join(__dirname, 'preload.cjs');
 
 let mainWindow = null;
 let viteDevServer = null;
@@ -156,6 +157,7 @@ async function createMainWindow() {
     ...(isMac ? { titleBarStyle: 'hiddenInset' } : {}),
     autoHideMenuBar: true,
     webPreferences: {
+      preload: preloadPath,
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
@@ -190,6 +192,8 @@ async function createMainWindow() {
 }
 
 app.setName('Charlie');
+
+ipcMain.handle('app:get-version', () => app.getVersion());
 
 app.whenReady().then(async () => {
   try {
