@@ -2,6 +2,7 @@ import type { OpenAIHarness, OpenAIHarnessPrompts } from '../types';
 
 export const OPENAI_MODEL_OPTIONS = ['gpt-5', 'gpt-5-mini', 'gpt-4.1', 'gpt-4.1-mini'] as const;
 export const DEFAULT_OPENAI_MODEL = 'gpt-4.1-mini';
+export const DEFAULT_COMPANION_WEB_SEARCH_MODEL = 'gpt-5.4-nano';
 export const DEFAULT_GEOPOLITICS_OPENAI_MODEL = 'gpt-4.1-mini';
 export const DEFAULT_GEOPOLITICS_EVENT_SYSTEM_PROMPT = [
   'You classify mixed-feed headlines (Yahoo Finance and GDELT) for a geopolitical event map using headline text only.',

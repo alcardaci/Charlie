@@ -8,6 +8,7 @@ import { defineConfig, type Plugin, type PreviewServer, type ViteDevServer } fro
 import react from '@vitejs/plugin-react'
 import { getCrumbClear } from 'yahoo-finance2/lib/getCrumb'
 import {
+  DEFAULT_COMPANION_WEB_SEARCH_MODEL,
   DEFAULT_GEOPOLITICS_EVENT_SYSTEM_PROMPT,
   DEFAULT_OVERVIEW_SUMMARY_SYSTEM_PROMPT,
   DEFAULT_PANEL_COMPANION_SYSTEM_PROMPT,
@@ -2389,6 +2390,30 @@ function extractOpenAIText(payload: any): string {
   return chunks.join('\n\n').trim()
 }
 
+function extractOpenAIWebCitations(payload: any): Array<{ title: string; url: string }> {
+  const citations: Array<{ title: string; url: string }> = []
+  const seen = new Set<string>()
+
+  for (const output of payload?.output ?? []) {
+    for (const content of output?.content ?? []) {
+      for (const annotation of content?.annotations ?? []) {
+        if (annotation?.type !== 'url_citation' || typeof annotation?.url !== 'string') continue
+        const url = annotation.url.trim()
+        if (!url || seen.has(url)) continue
+        seen.add(url)
+        citations.push({
+          title: typeof annotation.title === 'string' && annotation.title.trim()
+            ? annotation.title.trim()
+            : url,
+          url,
+        })
+      }
+    }
+  }
+
+  return citations
+}
+
 function parseOpenAIJsonText<T>(value: string): T | null {
   const trimmed = value.trim().replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/, '')
   if (!trimmed) return null
@@ -3889,6 +3914,8 @@ function marketDataMiddleware(): Plugin {
             const model = typeof payload.model === 'string' ? payload.model.trim() : ''
             const activePanel = typeof payload.activePanel === 'string' ? payload.activePanel.trim() : ''
             const stream = Boolean(payload.stream)
+            const webSearch = payload.webSearch === true
+            const requestModel = webSearch ? (model || DEFAULT_COMPANION_WEB_SEARCH_MODEL) : model
             const panels = Array.isArray(payload.panels)
               ? Array.from(new Set(payload.panels.map((value: unknown) => String(value ?? '').trim()).filter(Boolean))).slice(0, 8)
               : []
@@ -3925,7 +3952,7 @@ function marketDataMiddleware(): Plugin {
 
             const apiKey = await readConnectionSecret('openai')
             if (!apiKey) return sendError(res, 'OpenAI API key is not stored locally yet.', 400)
-            if (!model) return sendError(res, 'OpenAI model is required.', 400)
+            if (!requestModel) return sendError(res, 'OpenAI model is required.', 400)
             if (!activePanel) return sendError(res, 'Active panel is required.', 400)
             if (!messages.length) return sendError(res, 'At least one companion message is required.', 400)
             if (!contexts.length) return sendError(res, 'At least one panel context is required.', 400)
@@ -3936,6 +3963,10 @@ function marketDataMiddleware(): Plugin {
               messages,
               contexts,
             })
+            const upstreamAbort = new AbortController()
+            const abortUpstream = () => upstreamAbort.abort()
+            req.on('aborted', abortUpstream)
+            res.on('close', abortUpstream)
 
             if (stream) {
               const openAIResponse = await fetch('https://api.openai.com/v1/responses', {
@@ -3945,11 +3976,17 @@ function marketDataMiddleware(): Plugin {
                   Authorization: `Bearer ${apiKey}`,
                 },
                 body: JSON.stringify({
-                  model,
+                  model: requestModel,
                   instructions: DEFAULT_PANEL_COMPANION_SYSTEM_PROMPT,
                   input,
                   stream: true,
+                  ...(webSearch ? {
+                    tools: [{ type: 'web_search' }],
+                    tool_choice: 'required',
+                    reasoning: { effort: 'none' },
+                  } : {}),
                 }),
+                signal: upstreamAbort.signal,
               })
 
               if (!openAIResponse.ok) {
@@ -4017,10 +4054,16 @@ function marketDataMiddleware(): Plugin {
                 Authorization: `Bearer ${apiKey}`,
               },
               body: JSON.stringify({
-                model,
+                model: requestModel,
                 instructions: DEFAULT_PANEL_COMPANION_SYSTEM_PROMPT,
                 input,
+                ...(webSearch ? {
+                  tools: [{ type: 'web_search' }],
+                  tool_choice: 'required',
+                  reasoning: { effort: 'none' },
+                } : {}),
               }),
+              signal: upstreamAbort.signal,
             })
 
             const responsePayload = await openAIResponse.json().catch(() => null)
@@ -4031,14 +4074,18 @@ function marketDataMiddleware(): Plugin {
 
             const answer = extractOpenAIText(responsePayload)
             if (!answer) return sendError(res, 'OpenAI returned an empty companion response.', 502)
+            const webSearchCitations = webSearch ? extractOpenAIWebCitations(responsePayload) : []
 
             return sendJSON(res, {
               answer,
               generatedAt: new Date().toISOString(),
-              model,
+              model: requestModel,
               panels: panels.length ? panels : contexts.map((context) => context.panel),
+              webSearch,
+              webSearchCitations,
             })
           } catch (err) {
+            if (err instanceof Error && err.name === 'AbortError') return
             const msg = err instanceof Error ? err.message : String(err)
             console.error('[vite-openai-panel-chat]', msg)
             return sendError(res, msg)

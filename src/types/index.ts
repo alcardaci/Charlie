@@ -54,6 +54,11 @@ export interface CompanionMessagePayload {
   content: string;
 }
 
+export interface CompanionWebCitation {
+  title: string;
+  url: string;
+}
+
 export interface CompanionPanelContext {
   panel: PanelType;
   title: string;
@@ -69,6 +74,8 @@ export interface CompanionChatResult {
   generatedAt: string;
   model: string;
   panels: PanelType[];
+  webSearch?: boolean;
+  webSearchCitations?: CompanionWebCitation[];
 }
 
 export interface Quote {

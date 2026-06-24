@@ -1,7 +1,7 @@
 {
   "name": "bterminal",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Charlie is a local-first desktop market workspace with integrated charts, macro data, news, and optional user-managed provider connections.",
   "author": "Alberto Cardaci",
   "type": "module",

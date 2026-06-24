@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Loader2, RotateCcw, Send, Sparkles, X } from 'lucide-react';
-import { streamPanelCompanion } from '../api/finance';
+import { Loader2, RotateCcw, Search, Send, Sparkles, Square, X } from 'lucide-react';
+import { askPanelCompanion, streamPanelCompanion } from '../api/finance';
 import { useTerminalStore } from '../store/useTerminalStore';
-import type { CompanionMessagePayload, PanelType } from '../types';
-import { DEFAULT_OPENAI_MODEL, DEFAULT_PANEL_COMPANION_SYSTEM_PROMPT } from '../utils/openaiConfig';
+import type { CompanionMessagePayload, CompanionWebCitation, PanelType } from '../types';
+import {
+  DEFAULT_COMPANION_WEB_SEARCH_MODEL,
+  DEFAULT_OPENAI_MODEL,
+  DEFAULT_PANEL_COMPANION_SYSTEM_PROMPT,
+} from '../utils/openaiConfig';
 import { buildCompanionContexts, getCompanionPanelLabel } from '../utils/panelCompanionContext';
 
 type PanelCompanionProps = {
@@ -20,6 +24,10 @@ type LocalMessage = {
   createdAt: string;
   panels?: PanelType[];
   error?: boolean;
+  model?: string;
+  webSearch?: boolean;
+  webSearchCitations?: CompanionWebCitation[];
+  stopped?: boolean;
 };
 
 const EXTRA_PANEL_OPTIONS: PanelType[] = [
@@ -161,8 +169,10 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
     createMessage('assistant', INITIAL_COMPANION_MESSAGE),
   ]);
   const [isLoading, setIsLoading] = useState(false);
+  const [pendingWebSearch, setPendingWebSearch] = useState(false);
   const [composerError, setComposerError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const activeRequestRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     setExtraPanels((current) => current.filter((panel) => panel !== activePanel));
@@ -206,13 +216,28 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
     setExtraPanels([]);
   };
 
-  const handleSubmit = async () => {
+  const stopActiveResponse = () => {
+    activeRequestRef.current?.abort();
+  };
+
+  const handleSubmit = async (useWebSearch = false) => {
     const content = draft.trim();
     if (!content || isLoading) return;
 
-    const userMessage = createMessage('user', content, { panels: selectedPanels });
+    const requestModel = useWebSearch
+      ? DEFAULT_COMPANION_WEB_SEARCH_MODEL
+      : (openAISettings.model?.trim() || DEFAULT_OPENAI_MODEL);
+    const userMessage = createMessage('user', content, {
+      panels: selectedPanels,
+      model: requestModel,
+      webSearch: useWebSearch,
+    });
     const baseMessages = [...messages, userMessage];
     setMessages(baseMessages);
+    setPendingWebSearch(useWebSearch);
+    const abortController = new AbortController();
+    activeRequestRef.current = abortController;
+    let assistantMessageId: string | null = null;
 
     try {
       const renderedTextByPanel: Partial<Record<PanelType, string>> = {
@@ -237,7 +262,12 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
         renderedTextByPanel,
       });
 
-      const assistantMessage = createMessage('assistant', '', { panels: selectedPanels });
+      const assistantMessage = createMessage('assistant', '', {
+        panels: selectedPanels,
+        model: requestModel,
+        webSearch: useWebSearch,
+      });
+      assistantMessageId = assistantMessage.id;
       const nextMessages = [...baseMessages, assistantMessage];
       setMessages(nextMessages);
       setDraft('');
@@ -252,23 +282,36 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
           content: message.content,
         }));
 
-      const result = await streamPanelCompanion({
-        model: openAISettings.model?.trim() || DEFAULT_OPENAI_MODEL,
-        activePanel,
-        panels: selectedPanels,
-        messages: history,
-        contexts,
-      }, {
-        onChunk: (chunk) => {
-          setMessages((current) =>
-            current.map((message) =>
-              message.id === assistantMessage.id
-                ? { ...message, content: `${message.content}${chunk}` }
-                : message
-            )
-          );
-        },
-      });
+      const result = useWebSearch
+        ? await askPanelCompanion({
+            model: requestModel,
+            activePanel,
+            panels: selectedPanels,
+            messages: history,
+            contexts,
+            webSearch: true,
+            signal: abortController.signal,
+          })
+        : await streamPanelCompanion({
+            model: requestModel,
+            activePanel,
+            panels: selectedPanels,
+            messages: history,
+            contexts,
+            signal: abortController.signal,
+          }, {
+            onChunk: (chunk) => {
+              setMessages((current) =>
+                current.map((message) =>
+                  message.id === assistantMessage.id
+                    ? { ...message, content: `${message.content}${chunk}` }
+                    : message
+                )
+              );
+            },
+          });
+
+      if (abortController.signal.aborted) return;
 
       setMessages((current) =>
         current.map((message) =>
@@ -277,19 +320,46 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
                 ...message,
                 content: result.answer || message.content,
                 panels: result.panels,
+                model: result.model,
+                webSearch: result.webSearch,
+                webSearchCitations: result.webSearchCitations,
               }
             : message
         )
       );
     } catch (error) {
+      if (abortController.signal.aborted) {
+        setMessages((current) =>
+          current.map((message) =>
+            message.id === assistantMessageId
+              ? {
+                  ...message,
+                  content: message.content.trim() || 'Response stopped.',
+                  stopped: true,
+                }
+              : message
+          )
+        );
+        return;
+      }
+
       const message = error instanceof Error ? error.message : 'Unable to reach the companion right now.';
       setComposerError(message);
       setMessages((current) => [
         ...current.filter((entry) => entry.content.trim() || entry.role === 'user'),
-        createMessage('assistant', message, { panels: selectedPanels, error: true }),
+        createMessage('assistant', message, {
+          panels: selectedPanels,
+          error: true,
+          model: requestModel,
+          webSearch: useWebSearch,
+        }),
       ]);
     } finally {
+      if (activeRequestRef.current === abortController) {
+        activeRequestRef.current = null;
+      }
       setIsLoading(false);
+      setPendingWebSearch(false);
     }
   };
 
@@ -426,8 +496,35 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
                     <div className="whitespace-pre-wrap">
                       {message.content || (message.role === 'assistant' && isLoading ? '...' : '')}
                     </div>
+                    {message.webSearchCitations && message.webSearchCitations.length > 0 && (
+                      <div className="mt-3 space-y-1 border-t border-terminal-border/70 pt-2">
+                        <div className="text-[10px] font-bold tracking-[0.16em] text-terminal-faint">SOURCES</div>
+                        {message.webSearchCitations.map((citation) => (
+                          <a
+                            key={`${message.id}-${citation.url}`}
+                            href={citation.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block truncate text-[11px] text-terminal-accent transition-colors hover:text-terminal-text"
+                            title={citation.url}
+                          >
+                            {citation.title}
+                          </a>
+                        ))}
+                      </div>
+                    )}
                     {message.panels && message.panels.length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-1">
+                        {message.webSearch && (
+                          <span className="rounded bg-terminal-blue/10 px-1.5 py-0.5 text-[10px] text-terminal-blue">
+                            Web Search · {message.model ?? DEFAULT_COMPANION_WEB_SEARCH_MODEL}
+                          </span>
+                        )}
+                        {message.stopped && (
+                          <span className="rounded bg-terminal-bg/60 px-1.5 py-0.5 text-[10px] text-terminal-faint">
+                            Stopped
+                          </span>
+                        )}
                         {message.panels.map((panel) => (
                           <span key={`${message.id}-${panel}`} className="rounded bg-terminal-bg/60 px-1.5 py-0.5 text-[10px] text-terminal-faint">
                             {getCompanionPanelLabel(panel)}
@@ -443,7 +540,17 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
                 <div className="flex justify-start">
                   <div className="inline-flex items-center gap-2 rounded-2xl border border-terminal-border bg-terminal-elevated px-3 py-2 text-xs text-terminal-muted">
                     <Loader2 size={12} className="animate-spin" />
-                    Reading panels and thinking through the answer...
+                    {pendingWebSearch ? 'Searching web and reading panels...' : 'Reading panels and thinking through the answer...'}
+                    <button
+                      type="button"
+                      onClick={stopActiveResponse}
+                      className="ml-1 inline-flex items-center gap-1 rounded border border-terminal-negative/35 px-2 py-1 text-[11px] text-terminal-negative transition-colors hover:bg-terminal-negative/10"
+                      aria-label="Stop companion response"
+                      title="Stop response"
+                    >
+                      <Square size={10} />
+                      Stop
+                    </button>
                   </div>
                 </div>
               )}
@@ -462,7 +569,7 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' && !event.shiftKey) {
                       event.preventDefault();
-                      void handleSubmit();
+                      void handleSubmit(false);
                     }
                   }}
                   placeholder="Ask for a clarification, compare panels, or look for hidden patterns."
@@ -471,7 +578,19 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
                 <button
                   type="button"
                   onClick={() => {
-                    void handleSubmit();
+                    void handleSubmit(true);
+                  }}
+                  disabled={!draft.trim() || isLoading}
+                  className="inline-flex w-11 items-center justify-center rounded border border-terminal-blue/40 bg-terminal-blue/10 text-terminal-blue transition-colors hover:bg-terminal-blue/20 disabled:cursor-not-allowed disabled:opacity-50"
+                  aria-label="Search web with companion"
+                  title={`Search web with ${DEFAULT_COMPANION_WEB_SEARCH_MODEL}`}
+                >
+                  {isLoading && pendingWebSearch ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleSubmit(false);
                   }}
                   disabled={!draft.trim() || isLoading}
                   className="inline-flex w-11 items-center justify-center rounded border border-terminal-accent/40 bg-terminal-accent/10 text-terminal-accent transition-colors hover:bg-terminal-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
@@ -481,7 +600,7 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
                 </button>
               </div>
               <div className="mt-2 text-[11px] leading-relaxed text-terminal-faint">
-                Uses your stored OpenAI key and the model selected in AI Settings. Default model: <span className="text-terminal-text">{DEFAULT_OPENAI_MODEL}</span>.
+                Send uses the AI Settings model. Search uses <span className="text-terminal-text">{DEFAULT_COMPANION_WEB_SEARCH_MODEL}</span> and only runs when you click the search button.
               </div>
             </div>
           </aside>

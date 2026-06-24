@@ -2146,11 +2146,15 @@ export async function askPanelCompanion(args: {
   panels: PanelType[];
   messages: CompanionMessagePayload[];
   contexts: CompanionPanelContext[];
+  webSearch?: boolean;
+  signal?: AbortSignal;
 }): Promise<CompanionChatResult> {
+  const { signal, ...payload } = args;
   const res = await fetch(`${OPENAI}/panel-chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(args),
+    body: JSON.stringify(payload),
+    signal,
   });
 
   if (!res.ok) {
@@ -2168,18 +2172,22 @@ export async function streamPanelCompanion(
     panels: PanelType[];
     messages: CompanionMessagePayload[];
     contexts: CompanionPanelContext[];
+    webSearch?: boolean;
+    signal?: AbortSignal;
   },
   handlers: {
     onChunk: (chunk: string) => void;
   }
 ): Promise<CompanionChatResult> {
+  const { signal, ...payload } = args;
   const res = await fetch(`${OPENAI}/panel-chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      ...args,
+      ...payload,
       stream: true,
     }),
+    signal,
   });
 
   if (!res.ok) {
