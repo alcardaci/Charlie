@@ -1,4 +1,4 @@
-import { ExternalLink, Minimize2, Play } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ExternalLink, Minimize2, Play } from 'lucide-react';
 import { useState } from 'react';
 
 const LIVE_CHANNELS = [
@@ -20,8 +20,8 @@ const LIVE_CHANNELS = [
     id: 'Bloomberg',
     label: 'Bloomberg',
     title: 'Bloomberg',
-    watchUrl: 'https://www.youtube.com/watch?v=iEpJwprxDdk',
-    videoId: 'iEpJwprxDdk',
+    watchUrl: 'https://www.youtube.com/watch?v=QB5BNdBFujE',
+    videoId: 'QB5BNdBFujE',
   },
   {
     id: 'euronews',
@@ -41,8 +41,8 @@ const LIVE_CHANNELS = [
     id: 'france24',
     label: 'France 24',
     title: 'France 24',
-    watchUrl: 'https://www.youtube.com/watch?v=Ap-UM1O9RBU',
-    videoId: 'Ap-UM1O9RBU',
+    watchUrl: 'https://www.youtube.com/watch?v=HvZt-nh9sGg',
+    videoId: 'HvZt-nh9sGg',
   },
   {
     id: 'nbc',
@@ -57,6 +57,13 @@ const LIVE_CHANNELS = [
     title: 'Sky News',
     watchUrl: 'https://www.youtube.com/watch?v=YDvsBbKfLPA',
     videoId: 'YDvsBbKfLPA',
+  },
+  {
+    id: 'yahoo-finance',
+    label: 'Yahoo Finance',
+    title: 'Yahoo Finance',
+    watchUrl: 'https://www.youtube.com/watch?v=KQp-e_XQnDE',
+    videoId: 'KQp-e_XQnDE',
   },
 ] as const;
 
@@ -81,6 +88,11 @@ export function CharlieLivePlayer() {
   );
   const [selectedChannelId, setSelectedChannelId] = useState<(typeof LIVE_CHANNELS)[number]['id']>('Bloomberg');
   const selectedChannel = LIVE_CHANNELS.find((channel) => channel.id === selectedChannelId) ?? LIVE_CHANNELS[0];
+  const changeChannel = (direction: -1 | 1) => {
+    const currentIndex = LIVE_CHANNELS.findIndex((channel) => channel.id === selectedChannelId);
+    const nextIndex = (currentIndex + direction + LIVE_CHANNELS.length) % LIVE_CHANNELS.length;
+    setSelectedChannelId(LIVE_CHANNELS[nextIndex].id);
+  };
 
   return (
     <>
@@ -139,6 +151,14 @@ export function CharlieLivePlayer() {
 
         <div className="flex items-center gap-2 border-b border-terminal-border px-3 py-2">
           <span className="text-[10px] tracking-[0.18em] text-terminal-faint">CHANNEL</span>
+          <button
+            onClick={() => changeChannel(-1)}
+            className="rounded border border-terminal-border p-1 text-terminal-faint transition-colors hover:border-terminal-accent/40 hover:text-terminal-accent hover:bg-terminal-hover"
+            title="Previous channel"
+            aria-label="Previous channel"
+          >
+            <ChevronLeft size={14} />
+          </button>
           <select
             value={selectedChannelId}
             onChange={(event) => setSelectedChannelId(event.target.value as (typeof LIVE_CHANNELS)[number]['id'])}
@@ -151,6 +171,14 @@ export function CharlieLivePlayer() {
               </option>
             ))}
           </select>
+          <button
+            onClick={() => changeChannel(1)}
+            className="rounded border border-terminal-border p-1 text-terminal-faint transition-colors hover:border-terminal-accent/40 hover:text-terminal-accent hover:bg-terminal-hover"
+            title="Next channel"
+            aria-label="Next channel"
+          >
+            <ChevronRight size={14} />
+          </button>
         </div>
 
         <div className="aspect-video bg-black">
