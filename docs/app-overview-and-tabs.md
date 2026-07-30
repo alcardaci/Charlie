@@ -12,7 +12,7 @@ It keeps a command-driven shell around a routed center panel, then layers persis
 - `NewsPanel`: either the top half of the combined `NEWS`/`GEO` workspace or a right-hand rail, depending on the current tab
 - `StatusBar`: function-key shortcuts and market-open state
 - `CharlieLivePlayer`: floating live TV player
-- `PanelCompanion`: optional chat layer that can answer from the active panel and selected cross-panel context
+- `PanelCompanion`: optional general-purpose AI chat and web-research layer with automatic Charlie workspace context and local conversation history
 
 ## Navigation model
 
@@ -74,7 +74,8 @@ It keeps a command-driven shell around a routed center panel, then layers persis
 
 - OpenAI Responses API
   - Overview summary generation
-  - Panel companion chat
+  - General-purpose companion chat and live web research
+  - Optional active-panel and cross-panel analysis
   - Geopolitics event extraction and hotspot summarization
   - Opportunities theme discovery/guidance when AI is enabled
 
@@ -388,8 +389,14 @@ How it is processed:
 
 ### Panel companion
 
-- Builds context from the active panel plus any user-selected extra panels
-- Uses visible text when available, then supplements it with structured snapshots fetched through React Query
+- Answers general questions independently of the current Charlie workspace
+- Decides automatically whether web search is useful, returns source links when research is performed, and offers a per-request “force web” override
+- Offers seven model choices from low-cost Nano through GPT-5.6 Sol, with the lowest-cost model selected by default
+- Places model selection and web-search mode inside the message composer
+- Always receives the active panel as supporting context and decides whether it is relevant; typing `@` in the composer opens an autocomplete menu for explicitly forcing additional panel context
+- Panel context uses visible text and supplements it with structured snapshots fetched through React Query
+- Stores up to 30 recent conversations locally, capped at 60 messages per conversation
+- Expands from the side companion into a dedicated full-page workspace without resetting the active conversation, draft, model, web mode, panel mentions, or history view
 
 ## Current implementation notes
 

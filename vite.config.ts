@@ -15,6 +15,7 @@ import {
   DEFAULT_THEME_DISCOVERY_RECOMMENDATION_SYSTEM_PROMPT,
   DEFAULT_THEME_DISCOVERY_SYSTEM_PROMPT,
   DEFAULT_TOPIC_THEME_GUIDANCE_SYSTEM_PROMPT,
+  getCompanionModelReasoningEffort,
 } from './src/utils/openaiConfig'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2414,6 +2415,10 @@ function extractOpenAIWebCitations(payload: any): Array<{ title: string; url: st
   return citations
 }
 
+function didOpenAIUseWebSearch(payload: any): boolean {
+  return (payload?.output ?? []).some((output: any) => output?.type === 'web_search_call')
+}
+
 function parseOpenAIJsonText<T>(value: string): T | null {
   const trimmed = value.trim().replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/, '')
   if (!trimmed) return null
@@ -3350,7 +3355,7 @@ function extractOpenAIStreamDelta(event: any): string {
   return ''
 }
 
-function formatPanelCompanionInput(args: {
+function formatCompanionInput(args: {
   activePanel: string
   panels: string[]
   messages: Array<{ role?: string; content?: string }>
@@ -3381,15 +3386,19 @@ function formatPanelCompanionInput(args: {
     .join('\n\n')
 
   return [
-    'You are answering from a Charlie workspace snapshot.',
-    `Active panel: ${args.activePanel}`,
-    `Included panels: ${args.panels.join(', ')}`,
+    `Current date and time: ${new Date().toISOString()}`,
     '',
     'Conversation:',
     conversation || 'USER: No prior conversation.',
-    '',
-    'Panel contexts:',
-    panelContexts || 'No panel contexts were supplied.',
+    ...(panelContexts
+      ? [
+          '',
+          'Optional Charlie workspace context:',
+          `Active panel: ${args.activePanel || 'Not specified'}`,
+          `Included panels: ${args.panels.join(', ') || 'None'}`,
+          panelContexts,
+        ]
+      : []),
   ].join('\n')
 }
 
@@ -3915,7 +3924,9 @@ function marketDataMiddleware(): Plugin {
             const activePanel = typeof payload.activePanel === 'string' ? payload.activePanel.trim() : ''
             const stream = Boolean(payload.stream)
             const webSearch = payload.webSearch === true
-            const requestModel = webSearch ? (model || DEFAULT_COMPANION_WEB_SEARCH_MODEL) : model
+            const forceWebSearch = webSearch && payload.forceWebSearch === true
+            const requestModel = model || DEFAULT_COMPANION_WEB_SEARCH_MODEL
+            const reasoningEffort = getCompanionModelReasoningEffort(requestModel)
             const panels = Array.isArray(payload.panels)
               ? Array.from(new Set(payload.panels.map((value: unknown) => String(value ?? '').trim()).filter(Boolean))).slice(0, 8)
               : []
@@ -3953,11 +3964,9 @@ function marketDataMiddleware(): Plugin {
             const apiKey = await readConnectionSecret('openai')
             if (!apiKey) return sendError(res, 'OpenAI API key is not stored locally yet.', 400)
             if (!requestModel) return sendError(res, 'OpenAI model is required.', 400)
-            if (!activePanel) return sendError(res, 'Active panel is required.', 400)
             if (!messages.length) return sendError(res, 'At least one companion message is required.', 400)
-            if (!contexts.length) return sendError(res, 'At least one panel context is required.', 400)
 
-            const input = formatPanelCompanionInput({
+            const input = formatCompanionInput({
               activePanel,
               panels: panels.length ? panels : contexts.map((context) => context.panel),
               messages,
@@ -3980,10 +3989,10 @@ function marketDataMiddleware(): Plugin {
                   instructions: DEFAULT_PANEL_COMPANION_SYSTEM_PROMPT,
                   input,
                   stream: true,
+                  reasoning: { effort: reasoningEffort },
                   ...(webSearch ? {
                     tools: [{ type: 'web_search' }],
-                    tool_choice: 'required',
-                    reasoning: { effort: 'none' },
+                    tool_choice: forceWebSearch ? 'required' : 'auto',
                   } : {}),
                 }),
                 signal: upstreamAbort.signal,
@@ -4057,10 +4066,10 @@ function marketDataMiddleware(): Plugin {
                 model: requestModel,
                 instructions: DEFAULT_PANEL_COMPANION_SYSTEM_PROMPT,
                 input,
+                reasoning: { effort: reasoningEffort },
                 ...(webSearch ? {
                   tools: [{ type: 'web_search' }],
-                  tool_choice: 'required',
-                  reasoning: { effort: 'none' },
+                  tool_choice: forceWebSearch ? 'required' : 'auto',
                 } : {}),
               }),
               signal: upstreamAbort.signal,
@@ -4075,13 +4084,15 @@ function marketDataMiddleware(): Plugin {
             const answer = extractOpenAIText(responsePayload)
             if (!answer) return sendError(res, 'OpenAI returned an empty companion response.', 502)
             const webSearchCitations = webSearch ? extractOpenAIWebCitations(responsePayload) : []
+            const webSearchUsed = webSearch && didOpenAIUseWebSearch(responsePayload)
 
             return sendJSON(res, {
               answer,
               generatedAt: new Date().toISOString(),
               model: requestModel,
               panels: panels.length ? panels : contexts.map((context) => context.panel),
-              webSearch,
+              webSearch: webSearchUsed,
+              webSearchForced: forceWebSearch,
               webSearchCitations,
             })
           } catch (err) {

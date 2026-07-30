@@ -39,6 +39,7 @@ export interface AIMarketSummary {
 
 export interface OpenAISettings {
   model: string;
+  companionModel: string;
   harness: OpenAIHarness;
   systemPrompt: string;
   systemPrompts: OpenAIHarnessPrompts;
@@ -59,6 +60,28 @@ export interface CompanionWebCitation {
   url: string;
 }
 
+export interface CompanionConversationMessage {
+  id: string;
+  role: CompanionMessageRole;
+  content: string;
+  createdAt: string;
+  panels?: PanelType[];
+  error?: boolean;
+  model?: string;
+  webSearch?: boolean;
+  webSearchForced?: boolean;
+  webSearchCitations?: CompanionWebCitation[];
+  stopped?: boolean;
+}
+
+export interface CompanionConversation {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messages: CompanionConversationMessage[];
+}
+
 export interface CompanionPanelContext {
   panel: PanelType;
   title: string;
@@ -75,6 +98,7 @@ export interface CompanionChatResult {
   model: string;
   panels: PanelType[];
   webSearch?: boolean;
+  webSearchForced?: boolean;
   webSearchCitations?: CompanionWebCitation[];
 }
 

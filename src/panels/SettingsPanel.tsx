@@ -49,7 +49,7 @@ const PROVIDER_CARDS: Array<{
     provider: 'openai',
     title: 'OpenAI',
     placeholder: 'sk-...',
-    description: 'Used for overview summaries, the panel companion, geopolitics extraction, and OPPS AI guidance.',
+    description: 'Used for overview summaries, the general research companion, geopolitics extraction, and OPPS AI guidance.',
     coverage: 'Optional. Public/no-key sources still work without it.',
     apiKeyUrl: 'https://platform.openai.com/api-keys',
   },

@@ -15,8 +15,8 @@ Charlie is a local-first desktop market workspace built with React, Vite, and El
 - Command-driven terminal UI with a top command bar, live market ticker, watchlist sidebar, main panel, status bar, and optional live player.
 - Dedicated workspaces for market overview, ticker research, charts, news and geopolitics, opportunities, prediction markets, macro and yield monitoring, portfolio tracking, sector heatmaps, forex, crypto, ETF monitoring, help, and settings.
 - Fast ticker shortcuts such as `AAPL`, `AAPL GP`, `AAPL NEWS`, and `AAPL WL`.
-- Optional AI-assisted market summaries, geopolitics extraction, and panel companion chat.
-- Local persistence for watchlists, portfolio lots, command history, chart style, forex pair selection, and provider settings.
+- Optional AI-assisted market summaries, geopolitics extraction, and a general-purpose research companion with autonomous web access and workspace awareness.
+- Local persistence for watchlists, portfolio lots, command history, companion conversations, chart style, forex pair selection, and provider settings.
 
 ## Install and Run
 
@@ -55,7 +55,7 @@ npm run desktop:dev
 - GDELT DOC 2.0: geopolitics headline intake and country clustering.
 - Caldara-Iacoviello GPR dataset: geopolitical risk time series and charting.
 - Local policy calendar registry: bundled policy-event schedule data.
-- OpenAI Responses API: optional overview summaries, panel companion chat, geopolitics extraction, and opportunities theme discovery.
+- OpenAI Responses API: optional overview summaries, general chat and live web research, workspace-aware companion analysis, geopolitics extraction, and opportunities theme discovery.
 
 ## Provider Connections
 

@@ -1,9 +1,19 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
-import { AIMarketSummary, ChartStyle, OpenAISettings, PanelType, PortfolioPosition } from '../types';
+import {
+  AIMarketSummary,
+  ChartStyle,
+  CompanionConversation,
+  CompanionConversationMessage,
+  OpenAISettings,
+  PanelType,
+  PortfolioPosition,
+} from '../types';
 import { TERMINAL_STORAGE_KEY, terminalStateStorage } from '../utils/localStateStorage';
 import {
   buildDefaultOpenAISystemPrompts,
+  COMPANION_MODEL_OPTIONS,
+  DEFAULT_COMPANION_MODEL,
   DEFAULT_GEOPOLITICS_EVENT_SYSTEM_PROMPT,
   DEFAULT_GEOPOLITICS_OPENAI_MODEL,
   DEFAULT_OPENAI_MODEL,
@@ -21,6 +31,8 @@ import {
 const DEFAULT_WATCHLIST = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'JPM', 'BRK-B', 'V'];
 const DEFAULT_FOREX_PAIRS = ['EUR/USD', 'USD/JPY', 'GBP/USD', 'USD/CHF', 'AUD/USD', 'USD/CAD', 'EUR/GBP', 'DKK/EUR'];
 const DEFAULT_PORTFOLIO_CURRENCY = 'USD';
+const MAX_COMPANION_CONVERSATIONS = 30;
+const MAX_COMPANION_MESSAGES = 60;
 const OBSOLETE_OVERVIEW_PROMPT_TEXTS = [
   'Combine market tone, macro interpretation, and risk framing into one concise terminal-style summary.',
   'Combine market tone, macro interpretation, and risk framing into one concise but comprehensive terminal-style summary. Use 5 to 8 bullet points max.',
@@ -30,6 +42,7 @@ const OBSOLETE_OVERVIEW_PROMPT_TEXTS = [
 const DEFAULT_OPENAI_SYSTEM_PROMPTS = buildDefaultOpenAISystemPrompts();
 const DEFAULT_OPENAI_SETTINGS: OpenAISettings = {
   model: DEFAULT_OPENAI_MODEL,
+  companionModel: DEFAULT_COMPANION_MODEL,
   harness: 'comprehensive',
   systemPrompt: DEFAULT_OPENAI_SYSTEM_PROMPTS.comprehensive,
   systemPrompts: DEFAULT_OPENAI_SYSTEM_PROMPTS,
@@ -66,6 +79,9 @@ interface TerminalState {
   marketOverviewSummaryCollapsed: boolean;
   navHistory: NavEntry[];
   companionOpen: boolean;
+  companionExpanded: boolean;
+  companionConversations: CompanionConversation[];
+  activeCompanionConversationId: string | null;
   multiAssetTiles: MultiAssetTile[];
 
   setActivePanel: (panel: PanelType, symbol?: string) => void;
@@ -96,11 +112,25 @@ interface TerminalState {
   setDebugMode: (enabled: boolean) => void;
   setCompanionOpen: (open: boolean) => void;
   toggleCompanionOpen: () => void;
+  setCompanionExpanded: (expanded: boolean) => void;
+  upsertCompanionConversation: (conversation: CompanionConversation) => void;
+  deleteCompanionConversation: (conversationId: string) => void;
+  setActiveCompanionConversationId: (conversationId: string | null) => void;
 }
 
 type PersistedTerminalState = Pick<
   TerminalState,
-  'watchlistSidebarVisible' | 'watchlist' | 'portfolio' | 'commandHistory' | 'activeSymbol' | 'chartStyle' | 'forexPairs' | 'portfolioDisplayCurrency' | 'openAISettings'
+  | 'watchlistSidebarVisible'
+  | 'watchlist'
+  | 'portfolio'
+  | 'commandHistory'
+  | 'activeSymbol'
+  | 'chartStyle'
+  | 'forexPairs'
+  | 'portfolioDisplayCurrency'
+  | 'openAISettings'
+  | 'companionConversations'
+  | 'activeCompanionConversationId'
 >;
 
 function normalizeCurrencyCode(currency?: string | null): string {
@@ -152,6 +182,10 @@ function normalizeOpenAISettings(value?: Partial<OpenAISettings> | null): OpenAI
     : rawGeopoliticsPrompt;
 
   const rawModel = typeof value?.model === 'string' ? value.model.trim() : '';
+  const rawCompanionModel = typeof value?.companionModel === 'string' ? value.companionModel.trim() : '';
+  const companionModel = COMPANION_MODEL_OPTIONS.some((option) => option.value === rawCompanionModel)
+    ? rawCompanionModel
+    : DEFAULT_COMPANION_MODEL;
   const hasObsoleteOverviewPrompt =
     isObsoleteOverviewPrompt(value?.systemPrompts?.comprehensive?.trim() ?? '') ||
     (harness === 'comprehensive' && typeof value?.systemPrompt === 'string' && isObsoleteOverviewPrompt(value.systemPrompt));
@@ -161,6 +195,7 @@ function normalizeOpenAISettings(value?: Partial<OpenAISettings> | null): OpenAI
 
   return {
     model,
+    companionModel,
     harness,
     systemPrompt: getOpenAISystemPromptForHarness(harness, systemPrompts),
     systemPrompts,
@@ -188,6 +223,79 @@ function normalizeAIMarketSummary(value?: Partial<AIMarketSummary> | null): AIMa
     model,
     harness,
   };
+}
+
+function normalizeCompanionMessage(value: unknown): CompanionConversationMessage | null {
+  if (!value || typeof value !== 'object') return null;
+  const message = value as Partial<CompanionConversationMessage>;
+  if (message.role !== 'user' && message.role !== 'assistant') return null;
+  if (typeof message.content !== 'string' || !message.content.trim()) return null;
+
+  const citations = Array.isArray(message.webSearchCitations)
+    ? message.webSearchCitations.flatMap((citation) => {
+        if (!citation || typeof citation.title !== 'string' || typeof citation.url !== 'string') return [];
+        const title = citation.title.trim();
+        const url = citation.url.trim();
+        return title && url ? [{ title, url }] : [];
+      }).slice(0, 12)
+    : undefined;
+
+  return {
+    id: typeof message.id === 'string' && message.id.trim()
+      ? message.id.trim()
+      : `message-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    role: message.role,
+    content: message.content.trim(),
+    createdAt: typeof message.createdAt === 'string' && message.createdAt.trim()
+      ? message.createdAt.trim()
+      : new Date().toISOString(),
+    panels: Array.isArray(message.panels)
+      ? message.panels.filter((panel): panel is PanelType => typeof panel === 'string').slice(0, 8)
+      : undefined,
+    error: Boolean(message.error),
+    model: typeof message.model === 'string' && message.model.trim() ? message.model.trim() : undefined,
+    webSearch: Boolean(message.webSearch),
+    webSearchForced: Boolean(message.webSearchForced),
+    webSearchCitations: citations,
+    stopped: Boolean(message.stopped),
+  };
+}
+
+function normalizeCompanionConversations(value: unknown): CompanionConversation[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') return [];
+    const conversation = entry as Partial<CompanionConversation>;
+    const id = typeof conversation.id === 'string' ? conversation.id.trim() : '';
+    const messages = Array.isArray(conversation.messages)
+      ? conversation.messages
+          .map(normalizeCompanionMessage)
+          .filter((message): message is CompanionConversationMessage => message !== null)
+          .slice(-MAX_COMPANION_MESSAGES)
+      : [];
+    if (!id || !messages.some((message) => message.role === 'user')) return [];
+
+    const firstUserMessage = messages.find((message) => message.role === 'user')?.content ?? 'Conversation';
+    const createdAt = typeof conversation.createdAt === 'string' && conversation.createdAt.trim()
+      ? conversation.createdAt.trim()
+      : new Date().toISOString();
+    const updatedAt = typeof conversation.updatedAt === 'string' && conversation.updatedAt.trim()
+      ? conversation.updatedAt.trim()
+      : createdAt;
+
+    return [{
+      id,
+      title: typeof conversation.title === 'string' && conversation.title.trim()
+        ? conversation.title.trim().slice(0, 72)
+        : firstUserMessage.slice(0, 72),
+      createdAt,
+      updatedAt,
+      messages,
+    }];
+  })
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, MAX_COMPANION_CONVERSATIONS);
 }
 
 function createPortfolioEntry(position: Omit<PortfolioPosition, 'id'>): PortfolioPosition {
@@ -218,6 +326,9 @@ export const useTerminalStore = create<TerminalState>()(
       marketOverviewSummaryCollapsed: false,
       navHistory: [],
       companionOpen: false,
+      companionExpanded: false,
+      companionConversations: [],
+      activeCompanionConversationId: null,
       multiAssetTiles: [],
 
       setActivePanel: (panel, symbol) => {
@@ -492,11 +603,54 @@ export const useTerminalStore = create<TerminalState>()(
       },
 
       setCompanionOpen: (open) => {
-        set({ companionOpen: open });
+        set({
+          companionOpen: open,
+          ...(!open ? { companionExpanded: false } : {}),
+        });
       },
 
       toggleCompanionOpen: () => {
-        set((state) => ({ companionOpen: !state.companionOpen }));
+        set((state) => ({
+          companionOpen: !state.companionOpen,
+          companionExpanded: state.companionOpen ? false : state.companionExpanded,
+        }));
+      },
+
+      setCompanionExpanded: (expanded) => {
+        set((state) => ({
+          companionExpanded: expanded,
+          companionOpen: expanded ? true : state.companionOpen,
+        }));
+      },
+
+      upsertCompanionConversation: (conversation) => {
+        set((state) => ({
+          companionConversations: [
+            {
+              ...conversation,
+              title: conversation.title.trim().slice(0, 72) || 'Conversation',
+              messages: conversation.messages.slice(-MAX_COMPANION_MESSAGES),
+            },
+            ...state.companionConversations.filter((entry) => entry.id !== conversation.id),
+          ]
+            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+            .slice(0, MAX_COMPANION_CONVERSATIONS),
+        }));
+      },
+
+      deleteCompanionConversation: (conversationId) => {
+        set((state) => ({
+          companionConversations: state.companionConversations.filter(
+            (conversation) => conversation.id !== conversationId
+          ),
+          activeCompanionConversationId: state.activeCompanionConversationId === conversationId
+            ? null
+            : state.activeCompanionConversationId,
+        }));
+      },
+
+      setActiveCompanionConversationId: (conversationId) => {
+        set({ activeCompanionConversationId: conversationId });
       },
     }),
     {
@@ -504,12 +658,23 @@ export const useTerminalStore = create<TerminalState>()(
       storage: createJSONStorage<PersistedTerminalState>(() => terminalStateStorage),
       merge: (persistedState, currentState) => {
         const persisted = (persistedState ?? {}) as Partial<PersistedTerminalState>;
+        const companionConversations = normalizeCompanionConversations(persisted.companionConversations);
+        const activeCompanionConversationId = (
+          typeof persisted.activeCompanionConversationId === 'string' &&
+          companionConversations.some(
+            (conversation) => conversation.id === persisted.activeCompanionConversationId
+          )
+        )
+          ? persisted.activeCompanionConversationId
+          : null;
         return {
           ...currentState,
           ...persisted,
           debugMode: false,
           portfolioDisplayCurrency: normalizeCurrencyCode(persisted.portfolioDisplayCurrency),
           openAISettings: normalizeOpenAISettings(persisted.openAISettings),
+          companionConversations,
+          activeCompanionConversationId,
         };
       },
       onRehydrateStorage: () => (state) => {
@@ -526,6 +691,8 @@ export const useTerminalStore = create<TerminalState>()(
         forexPairs: state.forexPairs,
         portfolioDisplayCurrency: state.portfolioDisplayCurrency,
         openAISettings: state.openAISettings,
+        companionConversations: state.companionConversations,
+        activeCompanionConversationId: state.activeCompanionConversationId,
       }),
     }
   )

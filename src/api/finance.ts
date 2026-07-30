@@ -2147,6 +2147,7 @@ export async function askPanelCompanion(args: {
   messages: CompanionMessagePayload[];
   contexts: CompanionPanelContext[];
   webSearch?: boolean;
+  forceWebSearch?: boolean;
   signal?: AbortSignal;
 }): Promise<CompanionChatResult> {
   const { signal, ...payload } = args;
@@ -2173,6 +2174,7 @@ export async function streamPanelCompanion(
     messages: CompanionMessagePayload[];
     contexts: CompanionPanelContext[];
     webSearch?: boolean;
+    forceWebSearch?: boolean;
     signal?: AbortSignal;
   },
   handlers: {
