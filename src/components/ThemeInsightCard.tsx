@@ -8,6 +8,16 @@ function themeScoreTone(score: number): string {
   return 'text-terminal-muted border-terminal-border bg-terminal-elevated/40';
 }
 
+function formatSignalTiming(timestamp: number): string {
+  const deltaMs = timestamp - Date.now();
+  if (deltaMs <= 0) return fmt.timeAgo(timestamp);
+
+  const hours = Math.round(deltaMs / 3_600_000);
+  if (hours < 24) return `in ${Math.max(hours, 1)}h`;
+
+  return `in ${Math.round(hours / 24)}d`;
+}
+
 function overlapTone(overlap: DiscoveredTheme['linkedAssets'][number]['overlap']): string {
   switch (overlap) {
     case 'portfolio':
@@ -80,14 +90,16 @@ function ScoreTile({
         <span className="truncate">{label[0].toUpperCase() + label.slice(1)}</span>
         <InfoTooltip label={label} description={help.description} source={help.source} />
       </div>
-      <div className="mt-1 font-bold text-terminal-text">{value}</div>
+      <div className="mt-1 font-bold text-terminal-text" aria-label={`${label} score ${value} out of 100`}>
+        {value}<span className="text-[10px] font-normal text-terminal-faint">/100</span>
+      </div>
     </div>
   );
 }
 
 export function ThemeStatCard({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
-    <div className="rounded border border-terminal-border bg-terminal-elevated/30 p-3">
+    <div className="rounded border border-terminal-border bg-terminal-elevated/30 px-3 py-2">
       <div className="text-[10px] tracking-[0.2em] text-terminal-faint">{label}</div>
       <div className="mt-1 text-lg font-bold text-terminal-text">{value}</div>
       <div className="mt-1 text-xs text-terminal-muted">{detail}</div>
@@ -102,24 +114,30 @@ export function ThemeInsightCard({
   theme: DiscoveredTheme;
   onOpenSymbol: (symbol: string) => void;
 }) {
+  const headingId = `theme-${theme.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+
   return (
-    <article className="rounded border border-terminal-border bg-terminal-panel overflow-hidden">
+    <article className="overflow-hidden rounded border border-terminal-border bg-terminal-panel" aria-labelledby={headingId}>
       <div className="flex flex-wrap items-start justify-between gap-3 px-4 py-3 panel-border-b bg-terminal-elevated/40">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-terminal-accent text-xs font-bold tracking-[0.22em]">{theme.label.toUpperCase()}</span>
-            <span className={`rounded border px-2 py-0.5 text-[11px] font-medium ${themeScoreTone(theme.score)}`}>
-              SCORE {theme.score}
+            <h3 id={headingId} className="text-terminal-accent text-xs font-bold tracking-[0.22em]">{theme.label.toUpperCase()}</h3>
+            <span
+              className={`rounded border px-2 py-0.5 text-[11px] font-medium ${themeScoreTone(theme.score)}`}
+              aria-label={`Relative signal score ${theme.score} out of 100; this is not a probability`}
+              title="Relative rank within this signal snapshot, not a probability or forecast."
+            >
+              SIGNAL {theme.score}
             </span>
             <span className="text-[11px] text-terminal-faint">{theme.signalCount} signals · {theme.sourceDiversity} source types</span>
           </div>
           <div className="mt-2 text-sm text-terminal-text">{theme.summary}</div>
           <div className="mt-1 text-xs text-terminal-muted">
-            Freshest signal {fmt.timeAgo(theme.freshestAt)} · Keywords: {theme.keywords.join(', ')}
+            Nearest signal {formatSignalTiming(theme.freshestAt)} · Keywords: {theme.keywords.join(', ')}
           </div>
         </div>
 
-        <div className="grid min-w-[320px] grid-cols-4 gap-2 text-[11px]">
+        <div className="grid w-full grid-cols-2 gap-2 text-[11px] sm:w-auto sm:min-w-[320px] sm:grid-cols-4">
           <ScoreTile label="emergence" value={theme.emergenceScore} help={SCORE_HELP.emergence} />
           <ScoreTile label="breadth" value={theme.breadthScore} help={SCORE_HELP.breadth} />
           <ScoreTile label="urgency" value={theme.urgencyScore} help={SCORE_HELP.urgency} />
@@ -127,7 +145,7 @@ export function ThemeInsightCard({
         </div>
       </div>
 
-      <div className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.95fr)]">
+      <div className="grid gap-4 p-4 2xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.95fr)]">
         <div className="space-y-4">
           <section className="rounded border border-terminal-border bg-terminal-elevated/30 p-3">
             <div className="flex items-center gap-2 text-[10px] tracking-[0.2em] text-terminal-faint">
@@ -150,9 +168,14 @@ export function ThemeInsightCard({
             </div>
           </section>
 
-          <section className="rounded border border-terminal-border bg-terminal-elevated/30 p-3">
-            <div className="text-[10px] tracking-[0.2em] text-terminal-faint">TRIGGERS</div>
-            <div className="mt-2 grid gap-3 md:grid-cols-3">
+          <details className="group rounded border border-terminal-border bg-terminal-elevated/30 p-3">
+            <summary className="cursor-pointer list-none text-[10px] tracking-[0.2em] text-terminal-faint marker:hidden">
+              <span className="inline-flex items-center gap-2">
+                <span className="transition-transform group-open:rotate-90">›</span>
+                TRIGGERS, WATCH ITEMS & INVALIDATION
+              </span>
+            </summary>
+            <div className="mt-3 grid gap-3 md:grid-cols-3">
               <div className="rounded border border-terminal-border bg-terminal-panel px-3 py-2">
                 <div className="text-[10px] tracking-[0.18em] text-terminal-faint">CATALYSTS</div>
                 <div className="mt-1 space-y-1.5">
@@ -181,7 +204,7 @@ export function ThemeInsightCard({
                 </div>
               </div>
             </div>
-          </section>
+          </details>
 
           <section className="rounded border border-terminal-border bg-terminal-elevated/30 p-3">
             <div className="text-[10px] tracking-[0.2em] text-terminal-faint">EVIDENCE</div>
@@ -204,6 +227,9 @@ export function ThemeInsightCard({
                       <div className="mt-1 text-[11px] text-terminal-muted">
                         {item.sourceLabel} · {item.detail} · {fmt.timeAgo(item.timestamp)}
                       </div>
+                      {item.context && (
+                        <div className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-terminal-faint">{item.context}</div>
+                      )}
                     </div>
                     {item.url && <ExternalLink size={11} className="mt-0.5 flex-shrink-0 text-terminal-faint" />}
                   </div>
@@ -279,6 +305,7 @@ export function ThemeInsightCard({
             <div className="mt-2 flex flex-wrap gap-2">
               {theme.linkedAssets.map((asset) => (
                 <button
+                  type="button"
                   key={`${asset.symbol}-${asset.overlap}`}
                   onClick={() => onOpenSymbol(asset.symbol)}
                   className={`rounded border px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-terminal-hover ${overlapTone(asset.overlap)}`}

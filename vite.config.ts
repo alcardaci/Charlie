@@ -81,6 +81,151 @@ const DEFAULT_GEOPOLITICS_COUNTRY_SUMMARY_SYSTEM_PROMPT = [
   'Do not mention event counts, headline counts, severity scores, or numeric risk ratings.',
   'Return strict JSON only.',
 ].join(' ')
+const OPPORTUNITIES_OPENAI_TIMEOUT_MS = 45_000
+
+const boundedStringListSchema = (minItems: number, maxItems: number) => ({
+  type: 'array',
+  items: { type: 'string' },
+  minItems,
+  maxItems,
+})
+
+const DISCOVERY_THEME_OUTPUT_FORMAT = {
+  type: 'json_schema',
+  name: 'opportunity_theme_discovery',
+  strict: true,
+  schema: {
+    type: 'object',
+    properties: {
+      themes: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 5,
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            label: { type: 'string' },
+            summary: { type: 'string' },
+            thesis: { type: 'string' },
+            signalIds: boundedStringListSchema(2, 8),
+            linkedAssets: boundedStringListSchema(0, 8),
+            confidence: { type: 'integer', minimum: 0, maximum: 100 },
+            importance: { type: 'integer', minimum: 0, maximum: 100 },
+          },
+          required: ['id', 'label', 'summary', 'thesis', 'signalIds', 'linkedAssets', 'confidence', 'importance'],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ['themes'],
+    additionalProperties: false,
+  },
+}
+
+const DISCOVERY_GUIDANCE_OUTPUT_FORMAT = {
+  type: 'json_schema',
+  name: 'opportunity_theme_guidance',
+  strict: true,
+  schema: {
+    type: 'object',
+    properties: {
+      themes: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 5,
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            whyItMatters: { type: 'string' },
+            actionSummary: { type: 'string' },
+            portfolioAngle: { type: 'string' },
+            watchlistAngle: { type: 'string' },
+            opportunityAngle: { type: 'string' },
+            primaryRecommendation: { type: 'string' },
+            playbook: boundedStringListSchema(2, 4),
+            catalysts: boundedStringListSchema(1, 4),
+            watchItems: boundedStringListSchema(1, 4),
+            invalidationSignals: boundedStringListSchema(1, 4),
+            supportingSignalIds: boundedStringListSchema(1, 6),
+          },
+          required: [
+            'id',
+            'whyItMatters',
+            'actionSummary',
+            'portfolioAngle',
+            'watchlistAngle',
+            'opportunityAngle',
+            'primaryRecommendation',
+            'playbook',
+            'catalysts',
+            'watchItems',
+            'invalidationSignals',
+            'supportingSignalIds',
+          ],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ['themes'],
+    additionalProperties: false,
+  },
+}
+
+const TOPIC_GUIDANCE_OUTPUT_FORMAT = {
+  type: 'json_schema',
+  name: 'opportunity_topic_guidance',
+  strict: true,
+  schema: {
+    type: 'object',
+    properties: {
+      themes: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 8,
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            summary: { type: 'string' },
+            thesis: { type: 'string' },
+            whyItMatters: { type: 'string' },
+            actionSummary: { type: 'string' },
+            portfolioAngle: { type: 'string' },
+            watchlistAngle: { type: 'string' },
+            opportunityAngle: { type: 'string' },
+            primaryRecommendation: { type: 'string' },
+            playbook: boundedStringListSchema(2, 4),
+            catalysts: boundedStringListSchema(1, 4),
+            watchItems: boundedStringListSchema(1, 4),
+            invalidationSignals: boundedStringListSchema(1, 4),
+            supportingEvidenceIds: boundedStringListSchema(1, 6),
+          },
+          required: [
+            'id',
+            'summary',
+            'thesis',
+            'whyItMatters',
+            'actionSummary',
+            'portfolioAngle',
+            'watchlistAngle',
+            'opportunityAngle',
+            'primaryRecommendation',
+            'playbook',
+            'catalysts',
+            'watchItems',
+            'invalidationSignals',
+            'supportingEvidenceIds',
+          ],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ['themes'],
+    additionalProperties: false,
+  },
+}
 
 function hoursToGdeltTimespan(hours: number): string {
   if (hours <= 72) return `${hours}h`
@@ -314,6 +459,41 @@ function sendJSON(res: any, data: unknown, status = 200) {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function sendError(res: any, msg: string, status = 500) {
   sendJSON(res, { error: msg }, status)
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchOpenAIResponse(req: any, res: any, apiKey: string, body: unknown): Promise<Response> {
+  const controller = new AbortController()
+  let timedOut = false
+  const abortForDisconnect = () => controller.abort()
+  const timeoutId = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, OPPORTUNITIES_OPENAI_TIMEOUT_MS)
+
+  req.once('aborted', abortForDisconnect)
+  res.once('close', abortForDisconnect)
+
+  try {
+    return await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+  } catch (error) {
+    if (timedOut) {
+      throw new Error(`OpenAI request timed out after ${OPPORTUNITIES_OPENAI_TIMEOUT_MS / 1000} seconds.`)
+    }
+    throw error
+  } finally {
+    clearTimeout(timeoutId)
+    req.removeListener('aborted', abortForDisconnect)
+    res.removeListener('close', abortForDisconnect)
+  }
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T, label: string): Promise<T> {
@@ -4446,6 +4626,8 @@ function marketDataMiddleware(): Plugin {
                     const sourceLabel = typeof item.sourceLabel === 'string' ? item.sourceLabel.trim() : ''
                     const title = typeof item.title === 'string' ? item.title.trim() : ''
                     const detail = typeof item.detail === 'string' ? item.detail.trim() : ''
+                    const context = typeof item.context === 'string' ? item.context.trim().slice(0, 480) : ''
+                    const url = typeof item.url === 'string' ? item.url.trim() : ''
                     const timestamp = typeof item.timestamp === 'number'
                       ? item.timestamp
                       : Number.parseInt(String(item.timestamp ?? '0'), 10)
@@ -4460,7 +4642,7 @@ function marketDataMiddleware(): Plugin {
                       ? Array.from(new Set(item.keywords.map((value: unknown) => String(value ?? '').trim()).filter(Boolean))).slice(0, 8)
                       : []
 
-                    return [{ id, type, sourceLabel, title, detail, timestamp, assets, countries, keywords }]
+                    return [{ id, type, sourceLabel, title, detail, context, url, timestamp, assets, countries, keywords }]
                   })
                   .slice(0, 90)
               : []
@@ -4490,6 +4672,11 @@ function marketDataMiddleware(): Plugin {
             if (!rawSignals.length) return sendError(res, 'At least one normalized signal is required.', 400)
 
             const signalIds = new Set(rawSignals.map((signal) => signal.id))
+            const allowedAssets = new Set([
+              ...rawSignals.flatMap((signal) => signal.assets),
+              ...portfolio.map((holding) => holding.symbol),
+              ...watchlist,
+            ])
             const firstInput = [
               'Identify the most decision-useful investable themes from this multi-source market signal snapshot.',
               'The themes must emerge from the signals themselves, not from a fixed theme list.',
@@ -4497,7 +4684,8 @@ function marketDataMiddleware(): Plugin {
               '{"themes":[{"id":"theme-1","label":"Theme label","summary":"One-sentence summary.","thesis":"Short thesis.","signalIds":["..."],"linkedAssets":["NVDA"],"confidence":78,"importance":81}]}',
               'Rules:',
               '- Return 3 to 5 themes only.',
-              '- Every theme must be supported by at least 2 signalIds from the provided signal list unless the evidence is unusually strong and market-relevant.',
+              '- Every theme must be supported by at least 2 signalIds from the provided signal list.',
+              '- Prefer themes supported by more than one source type. If the source mix is narrow, say so plainly.',
               '- label should be concise and human-readable.',
               '- summary should explain what is happening now.',
               '- thesis should explain the market interpretation in plain English.',
@@ -4513,17 +4701,12 @@ function marketDataMiddleware(): Plugin {
               }, null, 2),
             ].join('\n')
 
-            const firstPass = await fetch('https://api.openai.com/v1/responses', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${apiKey}`,
-              },
-              body: JSON.stringify({
-                model,
-                instructions: [DEFAULT_THEME_DISCOVERY_SYSTEM_PROMPT, systemPrompt].filter(Boolean).join('\n\n'),
-                input: firstInput,
-              }),
+            const firstPass = await fetchOpenAIResponse(req, res, apiKey, {
+              model,
+              instructions: [DEFAULT_THEME_DISCOVERY_SYSTEM_PROMPT, systemPrompt].filter(Boolean).join('\n\n'),
+              input: firstInput,
+              max_output_tokens: 1800,
+              text: { format: DISCOVERY_THEME_OUTPUT_FORMAT },
             })
 
             const firstPayload = await firstPass.json().catch(() => null)
@@ -4546,14 +4729,14 @@ function marketDataMiddleware(): Plugin {
                     ? Array.from(new Set(theme.signalIds.map((value: unknown) => String(value ?? '').trim()).filter((value: string) => signalIds.has(value))))
                     : []
                   const linkedAssets = Array.isArray(theme?.linkedAssets)
-                    ? Array.from(new Set(theme.linkedAssets.map((value: unknown) => String(value ?? '').trim().toUpperCase()).filter(Boolean))).slice(0, 8)
+                    ? Array.from(new Set(theme.linkedAssets.map((value: unknown) => String(value ?? '').trim().toUpperCase()).filter((value: string) => allowedAssets.has(value)))).slice(0, 8)
                     : []
                   const confidenceRaw = typeof theme?.confidence === 'number' ? theme.confidence : Number.parseInt(String(theme?.confidence ?? '0'), 10)
                   const importanceRaw = typeof theme?.importance === 'number' ? theme.importance : Number.parseInt(String(theme?.importance ?? '0'), 10)
                   const confidence = Number.isFinite(confidenceRaw) ? Math.max(0, Math.min(100, Math.round(confidenceRaw))) : 0
                   const importance = Number.isFinite(importanceRaw) ? Math.max(0, Math.min(100, Math.round(importanceRaw))) : 0
 
-                  if (!label || !summary || !thesis || signalRefs.length === 0) return []
+                  if (!label || !summary || !thesis || signalRefs.length < 2) return []
 
                   return [{ id, label, summary, thesis, signalIds: signalRefs, linkedAssets, confidence, importance }]
                 }).slice(0, 5)
@@ -4566,7 +4749,7 @@ function marketDataMiddleware(): Plugin {
             const secondInput = [
               'Write actionable guidance for these discovered themes.',
               'Return strict JSON only in this exact shape:',
-              '{"themes":[{"id":"theme-1","whyItMatters":"...","actionSummary":"...","portfolioAngle":"...","watchlistAngle":"...","opportunityAngle":"...","primaryRecommendation":"...","playbook":["..."],"catalysts":["..."],"watchItems":["..."],"invalidationSignals":["..."]}]}',
+              '{"themes":[{"id":"theme-1","whyItMatters":"...","actionSummary":"...","portfolioAngle":"...","watchlistAngle":"...","opportunityAngle":"...","primaryRecommendation":"...","playbook":["..."],"catalysts":["..."],"watchItems":["..."],"invalidationSignals":["..."],"supportingSignalIds":["..."]}]}',
               'Rules:',
               '- Be concrete and investor-oriented, but do not give personalized investment advice or guarantee outcomes.',
               '- portfolioAngle should explain the implication for actual current holdings only.',
@@ -4575,6 +4758,8 @@ function marketDataMiddleware(): Plugin {
               '- primaryRecommendation should be one clear next move.',
               '- playbook should contain 2 to 4 concise next steps.',
               '- catalysts, watchItems, and invalidationSignals should each contain 1 to 4 concise items.',
+              '- supportingSignalIds must identify the supplied signals that directly support the guidance.',
+              '- Do not state a catalyst, company implication, or recommendation that is not supported by those signals or the supplied exposure.',
               '- Use only the evidence inside each theme bundle.',
               '',
               JSON.stringify({
@@ -4590,6 +4775,8 @@ function marketDataMiddleware(): Plugin {
                       sourceLabel: signal.sourceLabel,
                       title: signal.title,
                       detail: signal.detail,
+                      context: signal.context,
+                      url: signal.url,
                       timestamp: signal.timestamp,
                       assets: signal.assets,
                       countries: signal.countries,
@@ -4598,17 +4785,12 @@ function marketDataMiddleware(): Plugin {
               }, null, 2),
             ].join('\n')
 
-            const secondPass = await fetch('https://api.openai.com/v1/responses', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${apiKey}`,
-              },
-              body: JSON.stringify({
-                model,
-                instructions: [DEFAULT_THEME_DISCOVERY_RECOMMENDATION_SYSTEM_PROMPT, systemPrompt].filter(Boolean).join('\n\n'),
-                input: secondInput,
-              }),
+            const secondPass = await fetchOpenAIResponse(req, res, apiKey, {
+              model,
+              instructions: [DEFAULT_THEME_DISCOVERY_RECOMMENDATION_SYSTEM_PROMPT, systemPrompt].filter(Boolean).join('\n\n'),
+              input: secondInput,
+              max_output_tokens: 2400,
+              text: { format: DISCOVERY_GUIDANCE_OUTPUT_FORMAT },
             })
 
             const secondPayload = await secondPass.json().catch(() => null)
@@ -4625,11 +4807,19 @@ function marketDataMiddleware(): Plugin {
               Array.isArray(secondParsed?.themes)
                 ? secondParsed.themes.flatMap((theme) => {
                     const id = typeof theme?.id === 'string' ? theme.id.trim() : ''
-                    if (!id) return []
+                    const sourceTheme = firstThemes.find((candidate) => candidate.id === id)
+                    if (!id || !sourceTheme) return []
                     const getText = (value: unknown) => typeof value === 'string' ? value.trim() : ''
                     const toList = (value: unknown) => Array.isArray(value)
                       ? Array.from(new Set(value.map((entry) => String(entry ?? '').trim()).filter(Boolean))).slice(0, 4)
                       : []
+                    const supportingSignalIds = Array.isArray(theme?.supportingSignalIds)
+                      ? Array.from(new Set(theme.supportingSignalIds
+                          .map((entry: unknown) => String(entry ?? '').trim())
+                          .filter((signalId: string) => sourceTheme.signalIds.includes(signalId))))
+                          .slice(0, 6)
+                      : []
+                    if (supportingSignalIds.length === 0) return []
 
                     return [[id, {
                       whyItMatters: getText(theme?.whyItMatters),
@@ -4642,6 +4832,7 @@ function marketDataMiddleware(): Plugin {
                       catalysts: toList(theme?.catalysts),
                       watchItems: toList(theme?.watchItems),
                       invalidationSignals: toList(theme?.invalidationSignals),
+                      supportingSignalIds,
                     }] as const]
                   })
                 : []
@@ -4751,10 +4942,12 @@ function marketDataMiddleware(): Plugin {
                         const type = typeof item?.type === 'string' ? item.type.trim() : ''
                         const title = typeof item?.title === 'string' ? item.title.trim() : ''
                         const detail = typeof item?.detail === 'string' ? item.detail.trim() : ''
+                        const context = typeof item?.context === 'string' ? item.context.trim().slice(0, 480) : ''
                         const sourceLabel = typeof item?.sourceLabel === 'string' ? item.sourceLabel.trim() : ''
+                        const url = typeof item?.url === 'string' ? item.url.trim() : ''
                         const timestamp = typeof item?.timestamp === 'number' ? item.timestamp : Number.parseInt(String(item?.timestamp ?? '0'), 10)
                         if (!evidenceId || !title) return []
-                        return [{ id: evidenceId, type, title, detail, sourceLabel, timestamp: Number.isFinite(timestamp) ? timestamp : 0 }]
+                        return [{ id: evidenceId, type, title, detail, context, sourceLabel, url, timestamp: Number.isFinite(timestamp) ? timestamp : 0 }]
                       }).slice(0, 6)
                     : []
 
@@ -4806,7 +4999,7 @@ function marketDataMiddleware(): Plugin {
               'The theme labels are fixed because they come from topics chosen by the user.',
               'Do not merge, rename, drop, or invent themes.',
               'Return strict JSON only in this exact shape:',
-              '{"themes":[{"id":"theme-1","summary":"...","thesis":"...","whyItMatters":"...","actionSummary":"...","portfolioAngle":"...","watchlistAngle":"...","opportunityAngle":"...","primaryRecommendation":"...","playbook":["..."],"catalysts":["..."],"watchItems":["..."],"invalidationSignals":["..."]}]}',
+              '{"themes":[{"id":"theme-1","summary":"...","thesis":"...","whyItMatters":"...","actionSummary":"...","portfolioAngle":"...","watchlistAngle":"...","opportunityAngle":"...","primaryRecommendation":"...","playbook":["..."],"catalysts":["..."],"watchItems":["..."],"invalidationSignals":["..."],"supportingEvidenceIds":["..."]}]}',
               'Rules:',
               '- Keep each theme aligned to its existing label and evidence bundle.',
               '- summary should explain what is happening now for that chosen topic.',
@@ -4817,6 +5010,9 @@ function marketDataMiddleware(): Plugin {
               '- primaryRecommendation should be one clear next move.',
               '- playbook should contain 2 to 4 concise next steps.',
               '- catalysts, watchItems, and invalidationSignals should each contain 1 to 4 concise items.',
+              '- supportingEvidenceIds must identify the supplied evidence items that directly support the guidance.',
+              '- If the evidence comes from only one source type, explicitly describe it as an early lead rather than confirmed.',
+              '- Do not introduce companies, catalysts, or claims absent from the supplied evidence and exposure context.',
               '- Use only the supplied evidence and exposure context.',
               '',
               JSON.stringify({
@@ -4828,17 +5024,12 @@ function marketDataMiddleware(): Plugin {
               }, null, 2),
             ].join('\n')
 
-            const openAIResponse = await fetch('https://api.openai.com/v1/responses', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${apiKey}`,
-              },
-              body: JSON.stringify({
-                model,
-                instructions: [DEFAULT_TOPIC_THEME_GUIDANCE_SYSTEM_PROMPT, DEFAULT_THEME_DISCOVERY_RECOMMENDATION_SYSTEM_PROMPT, systemPrompt].filter(Boolean).join('\n\n'),
-                input,
-              }),
+            const openAIResponse = await fetchOpenAIResponse(req, res, apiKey, {
+              model,
+              instructions: [DEFAULT_TOPIC_THEME_GUIDANCE_SYSTEM_PROMPT, DEFAULT_THEME_DISCOVERY_RECOMMENDATION_SYSTEM_PROMPT, systemPrompt].filter(Boolean).join('\n\n'),
+              input,
+              max_output_tokens: 3000,
+              text: { format: TOPIC_GUIDANCE_OUTPUT_FORMAT },
             })
 
             const responsePayload = await openAIResponse.json().catch(() => null)
@@ -4852,15 +5043,24 @@ function marketDataMiddleware(): Plugin {
 
             const parsed = parseOpenAIJsonText<{ themes?: Array<any> }>(responseText)
             const themes = Array.isArray(parsed?.themes)
-              ? parsed.themes.flatMap((theme) => {
-                  const id = typeof theme?.id === 'string' ? theme.id.trim() : ''
-                  if (!id || !rawThemes.some((candidate) => candidate.id === id)) return []
-                  const getText = (value: unknown) => typeof value === 'string' ? value.trim() : ''
-                  const toList = (value: unknown) => Array.isArray(value)
-                    ? Array.from(new Set(value.map((entry) => String(entry ?? '').trim()).filter(Boolean))).slice(0, 4)
-                    : []
+                ? parsed.themes.flatMap((theme) => {
+                    const id = typeof theme?.id === 'string' ? theme.id.trim() : ''
+                    const sourceTheme = rawThemes.find((candidate) => candidate.id === id)
+                    if (!id || !sourceTheme) return []
+                    const getText = (value: unknown) => typeof value === 'string' ? value.trim() : ''
+                    const toList = (value: unknown) => Array.isArray(value)
+                      ? Array.from(new Set(value.map((entry) => String(entry ?? '').trim()).filter(Boolean))).slice(0, 4)
+                      : []
+                    const evidenceIds = new Set(sourceTheme.evidence.map((item: any) => item.id))
+                    const supportingEvidenceIds = Array.isArray(theme?.supportingEvidenceIds)
+                      ? Array.from(new Set(theme.supportingEvidenceIds
+                          .map((entry: unknown) => String(entry ?? '').trim())
+                          .filter((evidenceId: string) => evidenceIds.has(evidenceId))))
+                          .slice(0, 6)
+                      : []
+                    if (supportingEvidenceIds.length === 0) return []
 
-                  return [{
+                    return [{
                     id,
                     summary: getText(theme?.summary),
                     thesis: getText(theme?.thesis),
@@ -4872,9 +5072,10 @@ function marketDataMiddleware(): Plugin {
                     primaryRecommendation: getText(theme?.primaryRecommendation),
                     playbook: toList(theme?.playbook),
                     catalysts: toList(theme?.catalysts),
-                    watchItems: toList(theme?.watchItems),
-                    invalidationSignals: toList(theme?.invalidationSignals),
-                  }]
+                      watchItems: toList(theme?.watchItems),
+                      invalidationSignals: toList(theme?.invalidationSignals),
+                      supportingEvidenceIds,
+                    }]
                 })
               : []
 

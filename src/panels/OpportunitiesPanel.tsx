@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Bug, Loader2, Orbit, Radar, RefreshCw, Square } from 'lucide-react';
 import {
-  fetchCountryNewsCounts,
   fetchMacroReleaseCalendar,
   fetchNewsFeed,
   fetchOpenAIKeyStatus,
@@ -12,12 +11,13 @@ import {
   getOpenAIDebugPayload,
   generateThemeDiscovery,
   generateTopicThemeGuidance,
+  readCachedGeopoliticalMapCountryCounts,
   searchNewsArchive,
 } from '../api/finance';
 import type { OpenAIDebugPayloadEntry } from '../api/finance';
 import { ThemeInsightCard, ThemeStatCard } from '../components/ThemeInsightCard';
 import { useTerminalStore } from '../store/useTerminalStore';
-import type { MarketSentimentSnapshot, NewsItem, Quote } from '../types';
+import type { CountryNewsCount, MarketSentimentSnapshot, NewsItem, Quote } from '../types';
 import { fmt } from '../utils/formatters';
 import { buildTimestampedJsonFilename, downloadJsonFile } from '../utils/downloadJson';
 import {
@@ -43,7 +43,7 @@ const TOPIC_STORAGE_KEY = 'bterminal-hybrid-opportunity-topics-v1';
 const DISCOVERY_CACHE_KEY = 'bterminal-hybrid-discovery-cache-v1';
 const TOPIC_CACHE_KEY_PREFIX = 'bterminal-hybrid-topic-cache-v1';
 const HYBRID_CACHE_TTL_MS = 30 * 60 * 1000;
-const BASE_INPUT_QUERY_STALE_MS = 15 * 1000;
+const BASE_INPUT_QUERY_STALE_MS = 5 * 60 * 1000;
 const BASE_INPUT_FETCH_TIMEOUT_MS = 12_000;
 const TOPIC_NEWS_FETCH_TIMEOUT_MS = 10_000;
 const DEFAULT_TOPIC_INPUT = 'Energy security, semiconductor capex, shipping disruptions, defense spending';
@@ -67,8 +67,10 @@ type BaseInput = {
   techNews: NewsItem[];
   economyNews: NewsItem[];
   energyNews: NewsItem[];
-  countryCounts: Awaited<ReturnType<typeof fetchCountryNewsCounts>>;
+  geopoliticsNews: NewsItem[];
+  countryCounts: CountryNewsCount[];
   predictions: Awaited<ReturnType<typeof fetchPredictionForecasts>>['forecasts'];
+  predictionsUpdatedAt?: string;
   sentiment: MarketSentimentSnapshot | null;
   calendarEvents: Awaited<ReturnType<typeof fetchMacroReleaseCalendar>>['events'];
   quotes: Quote[];
@@ -148,6 +150,27 @@ function topicCacheKey(topics: string[]): string {
   return `${TOPIC_CACHE_KEY_PREFIX}:${normalized || '__empty__'}`;
 }
 
+function opportunityContextKey(args: {
+  model: string;
+  portfolio: ReturnType<typeof useTerminalStore.getState>['portfolio'];
+  watchlist: string[];
+}): string {
+  const portfolioKey = args.portfolio
+    .map((position) => `${position.symbol.toUpperCase()}:${position.shares}:${position.avgCost}`)
+    .sort()
+    .join(',');
+  const watchlistKey = args.watchlist.map((symbol) => symbol.toUpperCase()).sort().join(',');
+  return [args.model.trim() || 'heuristic', portfolioKey || 'no-portfolio', watchlistKey || 'no-watchlist'].join('|');
+}
+
+function contextualDiscoveryCacheKey(contextKey: string): string {
+  return `${DISCOVERY_CACHE_KEY}:${contextKey}`;
+}
+
+function contextualTopicCacheKey(topics: string[], contextKey: string): string {
+  return `${topicCacheKey(topics)}:${contextKey}`;
+}
+
 function toYmd(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
@@ -188,9 +211,18 @@ async function fetchBaseInput(args: {
   toDate.setDate(toDate.getDate() + 14);
   const to = toYmd(toDate);
   const fallbackCalendar = { events: [] as never[] };
+  const symbols = Array.from(new Set([
+    ...args.quoteUniverse,
+    ...args.watchlist.map((symbol) => symbol.toUpperCase()),
+    ...args.portfolio.map((position) => position.symbol.toUpperCase()),
+  ]));
+  const cachedCountryCounts = readCachedGeopoliticalMapCountryCounts(LOOKBACK_HOURS, {
+    enableAI: false,
+    model: DEFAULT_GEOPOLITICS_OPENAI_MODEL,
+    includeHotspotSummaries: false,
+  }) ?? [];
 
   const [
-    countryCounts,
     predictionsSnapshot,
     sentiment,
     calendarData,
@@ -198,61 +230,37 @@ async function fetchBaseInput(args: {
     techNews,
     economyNews,
     energyNews,
+    geopoliticsNews,
+    quotes,
   ] = await Promise.all([
-    withTimeout(
-      fetchCountryNewsCounts('geopolitics', LOOKBACK_HOURS, {
-        enableAI: false,
-        model: DEFAULT_GEOPOLITICS_OPENAI_MODEL,
-        includeHotspotSummaries: false,
-      }).catch(() => []),
-      BASE_INPUT_FETCH_TIMEOUT_MS,
-      [],
-    ),
-    withTimeout(fetchPredictionForecasts(12).then((snapshot) => snapshot.forecasts).catch(() => []), BASE_INPUT_FETCH_TIMEOUT_MS, []),
+    withTimeout(fetchPredictionForecasts(12).catch(() => ({ forecasts: [], updatedAt: new Date().toISOString(), source: 'Unavailable' })), BASE_INPUT_FETCH_TIMEOUT_MS, { forecasts: [], updatedAt: new Date().toISOString(), source: 'Unavailable' }),
     withTimeout(fetchSentimentSnapshot().catch(() => null), BASE_INPUT_FETCH_TIMEOUT_MS, null),
     withTimeout(fetchMacroReleaseCalendar(from, to).catch(() => fallbackCalendar), BASE_INPUT_FETCH_TIMEOUT_MS, fallbackCalendar),
     withTimeout(fetchNewsFeed('markets', 'all', 24).catch(() => []), BASE_INPUT_FETCH_TIMEOUT_MS, []),
     withTimeout(fetchNewsFeed('technology', 'all', 18).catch(() => []), BASE_INPUT_FETCH_TIMEOUT_MS, []),
     withTimeout(fetchNewsFeed('economy', 'all', 18).catch(() => []), BASE_INPUT_FETCH_TIMEOUT_MS, []),
     withTimeout(fetchNewsFeed('energy', 'all', 18).catch(() => []), BASE_INPUT_FETCH_TIMEOUT_MS, []),
+    withTimeout(fetchNewsFeed('geopolitical tensions', 'all', 18).catch(() => []), BASE_INPUT_FETCH_TIMEOUT_MS, []),
+    symbols.length > 0
+      ? withTimeout(fetchQuotes(symbols).catch(() => []), BASE_INPUT_FETCH_TIMEOUT_MS, [])
+      : Promise.resolve([]),
   ]);
-
-  const symbols = Array.from(new Set([
-    ...args.quoteUniverse,
-    ...args.watchlist.map((symbol) => symbol.toUpperCase()),
-    ...args.portfolio.map((position) => position.symbol.toUpperCase()),
-  ]));
-  const quotes = symbols.length > 0
-    ? await withTimeout(fetchQuotes(symbols).catch(() => []), BASE_INPUT_FETCH_TIMEOUT_MS, [])
-    : [];
 
   return {
     marketNews,
     techNews,
     economyNews,
     energyNews,
-    countryCounts,
-    predictions: predictionsSnapshot,
+    geopoliticsNews,
+    countryCounts: cachedCountryCounts,
+    predictions: predictionsSnapshot.forecasts,
+    predictionsUpdatedAt: predictionsSnapshot.updatedAt,
     sentiment,
     calendarEvents: calendarData.events,
     portfolio: args.portfolio,
     watchlist: args.watchlist,
     quotes,
   };
-}
-
-function mergeQuotes(baseQuotes: Quote[], extraQuotes: Quote[]): Quote[] {
-  if (extraQuotes.length === 0) return baseQuotes;
-
-  const quoteBySymbol = new Map<string, Quote>();
-  for (const quote of baseQuotes) {
-    quoteBySymbol.set(quote.symbol.toUpperCase(), quote);
-  }
-  for (const quote of extraQuotes) {
-    quoteBySymbol.set(quote.symbol.toUpperCase(), quote);
-  }
-
-  return Array.from(quoteBySymbol.values());
 }
 
 function SectionEmptyState({
@@ -280,7 +288,7 @@ function SectionLoadingState({
   detail: string;
 }) {
   return (
-    <section className="rounded border border-terminal-border bg-terminal-panel p-5">
+    <section className="rounded border border-terminal-border bg-terminal-panel p-5" role="status" aria-live="polite">
       <div className="text-xs font-bold tracking-[0.2em] text-terminal-accent">{title}</div>
       <div className="mt-4 flex items-center gap-3 text-sm text-terminal-muted">
         <Loader2 size={16} className="animate-spin" />
@@ -303,13 +311,14 @@ function SectionErrorState({
   onRetry: () => void;
 }) {
   return (
-    <section className="rounded border border-terminal-border bg-terminal-panel p-5 space-y-3">
+    <section className="rounded border border-terminal-border bg-terminal-panel p-5 space-y-3" role="alert">
       <div className="flex items-center gap-2 text-terminal-accent text-sm font-bold tracking-wider">
         <AlertTriangle size={15} />
         {title}
       </div>
       <div className="text-sm text-terminal-muted">{body}</div>
       <button
+        type="button"
         onClick={onRetry}
         className="inline-flex items-center gap-2 rounded border border-terminal-border bg-terminal-elevated px-3 py-2 text-xs text-terminal-text hover:bg-terminal-hover transition-colors"
       >
@@ -322,14 +331,12 @@ function SectionErrorState({
 
 function ExperimentalFeatureNotice() {
   return (
-    <section className="mb-4 rounded border border-amber-400/35 bg-amber-400/10 p-4">
-      <div className="flex items-start gap-3">
-        <AlertTriangle size={16} className="mt-0.5 flex-shrink-0 text-amber-300" />
-        <div className="min-w-0">
-          <div className="text-xs font-bold tracking-[0.18em] text-amber-300">EXPERIMENTAL FEATURE</div>
-          <div className="mt-2 text-sm leading-relaxed text-terminal-muted">
-            This opportunity workspace is experimental. The generated themes and insights are not very good yet, can be noisy or wrong, and should be used with caution rather than treated as investment guidance.
-          </div>
+    <section className="rounded border border-amber-400/35 bg-amber-400/10 px-3 py-2">
+      <div className="flex items-center gap-2">
+        <AlertTriangle size={14} className="flex-shrink-0 text-amber-300" />
+        <div className="min-w-0 text-xs leading-relaxed text-terminal-muted">
+          <span className="font-bold tracking-[0.14em] text-amber-300">EXPERIMENTAL</span>
+          {' '}Treat themes as research leads. Verify the linked evidence before acting.
         </div>
       </div>
     </section>
@@ -364,7 +371,7 @@ function DiscoveryPane({
       <SectionLoadingState
         title="THEME DISCOVERY"
         step={loadingStep}
-        detail="This side is loading independently from the custom topic side."
+        detail="Building a local signal snapshot first; AI enrichment follows when enabled."
       />
     );
   }
@@ -381,40 +388,36 @@ function DiscoveryPane({
 
   if (!dashboard) return null;
 
-  const contentVisibilityClass = isPendingAiReveal
-    ? 'pointer-events-none select-none blur-[5px] opacity-50 saturate-[0.78]'
-    : 'blur-0 opacity-100 saturate-100';
-
   return (
-    <div className="relative rounded border border-terminal-border bg-terminal-panel overflow-hidden xl:min-h-0 xl:flex xl:flex-col">
+    <section
+      className="relative flex h-full min-h-0 flex-col overflow-hidden rounded border border-terminal-border bg-terminal-panel"
+      aria-busy={isRefreshing}
+      aria-labelledby="opportunities-discovery-title"
+    >
       {isPendingAiReveal && (
-        <div className="pointer-events-none absolute inset-x-4 top-28 z-10 flex justify-center">
-          <div className="rounded border border-terminal-accent/35 bg-black/78 px-3 py-2 text-[11px] font-bold tracking-[0.2em] text-terminal-accent shadow-[0_14px_36px_rgba(0,0,0,0.34)]">
-            AI ANALYSIS IN PROGRESS
+        <div className="pointer-events-none absolute right-3 top-3 z-10">
+          <div role="status" aria-live="polite" className="inline-flex items-center gap-2 rounded border border-terminal-accent/35 bg-black/78 px-3 py-2 text-[11px] font-bold tracking-[0.16em] text-terminal-accent shadow-lg">
+            <Loader2 size={12} className="animate-spin" />
+            AI ENRICHMENT RUNNING
           </div>
         </div>
       )}
       <div className="opportunities-discovery-header flex-shrink-0 border-b border-terminal-accent/25 px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className={`min-w-0 transition-all duration-300 ${contentVisibilityClass}`}>
+          <div className="min-w-0">
             <div className="flex items-center gap-2">
               <Orbit size={14} className="text-terminal-accent" />
-              <span className="text-terminal-accent text-xs font-bold tracking-[0.24em]">THEME DISCOVERY</span>
+              <h2 id="opportunities-discovery-title" className="text-terminal-accent text-xs font-bold tracking-[0.24em]">THEME DISCOVERY</h2>
               <span className="text-[11px] text-terminal-faint">Updated {new Date(dashboard.generatedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</span>
             </div>
-            <div className="opportunities-header-kicker mt-2 text-[11px] uppercase tracking-[0.18em]">
-              Built from live signals extracted across news, macro, sentiment, predictions, and geopolitics
-            </div>
-            <div className="mt-2 text-lg font-bold text-terminal-text">{dashboard.brief.headline}</div>
-            <div className="opportunities-header-summary mt-1 text-sm leading-relaxed">
-              {dashboard.brief.summary}
-              {' '}This side keeps the existing discovery behavior unchanged.
-            </div>
+            <div className="mt-2 text-base font-bold text-terminal-text">{dashboard.brief.headline}</div>
+            <div className="opportunities-header-summary mt-1 max-w-4xl text-xs leading-relaxed">{dashboard.brief.summary}</div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
             {isAiRefreshing && (
               <button
+                type="button"
                 onClick={onStop}
                 className="inline-flex items-center gap-2 rounded border border-terminal-negative/40 bg-terminal-negative/10 px-3 py-2 text-xs text-terminal-negative hover:bg-terminal-negative/15 transition-colors"
               >
@@ -423,6 +426,7 @@ function DiscoveryPane({
               </button>
             )}
             <button
+              type="button"
               onClick={onRetry}
               className="inline-flex items-center gap-2 rounded border border-terminal-border bg-terminal-panel px-3 py-2 text-xs text-terminal-text hover:bg-terminal-hover transition-colors"
             >
@@ -432,31 +436,36 @@ function DiscoveryPane({
           </div>
         </div>
 
-        <div className={`mt-4 grid gap-3 transition-all duration-300 md:grid-cols-2 xl:grid-cols-4 ${contentVisibilityClass}`}>
+      </div>
+
+      <div
+        className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 focus:outline-none focus-visible:ring-1 focus-visible:ring-terminal-accent"
+        role="region"
+        aria-label="Discovered opportunity themes"
+        tabIndex={0}
+      >
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
           <ThemeStatCard
             label="DISCOVERED THEMES"
             value={fmt.integer(dashboard.stats.clusterCount)}
-            detail="Top themes identified from the live multi-source snapshot."
+            detail="Themes in this snapshot."
           />
           <ThemeStatCard
-            label="RAW SIGNALS USED"
+            label="RAW SIGNALS"
             value={fmt.integer(dashboard.stats.signalCount)}
-            detail="Signals gathered independently from news, geopolitics, macro, prediction, and sentiment."
+            detail="Signals used."
           />
           <ThemeStatCard
-            label="PORTFOLIO RELEVANT"
+            label="EXPOSURE MATCHES"
             value={fmt.integer(dashboard.stats.portfolioRelevantCount)}
-            detail="Themes that already touch your holdings or watchlist."
+            detail="Portfolio or watchlist."
           />
           <ThemeStatCard
-            label="AVG SOURCE BREADTH"
+            label="SOURCE BREADTH"
             value={fmt.integer(dashboard.stats.avgSourceDiversity)}
-            detail="Average number of source types contributing to each displayed theme."
+            detail="Average source types."
           />
         </div>
-      </div>
-
-      <div className={`p-4 space-y-4 transition-all duration-300 xl:min-h-0 xl:flex-1 xl:overflow-y-auto ${contentVisibilityClass}`}>
         {dashboard.themes.map((theme) => (
           <ThemeInsightCard
             key={theme.id}
@@ -465,7 +474,7 @@ function DiscoveryPane({
           />
         ))}
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -507,7 +516,7 @@ function TopicPane({
       <SectionLoadingState
         title="TOPIC RESEARCH"
         step={loadingStep}
-        detail="This side reloads independently whenever the requested topics change."
+        detail="Searching only the topics you submitted, then validating live overlap."
       />
     );
   }
@@ -524,39 +533,36 @@ function TopicPane({
 
   if (!dashboard) return null;
 
-  const contentVisibilityClass = isPendingAiReveal
-    ? 'pointer-events-none select-none blur-[5px] opacity-50 saturate-[0.78]'
-    : 'blur-0 opacity-100 saturate-100';
-
   return (
-    <div className="relative rounded border border-terminal-border bg-terminal-panel overflow-hidden xl:min-h-0 xl:flex xl:flex-col">
+    <section
+      className="relative flex h-full min-h-0 flex-col overflow-hidden rounded border border-terminal-border bg-terminal-panel"
+      aria-busy={isRefreshing}
+      aria-labelledby="opportunities-topic-title"
+    >
       {isPendingAiReveal && (
-        <div className="pointer-events-none absolute inset-x-4 top-28 z-10 flex justify-center">
-          <div className="rounded border border-amber-400/35 bg-black/78 px-3 py-2 text-[11px] font-bold tracking-[0.2em] text-amber-300 shadow-[0_14px_36px_rgba(0,0,0,0.34)]">
-            AI ANALYSIS IN PROGRESS
+        <div className="pointer-events-none absolute right-3 top-3 z-10">
+          <div role="status" aria-live="polite" className="inline-flex items-center gap-2 rounded border border-amber-400/35 bg-black/78 px-3 py-2 text-[11px] font-bold tracking-[0.16em] text-amber-300 shadow-lg">
+            <Loader2 size={12} className="animate-spin" />
+            AI ENRICHMENT RUNNING
           </div>
         </div>
       )}
       <div className="opportunities-topic-header flex-shrink-0 border-b border-amber-400/25 px-4 py-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className={`min-w-0 transition-all duration-300 ${contentVisibilityClass}`}>
+          <div className="min-w-0">
             <div className="flex items-center gap-2">
               <Radar size={14} className="text-terminal-accent" />
-              <span className="text-terminal-accent text-xs font-bold tracking-[0.24em]">TOPIC RESEARCH</span>
+              <h2 id="opportunities-topic-title" className="text-terminal-accent text-xs font-bold tracking-[0.24em]">TOPIC RESEARCH</h2>
               <span className="text-[11px] text-terminal-faint">Updated {new Date(dashboard.generatedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</span>
             </div>
-            <div className="opportunities-header-kicker mt-2 text-[11px] uppercase tracking-[0.18em]">
-              Choose your topics and the system will generate matching theme cards
-            </div>
-            <div className="mt-2 text-lg font-bold text-terminal-text">{dashboard.brief.headline}</div>
-            <div className="opportunities-header-summary mt-1 text-sm leading-relaxed">
-              {dashboard.brief.summary}
-            </div>
+            <div className="mt-2 text-base font-bold text-terminal-text">{dashboard.brief.headline}</div>
+            <div className="opportunities-header-summary mt-1 max-w-4xl text-xs leading-relaxed">{dashboard.brief.summary}</div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
             {isAiRefreshing && (
               <button
+                type="button"
                 onClick={onStop}
                 className="inline-flex items-center gap-2 rounded border border-terminal-negative/40 bg-terminal-negative/10 px-3 py-2 text-xs text-terminal-negative hover:bg-terminal-negative/15 transition-colors"
               >
@@ -565,12 +571,14 @@ function TopicPane({
               </button>
             )}
             <button
+              type="button"
               onClick={onResetTopics}
               className="inline-flex items-center gap-2 rounded border border-terminal-border bg-terminal-panel px-3 py-2 text-xs text-terminal-text hover:bg-terminal-hover transition-colors"
             >
               RESET TOPICS
             </button>
             <button
+              type="button"
               onClick={onRetry}
               className="inline-flex items-center gap-2 rounded border border-terminal-border bg-terminal-panel px-3 py-2 text-xs text-terminal-text hover:bg-terminal-hover transition-colors"
             >
@@ -580,11 +588,12 @@ function TopicPane({
           </div>
         </div>
 
-        <div className={`mt-4 space-y-3 transition-all duration-300 ${contentVisibilityClass}`}>
+        <div className="mt-3 space-y-2">
           <div>
             <div className="text-[10px] tracking-[0.2em] text-terminal-faint">TYPE TOPICS</div>
             <div className="mt-2 flex flex-col gap-2 sm:flex-row">
               <input
+                aria-label="Topics to research"
                 value={topicInput}
                 onChange={(event) => onTopicInputChange(event.target.value)}
                 onKeyDown={(event) => {
@@ -597,6 +606,7 @@ function TopicPane({
                 className="min-w-0 flex-1 rounded border border-terminal-border bg-terminal-panel px-3 py-2 text-sm text-terminal-text placeholder:text-terminal-faint focus:border-terminal-accent/60 focus:outline-none"
               />
               <button
+                type="button"
                 onClick={onApplyTopics}
                 className="rounded border border-terminal-border bg-terminal-panel px-3 py-2 text-xs font-medium text-terminal-text hover:bg-terminal-hover transition-colors"
               >
@@ -621,31 +631,38 @@ function TopicPane({
           )}
         </div>
 
-        <div className={`mt-4 grid gap-3 transition-all duration-300 md:grid-cols-2 xl:grid-cols-4 ${contentVisibilityClass}`}>
-          <ThemeStatCard
-            label="REQUESTED TOPICS"
-            value={fmt.integer(dashboard.stats.requestedTopicCount)}
-            detail="Topics currently coming from your own keyword list."
-          />
-          <ThemeStatCard
-            label="MATCHED THEMES"
-            value={fmt.integer(dashboard.stats.matchedTopicCount)}
-            detail="Requested topics that produced enough live overlap to display."
-          />
-          <ThemeStatCard
-            label="PORTFOLIO RELEVANT"
-            value={fmt.integer(dashboard.stats.portfolioRelevantCount)}
-            detail="Custom topic themes that already touch holdings or the watchlist."
-          />
-          <ThemeStatCard
-            label="AVG SOURCE BREADTH"
-            value={fmt.integer(dashboard.stats.avgSourceDiversity)}
-            detail="Average number of source types contributing to each custom topic theme."
-          />
-        </div>
       </div>
 
-      <div className={`p-4 space-y-4 transition-all duration-300 xl:min-h-0 xl:flex-1 xl:overflow-y-auto ${contentVisibilityClass}`}>
+      <div
+        className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 focus:outline-none focus-visible:ring-1 focus-visible:ring-terminal-accent"
+        role="region"
+        aria-label="Topic-specific opportunity themes"
+        tabIndex={0}
+      >
+        {dashboard.requestedTopics.length > 0 && (
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+            <ThemeStatCard
+              label="REQUESTED"
+              value={fmt.integer(dashboard.stats.requestedTopicCount)}
+              detail="Submitted topics."
+            />
+            <ThemeStatCard
+              label="MATCHED"
+              value={fmt.integer(dashboard.stats.matchedTopicCount)}
+              detail="Evidence-qualified themes."
+            />
+            <ThemeStatCard
+              label="EXPOSURE MATCHES"
+              value={fmt.integer(dashboard.stats.portfolioRelevantCount)}
+              detail="Portfolio or watchlist."
+            />
+            <ThemeStatCard
+              label="SOURCE BREADTH"
+              value={fmt.integer(dashboard.stats.avgSourceDiversity)}
+              detail="Average source types."
+            />
+          </div>
+        )}
         {dashboard.requestedTopics.length === 0 ? (
           <SectionEmptyState
             title="NO TOPICS SELECTED"
@@ -666,7 +683,7 @@ function TopicPane({
           />
         )}
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -674,19 +691,35 @@ export function OpportunitiesPanel() {
   const { portfolio, watchlist, setActivePanel, openAISettings, updateOpenAISettings, debugMode } = useTerminalStore();
   const queryClient = useQueryClient();
   const quoteUniverse = useMemo(() => getDiscoveryAssetUniverse(), []);
+  const [activeWorkspace, setActiveWorkspace] = useState<'discovery' | 'topics'>('discovery');
   const [discoveryLoadingStepIndex, setDiscoveryLoadingStepIndex] = useState(0);
   const [topicLoadingStepIndex, setTopicLoadingStepIndex] = useState(0);
   const [showPromptDebug, setShowPromptDebug] = useState(false);
   const [showPayloadDebug, setShowPayloadDebug] = useState(false);
   const [topicInput, setTopicInput] = useState(() => getInitialTopicInput());
-  const [appliedTopics, setAppliedTopics] = useState(() => parseTopicInput(getInitialTopicInput()));
+  const [appliedTopics, setAppliedTopics] = useState<string[]>([]);
   const [discoveryAiPaused, setDiscoveryAiPaused] = useState(false);
   const [topicAiPaused, setTopicAiPaused] = useState(false);
   const aiEnabledForOpportunities = openAISettings.hasStoredApiKey && Boolean(openAISettings.model.trim());
-  const topicStorageKey = useMemo(() => topicCacheKey(appliedTopics), [appliedTopics]);
+  const opportunityCacheContext = useMemo(
+    () => opportunityContextKey({
+      model: aiEnabledForOpportunities ? openAISettings.model : '',
+      portfolio,
+      watchlist,
+    }),
+    [aiEnabledForOpportunities, openAISettings.model, portfolio, watchlist]
+  );
+  const discoveryStorageKey = useMemo(
+    () => contextualDiscoveryCacheKey(opportunityCacheContext),
+    [opportunityCacheContext]
+  );
+  const topicStorageKey = useMemo(
+    () => contextualTopicCacheKey(appliedTopics, opportunityCacheContext),
+    [appliedTopics, opportunityCacheContext]
+  );
   const cachedDiscoveryDashboard = useMemo(
-    () => readFreshCache<DiscoveryDashboard>(DISCOVERY_CACHE_KEY),
-    []
+    () => readFreshCache<DiscoveryDashboard>(discoveryStorageKey),
+    [discoveryStorageKey]
   );
   const cachedTopicDashboard = useMemo(() => {
     if (appliedTopics.length === 0) return createEmptyTopicDashboard();
@@ -750,7 +783,7 @@ export function OpportunitiesPanel() {
   }, [keyStatus?.configured, openAISettings.hasStoredApiKey, updateOpenAISettings]);
 
   const discoveryQuery = useQuery({
-    queryKey: ['hybrid-opportunities-discovery'],
+    queryKey: ['hybrid-opportunities-discovery', opportunityCacheContext],
     queryFn: async () => {
       const baseInput = await queryClient.fetchQuery({
         queryKey: baseInputQueryKey,
@@ -765,7 +798,7 @@ export function OpportunitiesPanel() {
 
       return buildDiscoveryDashboard(baseInput);
     },
-    enabled: cachedDiscoveryDashboard == null || aiEnabledForOpportunities,
+    enabled: cachedDiscoveryDashboard == null,
     staleTime: HYBRID_CACHE_TTL_MS,
     gcTime: HYBRID_CACHE_TTL_MS * 2,
     refetchOnMount: false,
@@ -836,23 +869,9 @@ export function OpportunitiesPanel() {
         }),
       ]);
       const topicNewsByTopic = Object.fromEntries(topicNewsEntries);
-      const topicTickers = topicNewsEntries.flatMap(([, stories]) => stories.flatMap((story) => story.tickers ?? []));
-      const knownSymbols = new Set(baseInput.quotes.map((quote) => quote.symbol.toUpperCase()));
-      const additionalSymbols = Array.from(new Set(
-        topicTickers
-          .map((symbol) => symbol.trim().toUpperCase())
-          .filter((symbol) => symbol.length > 0 && !knownSymbols.has(symbol))
-      ));
-      const additionalQuotes = additionalSymbols.length > 0
-        ? await withTimeout(fetchQuotes(additionalSymbols).catch(() => []), TOPIC_NEWS_FETCH_TIMEOUT_MS, [])
-        : [];
-      const keywordInput = additionalQuotes.length > 0
-        ? { ...baseInput, quotes: mergeQuotes(baseInput.quotes, additionalQuotes) }
-        : baseInput;
-
-      return buildKeywordThemeDashboard(keywordInput, appliedTopics, topicNewsByTopic);
+      return buildKeywordThemeDashboard(baseInput, appliedTopics, topicNewsByTopic);
     },
-    enabled: appliedTopics.length > 0 && (cachedTopicDashboard == null || aiEnabledForOpportunities),
+    enabled: appliedTopics.length > 0 && cachedTopicDashboard == null,
     staleTime: HYBRID_CACHE_TTL_MS,
     gcTime: HYBRID_CACHE_TTL_MS * 2,
     refetchOnMount: false,
@@ -893,9 +912,9 @@ export function OpportunitiesPanel() {
   useEffect(() => {
     const latestDiscoveryDashboard = discoveryAiQuery.data ?? discoveryQuery.data;
     if (latestDiscoveryDashboard) {
-      writeCache(DISCOVERY_CACHE_KEY, latestDiscoveryDashboard);
+      writeCache(discoveryStorageKey, latestDiscoveryDashboard);
     }
-  }, [discoveryAiQuery.data, discoveryQuery.data]);
+  }, [discoveryAiQuery.data, discoveryQuery.data, discoveryStorageKey]);
 
   useEffect(() => {
     const latestTopicDashboard = topicAiQuery.data ?? topicQuery.data;
@@ -928,44 +947,59 @@ export function OpportunitiesPanel() {
   const discoveryPendingAiReveal = discoveryAiRefreshing && !discoveryAiQuery.data && Boolean(discoveryData);
   const topicPendingAiReveal = topicAiRefreshing && !topicAiQuery.data && Boolean(topicData);
 
-  if (!openAISettings.hasStoredApiKey) {
-    return (
-      <div className="h-full overflow-y-auto p-4">
-        <ExperimentalFeatureNotice />
-        <section className="rounded border border-terminal-border bg-terminal-panel p-6">
-          <div className="flex items-center gap-2 text-terminal-accent text-sm font-bold tracking-wider">
-            <AlertTriangle size={15} />
-            OPENAI KEY REQUIRED
-          </div>
-          <div className="mt-3 flex flex-wrap items-center gap-3">
-            <div className="text-sm leading-relaxed text-terminal-muted whitespace-nowrap">
-              The Opportunities workspace only populates after you add your own OpenAI API key. Open Connections & AI Settings to configure it locally, then come back here.
-            </div>
-            <button
-              onClick={() => setActivePanel('settings')}
-              className="inline-flex items-center gap-2 rounded border border-terminal-accent/40 bg-terminal-accent/10 px-3 py-2 text-xs text-terminal-accent hover:bg-terminal-accent/20 transition-colors"
-            >
-              OPEN SETTINGS
-            </button>
-            <button
-              onClick={() => setActivePanel('overview')}
-              className="inline-flex items-center gap-2 rounded border border-terminal-border bg-terminal-panel px-3 py-2 text-xs text-terminal-text hover:bg-terminal-hover transition-colors"
-            >
-              BACK TO OVERVIEW
-            </button>
-          </div>
-        </section>
-      </div>
-    );
-  }
-
   return (
-    <div className="h-full overflow-y-auto p-4 xl:overflow-hidden">
+    <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden p-4">
       <ExperimentalFeatureNotice />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="inline-flex rounded border border-terminal-border bg-terminal-panel p-1" role="tablist" aria-label="Opportunity workspace">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeWorkspace === 'discovery'}
+            onClick={() => setActiveWorkspace('discovery')}
+            className={`rounded px-3 py-1.5 text-xs font-bold tracking-[0.12em] transition-colors ${
+              activeWorkspace === 'discovery'
+                ? 'bg-terminal-accent/15 text-terminal-accent'
+                : 'text-terminal-muted hover:bg-terminal-hover hover:text-terminal-text'
+            }`}
+          >
+            DISCOVERED THEMES
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeWorkspace === 'topics'}
+            onClick={() => setActiveWorkspace('topics')}
+            className={`rounded px-3 py-1.5 text-xs font-bold tracking-[0.12em] transition-colors ${
+              activeWorkspace === 'topics'
+                ? 'bg-amber-400/15 text-amber-300'
+                : 'text-terminal-muted hover:bg-terminal-hover hover:text-terminal-text'
+            }`}
+          >
+            TOPIC RESEARCH{appliedTopics.length > 0 ? ` · ${appliedTopics.length}` : ''}
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2 text-[11px] text-terminal-faint">
+          <span className={`h-1.5 w-1.5 rounded-full ${aiEnabledForOpportunities ? 'bg-terminal-positive' : 'bg-terminal-muted'}`} />
+          {aiEnabledForOpportunities ? `AI enriched · ${openAISettings.model}` : 'Local analysis · AI enrichment off'}
+          {!openAISettings.hasStoredApiKey && (
+            <button
+              type="button"
+              onClick={() => setActivePanel('settings')}
+              className="rounded border border-terminal-border px-2 py-1 text-terminal-muted transition-colors hover:bg-terminal-hover hover:text-terminal-text"
+            >
+              ENABLE AI
+            </button>
+          )}
+        </div>
+      </div>
+
       {debugMode && (
-        <div className="mb-3 flex flex-col gap-2">
+        <div className="flex max-h-[38vh] flex-shrink-0 flex-col gap-2 overflow-y-auto">
           <div className="flex justify-end gap-2">
             <button
+              type="button"
               onClick={() => setShowPromptDebug((current) => !current)}
               className={`inline-flex items-center gap-2 rounded border px-3 py-1.5 text-xs transition-colors ${
                 showPromptDebug
@@ -977,6 +1011,7 @@ export function OpportunitiesPanel() {
               {showPromptDebug ? 'HIDE AI DEBUG' : 'SHOW AI DEBUG'}
             </button>
             <button
+              type="button"
               onClick={() => setShowPayloadDebug((current) => !current)}
               className={`inline-flex items-center gap-2 rounded border px-3 py-1.5 text-xs transition-colors ${
                 showPayloadDebug
@@ -1012,7 +1047,8 @@ export function OpportunitiesPanel() {
         </div>
       )}
 
-      <div className="grid gap-4 xl:h-full xl:min-h-0 xl:grid-cols-2">
+      <div className="min-h-0 flex-1">
+        {activeWorkspace === 'discovery' ? (
         <DiscoveryPane
           dashboard={discoveryData}
           isLoading={discoveryLoading}
@@ -1024,7 +1060,6 @@ export function OpportunitiesPanel() {
           onRetry={() => {
               setDiscoveryAiPaused(false);
               void discoveryQuery.refetch();
-              void discoveryAiQuery.refetch();
             }}
             onStop={() => {
               setDiscoveryAiPaused(true);
@@ -1032,7 +1067,7 @@ export function OpportunitiesPanel() {
             }}
             onOpenSymbol={(symbol) => setActivePanel('equity', symbol)}
           />
-
+        ) : (
           <TopicPane
             dashboard={topicData}
             topicInput={topicInput}
@@ -1057,7 +1092,6 @@ export function OpportunitiesPanel() {
           onRetry={() => {
               setTopicAiPaused(false);
               void topicQuery.refetch();
-              void topicAiQuery.refetch();
             }}
             onStop={() => {
               setTopicAiPaused(true);
@@ -1065,6 +1099,7 @@ export function OpportunitiesPanel() {
             }}
             onOpenSymbol={(symbol) => setActivePanel('equity', symbol)}
           />
+        )}
       </div>
     </div>
   );

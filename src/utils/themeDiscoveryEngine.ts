@@ -16,6 +16,7 @@ type DiscoveredSignal = {
   sourceLabel: string;
   title: string;
   detail: string;
+  context?: string;
   url?: string | null;
   timestamp: number;
   intensity: number;
@@ -31,6 +32,8 @@ export interface ThemeDiscoverySignalPayload {
   sourceLabel: string;
   title: string;
   detail: string;
+  context?: string;
+  url?: string | null;
   timestamp: number;
   assets: string[];
   countries: string[];
@@ -53,6 +56,7 @@ export interface DiscoveredThemeEvidence {
   type: SignalType;
   title: string;
   detail: string;
+  context?: string;
   sourceLabel: string;
   url?: string | null;
   timestamp: number;
@@ -173,7 +177,9 @@ export interface TopicThemeGuidanceSnapshot {
       type: SignalType;
       title: string;
       detail: string;
+      context?: string;
       sourceLabel: string;
+      url?: string | null;
       timestamp: number;
     }>;
     portfolioImpact: {
@@ -243,8 +249,10 @@ type DiscoveryInput = {
   techNews: NewsItem[];
   economyNews: NewsItem[];
   energyNews: NewsItem[];
+  geopoliticsNews: NewsItem[];
   countryCounts: CountryNewsCount[];
   predictions: PredictionForecast[];
+  predictionsUpdatedAt?: string;
   sentiment: MarketSentimentSnapshot | null;
   calendarEvents: CalendarEvent[];
   portfolio: PortfolioPosition[];
@@ -316,9 +324,16 @@ function upper(value: string): string {
 function normalizeText(text: string): string {
   return text
     .toLowerCase()
-    .replace(/[^a-z0-9\s/-]/g, ' ')
+    .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function includesTerm(text: string, term: string): boolean {
+  const normalizedText = normalizeText(text);
+  const normalizedTerm = normalizeText(term);
+  if (!normalizedText || !normalizedTerm) return false;
+  return ` ${normalizedText} `.includes(` ${normalizedTerm} `);
 }
 
 function toTitleCase(text: string): string {
@@ -359,9 +374,8 @@ function extractPhrases(...segments: Array<string | null | undefined>): string[]
 }
 
 function inferAssetsFromText(text: string, explicitTickers: string[] = []): string[] {
-  const normalized = normalizeText(text);
   const inferred = ASSET_HINTS.flatMap((entry) =>
-    entry.keywords.some((keyword) => normalized.includes(keyword))
+    entry.keywords.some((keyword) => includesTerm(text, keyword))
       ? entry.symbols
       : []
   );
@@ -411,7 +425,21 @@ function buildPortfolioHoldings(portfolio: PortfolioPosition[], quoteMap: Map<st
 }
 
 function signalAgeHours(timestamp: number): number {
-  return Math.max(0, (Date.now() - timestamp) / 3_600_000);
+  return Math.abs(Date.now() - timestamp) / 3_600_000;
+}
+
+function closestSignalTimestamp(cluster: Cluster): number {
+  return cluster.signals.reduce((closest, signal) => (
+    Math.abs(Date.now() - signal.timestamp) < Math.abs(Date.now() - closest)
+      ? signal.timestamp
+      : closest
+  ), cluster.signals[0]?.timestamp ?? Date.now());
+}
+
+function evidenceScoreCap(sourceDiversity: number): number {
+  if (sourceDiversity <= 1) return 72;
+  if (sourceDiversity === 2) return 88;
+  return 96;
 }
 
 function intersectionCount(left: Iterable<string>, right: Iterable<string>): number {
@@ -546,6 +574,7 @@ function buildNewsSignals(newsItems: NewsItem[], sourceLabel: string): Discovere
       sourceLabel,
       title: item.title,
       detail: item.publisher || sourceLabel,
+      context: item.snippet?.trim().slice(0, 480),
       url: item.link,
       timestamp: item.publishedAt,
       intensity: 45 + Math.min((item.tickers?.length ?? 0) * 6, 12),
@@ -585,7 +614,10 @@ function buildCountrySignals(countryCounts: CountryNewsCount[]): DiscoveredSigna
     });
 }
 
-function buildPredictionSignals(predictions: PredictionForecast[]): DiscoveredSignal[] {
+function buildPredictionSignals(predictions: PredictionForecast[], updatedAt?: string): DiscoveredSignal[] {
+  const snapshotTimestamp = updatedAt ? new Date(updatedAt).getTime() : Date.now();
+  const timestamp = Number.isFinite(snapshotTimestamp) ? snapshotTimestamp : Date.now();
+
   return predictions.map((prediction) => {
     const text = [
       prediction.question,
@@ -604,7 +636,7 @@ function buildPredictionSignals(predictions: PredictionForecast[]): DiscoveredSi
       title: prediction.question,
       detail: `${prediction.theme}${prediction.leadingProbability != null ? ` · ${Math.round(prediction.leadingProbability)}% ${prediction.leadingOutcome.toLowerCase()}` : ''}`,
       url: prediction.url,
-      timestamp: prediction.endDate ? new Date(prediction.endDate).getTime() : Date.now(),
+      timestamp,
       intensity: 44 + Math.min(Math.round((prediction.volume24hr ?? 0) / 25_000), 20),
       keywords: extractKeywords(text),
       phrases: extractPhrases(text),
@@ -776,6 +808,7 @@ function buildEvidence(cluster: Cluster): DiscoveredThemeEvidence[] {
       type: signal.type,
       title: signal.title,
       detail: signal.detail,
+      context: signal.context,
       sourceLabel: signal.sourceLabel,
       url: signal.url,
       timestamp: signal.timestamp,
@@ -1005,14 +1038,29 @@ function buildActionItems(
   return actions.slice(0, 4);
 }
 
+function dedupeSignalsByEvidence(signals: DiscoveredSignal[]): DiscoveredSignal[] {
+  const seen = new Set<string>();
+  return signals.filter((signal) => {
+    const evidenceKey = signal.url?.trim().toLowerCase() || normalizeText(signal.title);
+    if (!evidenceKey || seen.has(evidenceKey)) return false;
+    seen.add(evidenceKey);
+    return true;
+  });
+}
+
 function buildRawSignals(input: DiscoveryInput): DiscoveredSignal[] {
-  return [
+  const newsSignals = dedupeSignalsByEvidence([
     ...buildNewsSignals(input.marketNews, 'Markets'),
     ...buildNewsSignals(input.techNews, 'Technology'),
     ...buildNewsSignals(input.economyNews, 'Economy'),
     ...buildNewsSignals(input.energyNews, 'Energy'),
+    ...buildNewsSignals(input.geopoliticsNews, 'Geopolitics News'),
+  ]);
+
+  return [
+    ...newsSignals,
     ...buildCountrySignals(input.countryCounts),
-    ...buildPredictionSignals(input.predictions),
+    ...buildPredictionSignals(input.predictions, input.predictionsUpdatedAt),
     ...buildMacroSignals(input.calendarEvents),
     ...buildSentimentSignals(input.sentiment),
   ].filter((signal) => signal.keywords.length >= 2 || signal.assets.length > 0 || signal.countries.length > 0);
@@ -1025,6 +1073,8 @@ function toThemeSignalPayload(signal: DiscoveredSignal): ThemeDiscoverySignalPay
     sourceLabel: signal.sourceLabel,
     title: signal.title,
     detail: signal.detail,
+    context: signal.context,
+    url: signal.url,
     timestamp: signal.timestamp,
     assets: signal.assets,
     countries: signal.countries,
@@ -1103,15 +1153,17 @@ function prepareKeywordTopics(topics: string[]): KeywordTopic[] {
 }
 
 function scoreSignalForTopic(signal: DiscoveredSignal, topic: KeywordTopic): number {
-  const haystack = normalizeText(`${signal.title} ${signal.detail}`);
+  const haystack = `${signal.title} ${signal.detail} ${signal.context ?? ''}`;
   const sharedKeywords = intersectionCount(signal.keywords, topic.keywords);
   const sharedAssets = intersectionCount(signal.assets, topic.assets);
-  const exactPhrase = haystack.includes(topic.normalized) ? 1 : 0;
+  const exactPhrase = includesTerm(haystack, topic.normalized) ? 1 : 0;
   const keywordCoverage = topic.keywords.length > 1
-    ? topic.keywords.filter((keyword) => haystack.includes(keyword)).length / topic.keywords.length
+    ? topic.keywords.filter((keyword) => includesTerm(haystack, keyword)).length / topic.keywords.length
     : sharedKeywords > 0
       ? 1
       : 0;
+
+  if (exactPhrase === 0 && keywordCoverage === 0) return 0;
 
   return sharedKeywords * 2.4 +
     sharedAssets * 3.2 +
@@ -1142,7 +1194,7 @@ export function buildKeywordThemeDashboard(
     const topicSignals = buildNewsSignals(topicNewsByTopic[topic.raw] ?? [], `Topic Search · ${topic.label}`);
     const matches = dedupeSignals([...topicSignals, ...baseSignals])
       .map((signal) => ({ signal, score: scoreSignalForTopic(signal, topic) }))
-      .filter(({ signal, score }) => score >= 3.5 || intersectionCount(signal.assets, topic.assets) > 0 || intersectionCount(signal.keywords, topic.keywords) >= 2)
+      .filter(({ signal, score }) => score >= 3.5 || intersectionCount(signal.keywords, topic.keywords) >= 2)
       .sort((left, right) => {
         if (right.score !== left.score) return right.score - left.score;
         if (right.signal.timestamp !== left.signal.timestamp) return right.signal.timestamp - left.signal.timestamp;
@@ -1150,7 +1202,8 @@ export function buildKeywordThemeDashboard(
       })
       .slice(0, 14);
 
-    if (matches.length === 0) return [];
+    const strongMatches = matches.filter((match) => match.score >= 5.5);
+    if (matches.length < 2 || strongMatches.length === 0) return [];
 
     const cluster = buildClusterFromSignals(matches.map(({ signal }) => signal), `keyword-${index}-${slugifyTopic(topic.raw)}`);
     const linkedAssets = buildDisplayAssets(
@@ -1163,14 +1216,15 @@ export function buildKeywordThemeDashboard(
     const portfolioImpact = buildPortfolioImpact(linkedAssets.map((asset) => asset.symbol), holdings, watchlistSymbols);
     const signalCount = cluster.signals.length;
     const sourceDiversity = cluster.sourceCounts.size;
+    const scoreCap = evidenceScoreCap(sourceDiversity);
     const freshSignals = cluster.signals.filter((signal) => signalAgeHours(signal.timestamp) <= 24).length;
     const newestAgePenalty = clamp(24 - signalAgeHours(cluster.newestAt), 0, 24);
     const avgMatchScore = matches.reduce((sum, match) => sum + match.score, 0) / Math.max(matches.length, 1);
     const matchStrength = Math.round(clamp(avgMatchScore * 11 + matches.filter((match) => match.score >= 7).length * 4, 18, 100));
-    const emergenceScore = Math.round(clamp(signalCount * 8 + freshSignals * 11 + newestAgePenalty * 1.2 + cluster.totalIntensity * 0.06 + matchStrength * 0.18, 18, 100));
-    const breadthScore = Math.round(clamp(sourceDiversity * 18 + topKeys(cluster.keywordCounts, 10).length * 2 + linkedAssets.length * 5 + Math.min(signalCount, 6) * 4, 18, 100));
-    const urgencyScore = Math.round(clamp(34 + freshSignals * 10 + buildCatalysts(cluster).length * 10 + newestAgePenalty * 1.6 + Math.min(avgMatchScore * 4, 12), 20, 100));
-    const confidenceScore = Math.round(clamp(matchStrength * 0.45 + sourceDiversity * 12 + signalCount * 4 + cluster.totalIntensity * 0.04, 22, 100));
+    const emergenceScore = Math.round(clamp(signalCount * 8 + freshSignals * 11 + newestAgePenalty * 1.2 + cluster.totalIntensity * 0.06 + matchStrength * 0.18, 18, scoreCap));
+    const breadthScore = Math.round(clamp(sourceDiversity * 18 + topKeys(cluster.keywordCounts, 10).length * 2 + linkedAssets.length * 5 + Math.min(signalCount, 6) * 4, 18, scoreCap));
+    const urgencyScore = Math.round(clamp(34 + freshSignals * 10 + buildCatalysts(cluster).length * 10 + newestAgePenalty * 1.6 + Math.min(avgMatchScore * 4, 12), 20, scoreCap));
+    const confidenceScore = Math.round(clamp(matchStrength * 0.45 + sourceDiversity * 12 + signalCount * 4 + cluster.totalIntensity * 0.04, 22, scoreCap));
     const score = Math.round(
       emergenceScore * 0.24 +
         breadthScore * 0.18 +
@@ -1187,8 +1241,12 @@ export function buildKeywordThemeDashboard(
     const implications = buildImplications(cluster, sourceDiversity, linkedAssets, portfolioImpact);
     const actionItems = buildActionItems(cluster, linkedAssets, portfolioImpact);
     const summary = summarizeKeywordTheme(topic, cluster, sourceDiversity, linkedAssets);
-    const thesis = `The user-defined topic ${topic.label} is showing up through ${signalCount} matching signals across ${sourceDiversity} source types, which means it is broad enough to monitor as a live market theme rather than a single isolated headline.`;
-    const whyItMatters = implications[1] ?? `This topic now has enough cross-source confirmation to justify focused follow-up research in ${linkedAssets.slice(0, 3).map((asset) => asset.symbol).join(', ') || 'the linked asset set'}.`;
+    const thesis = sourceDiversity > 1
+      ? `${topic.label} is supported by ${signalCount} matching signals across ${sourceDiversity} source types, making it a cross-source research lead rather than an isolated headline.`
+      : `${topic.label} is supported by ${signalCount} matching signals from one source type. Treat it as an early research lead until another source confirms it.`;
+    const whyItMatters = implications[1] ?? (sourceDiversity > 1
+      ? `The evidence is broad enough to justify focused follow-up research in ${linkedAssets.slice(0, 3).map((asset) => asset.symbol).join(', ') || 'the linked asset set'}.`
+      : 'The topic is active, but the narrow source mix means conviction should remain limited.');
     const actionSummary = actionItems.slice(0, 2).map((item) => item.detail).join(' ');
     const playbook = actionItems.map((item) => item.detail).slice(0, 4);
     const primaryRecommendation = playbook[0] ?? portfolioImpact.portfolioRecommendation;
@@ -1210,7 +1268,7 @@ export function buildKeywordThemeDashboard(
       confidenceScore,
       signalCount,
       sourceDiversity,
-      freshestAt: cluster.newestAt,
+      freshestAt: closestSignalTimestamp(cluster),
       keywords: unique([...topic.keywords, ...topKeys(cluster.keywordCounts, 6)]).map((keyword) => toTitleCase(keyword)).slice(0, 6),
       sourceMix,
       linkedAssets,
@@ -1323,7 +1381,9 @@ export function buildTopicThemeGuidancePayload(dashboard: KeywordThemeDashboard)
         type: item.type,
         title: item.title,
         detail: item.detail,
+        context: item.context,
         sourceLabel: item.sourceLabel,
+        url: item.url,
         timestamp: item.timestamp,
       })),
       portfolioImpact: {
@@ -1396,12 +1456,13 @@ function buildDiscoveredThemes(input: DiscoveryInput): DiscoveredTheme[] {
     const portfolioImpact = buildPortfolioImpact(linkedAssets.map((asset) => asset.symbol), holdings, watchlistSymbols);
     const signalCount = cluster.signals.length;
     const sourceDiversity = cluster.sourceCounts.size;
+    const scoreCap = evidenceScoreCap(sourceDiversity);
     const freshSignals = cluster.signals.filter((signal) => signalAgeHours(signal.timestamp) <= 24).length;
     const newestAgePenalty = clamp(24 - signalAgeHours(cluster.newestAt), 0, 24);
-    const emergenceScore = Math.round(clamp(signalCount * 9 + freshSignals * 12 + newestAgePenalty * 1.3 + cluster.totalIntensity * 0.08, 18, 100));
-    const breadthScore = Math.round(clamp(sourceDiversity * 18 + topKeys(cluster.keywordCounts, 10).length * 2 + linkedAssets.length * 5 + topKeys(cluster.countryCounts, 6).length * 6, 18, 100));
-    const urgencyScore = Math.round(clamp(36 + freshSignals * 11 + buildCatalysts(cluster).length * 10 + newestAgePenalty * 1.8, 20, 100));
-    const confidenceScore = Math.round(clamp(sourceDiversity * 14 + signalCount * 5 + topKeys(cluster.keywordCounts, 8).length * 2 + cluster.totalIntensity * 0.06, 22, 100));
+    const emergenceScore = Math.round(clamp(signalCount * 9 + freshSignals * 12 + newestAgePenalty * 1.3 + cluster.totalIntensity * 0.08, 18, scoreCap));
+    const breadthScore = Math.round(clamp(sourceDiversity * 18 + topKeys(cluster.keywordCounts, 10).length * 2 + linkedAssets.length * 5 + topKeys(cluster.countryCounts, 6).length * 6, 18, scoreCap));
+    const urgencyScore = Math.round(clamp(36 + freshSignals * 11 + buildCatalysts(cluster).length * 10 + newestAgePenalty * 1.8, 20, scoreCap));
+    const confidenceScore = Math.round(clamp(sourceDiversity * 14 + signalCount * 5 + topKeys(cluster.keywordCounts, 8).length * 2 + cluster.totalIntensity * 0.06, 22, scoreCap));
     const score = Math.round(
       emergenceScore * 0.27 +
         breadthScore * 0.2 +
@@ -1440,7 +1501,7 @@ function buildDiscoveredThemes(input: DiscoveryInput): DiscoveredTheme[] {
       confidenceScore,
       signalCount,
       sourceDiversity,
-      freshestAt: cluster.newestAt,
+      freshestAt: closestSignalTimestamp(cluster),
       keywords: topKeys(cluster.keywordCounts, 6).map((keyword) => toTitleCase(keyword)),
       sourceMix,
       linkedAssets,
@@ -1488,8 +1549,10 @@ export function buildAIDiscoveryDashboard(input: DiscoveryInput, aiResult: AIThe
       if (resolvedSignals.length === 0) return [];
 
       const cluster = buildClusterFromSignals(resolvedSignals, theme.id || `ai-theme-${index}`);
+      const supportedAssets = new Set(resolvedSignals.flatMap((signal) => signal.assets));
+      const modelAssets = theme.linkedAssets.filter((symbol) => supportedAssets.has(upper(symbol)));
       const linkedAssets = buildDisplayAssets(
-        theme.linkedAssets.length > 0 ? theme.linkedAssets : topKeys(cluster.assetCounts, 6),
+        modelAssets.length > 0 ? modelAssets : topKeys(cluster.assetCounts, 6),
         cluster,
         quoteMap,
         portfolioSymbols,
@@ -1498,13 +1561,14 @@ export function buildAIDiscoveryDashboard(input: DiscoveryInput, aiResult: AIThe
       const portfolioImpact = buildPortfolioImpact(linkedAssets.map((asset) => asset.symbol), holdings, watchlistSymbols);
       const signalCount = cluster.signals.length;
       const sourceDiversity = cluster.sourceCounts.size;
+      const scoreCap = evidenceScoreCap(sourceDiversity);
       const freshSignals = cluster.signals.filter((signal) => signalAgeHours(signal.timestamp) <= 24).length;
       const newestAgePenalty = clamp(24 - signalAgeHours(cluster.newestAt), 0, 24);
-      const emergenceScore = Math.round(clamp(signalCount * 9 + freshSignals * 12 + newestAgePenalty * 1.3 + cluster.totalIntensity * 0.08, 18, 100));
-      const breadthScore = Math.round(clamp(sourceDiversity * 18 + topKeys(cluster.keywordCounts, 10).length * 2 + linkedAssets.length * 5 + topKeys(cluster.countryCounts, 6).length * 6, 18, 100));
-      const urgencyScore = Math.round(clamp(36 + freshSignals * 11 + theme.catalysts.length * 10 + newestAgePenalty * 1.8, 20, 100));
-      const localConfidence = clamp(sourceDiversity * 14 + signalCount * 5 + topKeys(cluster.keywordCounts, 8).length * 2 + cluster.totalIntensity * 0.06, 22, 100);
-      const confidenceScore = Math.round(clamp(localConfidence * 0.55 + theme.confidence * 0.45, 22, 100));
+      const emergenceScore = Math.round(clamp(signalCount * 9 + freshSignals * 12 + newestAgePenalty * 1.3 + cluster.totalIntensity * 0.08, 18, scoreCap));
+      const breadthScore = Math.round(clamp(sourceDiversity * 18 + topKeys(cluster.keywordCounts, 10).length * 2 + linkedAssets.length * 5 + topKeys(cluster.countryCounts, 6).length * 6, 18, scoreCap));
+      const urgencyScore = Math.round(clamp(36 + freshSignals * 11 + theme.catalysts.length * 10 + newestAgePenalty * 1.8, 20, scoreCap));
+      const localConfidence = clamp(sourceDiversity * 14 + signalCount * 5 + topKeys(cluster.keywordCounts, 8).length * 2 + cluster.totalIntensity * 0.06, 22, scoreCap);
+      const confidenceScore = Math.round(clamp(localConfidence * 0.55 + theme.confidence * 0.45, 22, scoreCap));
       const score = Math.round(
         emergenceScore * 0.2 +
           breadthScore * 0.16 +
@@ -1547,7 +1611,7 @@ export function buildAIDiscoveryDashboard(input: DiscoveryInput, aiResult: AIThe
         confidenceScore,
         signalCount,
         sourceDiversity,
-        freshestAt: cluster.newestAt,
+        freshestAt: closestSignalTimestamp(cluster),
         keywords: topKeys(cluster.keywordCounts, 6).map((keyword) => toTitleCase(keyword)),
         sourceMix,
         linkedAssets,
@@ -1632,10 +1696,10 @@ export function buildDiscoveryDashboard(input: DiscoveryInput): DiscoveryDashboa
     themes,
     brief: {
       headline: themes[0]
-        ? `${themes[0].label} is the strongest discovered cluster right now`
+        ? `${themes[0].label} has the strongest current signal overlap`
         : 'No high-conviction discovered clusters yet',
       summary: themes[0]
-        ? `This panel is clustering raw signals directly, and the strongest cluster right now is ${themes[0].label.toLowerCase()}. ${portfolioRelevantCount} of the top clusters already touch your portfolio or watchlist.`
+        ? `${themes.length} evidence clusters cleared the minimum overlap threshold; ${portfolioRelevantCount} touch your portfolio or watchlist. Scores rank this snapshot and are not probabilities or forecasts.`
         : 'The discovery engine did not find enough overlapping signals to surface strong clusters.',
       sourceCount,
       signalCount: allSignals,
