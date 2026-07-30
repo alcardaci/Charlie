@@ -18,6 +18,7 @@
     "preview": "vite preview",
     "check:secrets": "node scripts/check-secrets.mjs",
     "check:opportunities-quality": "node scripts/check-opportunities-quality.mjs",
+    "check:early-signals": "node scripts/check-early-signals.mjs",
     "verify:desktop": "node scripts/verify-macos-build.mjs"
   },
   "dependencies": {

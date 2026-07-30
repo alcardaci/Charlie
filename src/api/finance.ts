@@ -1793,13 +1793,13 @@ function addMovingAverages(points: ChartPoint[]): ChartPoint[] {
   }));
 }
 
-export async function fetchNews(query = '', count = 25): Promise<NewsItem[]> {
+export async function fetchNews(query = '', count = 25, signal?: AbortSignal): Promise<NewsItem[]> {
   const params = new URLSearchParams({
     q: query || 'market stocks finance',
     newsCount: String(count),
   });
 
-  const res = await fetch(`${YF}/search?${params}`);
+  const res = await fetch(`${YF}/search?${params}`, { signal });
   if (!res.ok) return [];
   const data = await res.json();
 
@@ -1840,30 +1840,31 @@ export async function fetchNews(query = '', count = 25): Promise<NewsItem[]> {
 export async function fetchNewsFeed(
   topicQuery = 'markets',
   geoFilter: NewsGeoFilterKey = 'all',
-  count = 25
+  count = 25,
+  signal?: AbortSignal,
 ): Promise<NewsItem[]> {
   const topicQueries = buildTopicFeedQueries(topicQuery);
 
   if (geoFilter === 'all') {
     if (topicQueries.length === 1) {
-      return fetchNews(topicQueries[0], count);
+      return fetchNews(topicQueries[0], count, signal);
     }
 
     const perQueryCount = Math.max(8, Math.ceil(count / topicQueries.length) + 4);
-    const merged = await fetchMergedNewsForQueries(topicQueries, perQueryCount);
+    const merged = await fetchMergedNewsForQueries(topicQueries, perQueryCount, signal);
     return merged.slice(0, count);
   }
 
   const region = REGIONAL_NEWS_QUERIES.find((item) => item.key === geoFilter);
   if (!region) {
     return topicQueries.length === 1
-      ? fetchNews(topicQueries[0], count)
-      : (await fetchMergedNewsForQueries(topicQueries, Math.max(8, Math.ceil(count / topicQueries.length) + 4))).slice(0, count);
+      ? fetchNews(topicQueries[0], count, signal)
+      : (await fetchMergedNewsForQueries(topicQueries, Math.max(8, Math.ceil(count / topicQueries.length) + 4), signal)).slice(0, count);
   }
 
   const queries = buildRegionalFeedQueries(region.searchRoots, topicQuery);
   const perQueryCount = Math.max(8, Math.ceil(count / queries.length) + 4);
-  const merged = await fetchMergedNewsForQueries(queries, perQueryCount);
+  const merged = await fetchMergedNewsForQueries(queries, perQueryCount, signal);
   return merged.slice(0, count);
 }
 
@@ -2969,8 +2970,12 @@ async function fetchRecentNewsForQueries(queries: string[], searchCount: number,
   return merged.filter((item) => item.publishedAt >= lookbackStart);
 }
 
-async function fetchMergedNewsForQueries(queries: string[], searchCount: number): Promise<NewsItem[]> {
-  const newsGroups = await Promise.all(queries.map((query) => fetchNews(query, searchCount)));
+async function fetchMergedNewsForQueries(
+  queries: string[],
+  searchCount: number,
+  signal?: AbortSignal,
+): Promise<NewsItem[]> {
+  const newsGroups = await Promise.all(queries.map((query) => fetchNews(query, searchCount, signal)));
   return Array.from(
     new Map(
       newsGroups

@@ -218,6 +218,10 @@ body {
   background: linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(15, 23, 42, 0.92));
 }
 
+.opportunities-early-signals-header {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.16), rgba(15, 23, 42, 0.92));
+}
+
 .opportunities-header-kicker {
   color: rgba(209, 250, 229, 0.88);
 }
@@ -232,6 +236,10 @@ body {
 
 :root[data-theme='light'] .opportunities-topic-header {
   background: linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(255, 251, 242, 0.96) 68%, rgba(242, 234, 218, 0.98));
+}
+
+:root[data-theme='light'] .opportunities-early-signals-header {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.14), rgba(255, 251, 242, 0.96) 68%, rgba(242, 234, 218, 0.98));
 }
 
 :root[data-theme='light'] .opportunities-header-kicker {

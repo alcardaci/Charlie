@@ -15,6 +15,7 @@ import {
   searchNewsArchive,
 } from '../api/finance';
 import type { OpenAIDebugPayloadEntry } from '../api/finance';
+import { EarlySignalCard } from '../components/EarlySignalCard';
 import { ThemeInsightCard, ThemeStatCard } from '../components/ThemeInsightCard';
 import { useTerminalStore } from '../store/useTerminalStore';
 import type { CountryNewsCount, MarketSentimentSnapshot, NewsItem, Quote } from '../types';
@@ -32,6 +33,17 @@ import {
   type KeywordThemeDashboard,
 } from '../utils/themeDiscoveryEngine';
 import {
+  buildEarlySignalsDashboard,
+  canonicalizeEarlySignalEvidence,
+  EARLY_SIGNAL_QUERIES,
+  mergeEarlySignalEvidence,
+  type EarlySignalsDashboard,
+} from '../utils/earlySignalsEngine';
+import {
+  loadEarlySignalEvidence,
+  saveEarlySignalEvidence,
+} from '../utils/earlySignalsStorage';
+import {
   DEFAULT_GEOPOLITICS_OPENAI_MODEL,
   DEFAULT_THEME_DISCOVERY_RECOMMENDATION_SYSTEM_PROMPT,
   DEFAULT_THEME_DISCOVERY_SYSTEM_PROMPT,
@@ -46,6 +58,8 @@ const HYBRID_CACHE_TTL_MS = 30 * 60 * 1000;
 const BASE_INPUT_QUERY_STALE_MS = 5 * 60 * 1000;
 const BASE_INPUT_FETCH_TIMEOUT_MS = 12_000;
 const TOPIC_NEWS_FETCH_TIMEOUT_MS = 10_000;
+const EARLY_SIGNALS_FETCH_TIMEOUT_MS = 12_000;
+const EARLY_SIGNALS_QUERY_STALE_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_TOPIC_INPUT = 'Energy security, semiconductor capex, shipping disruptions, defense spending';
 const DISCOVERY_LOADING_STEPS = [
   'Collecting live data...',
@@ -199,6 +213,38 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallbackVa
   const result = await Promise.race([promise, timeoutPromise]);
   if (timeoutId) clearTimeout(timeoutId);
   return result;
+}
+
+async function fetchEarlySignalNews(query: string, parentSignal: AbortSignal): Promise<NewsItem[]> {
+  const controller = new AbortController();
+  const abortFromParent = () => controller.abort(parentSignal.reason);
+  const timeoutId = window.setTimeout(() => controller.abort('Early Signals news request timed out.'), EARLY_SIGNALS_FETCH_TIMEOUT_MS);
+  parentSignal.addEventListener('abort', abortFromParent, { once: true });
+
+  try {
+    return await fetchNewsFeed(query, 'all', 36, controller.signal);
+  } catch (error) {
+    if (parentSignal.aborted) throw error;
+    return [];
+  } finally {
+    window.clearTimeout(timeoutId);
+    parentSignal.removeEventListener('abort', abortFromParent);
+  }
+}
+
+async function fetchEarlySignalsDashboard(signal: AbortSignal): Promise<EarlySignalsDashboard> {
+  const [storedEvidence, newsGroups] = await Promise.all([
+    loadEarlySignalEvidence(signal),
+    Promise.all(EARLY_SIGNAL_QUERIES.map(({ query }) => fetchEarlySignalNews(query, signal))),
+  ]);
+  signal.throwIfAborted();
+
+  const observedAt = Date.now();
+  const currentEvidence = canonicalizeEarlySignalEvidence(newsGroups.flat(), observedAt);
+  const mergedEvidence = mergeEarlySignalEvidence(storedEvidence, currentEvidence, observedAt);
+  await saveEarlySignalEvidence(mergedEvidence, signal);
+  signal.throwIfAborted();
+  return buildEarlySignalsDashboard(mergedEvidence, observedAt);
 }
 
 async function fetchBaseInput(args: {
@@ -685,11 +731,186 @@ function TopicPane({
   );
 }
 
+function EarlySignalsPane({
+  dashboard,
+  isLoading,
+  isRefreshing,
+  error,
+  onRetry,
+  onStop,
+  onOpenSymbol,
+}: {
+  dashboard?: EarlySignalsDashboard;
+  isLoading: boolean;
+  isRefreshing: boolean;
+  error: boolean;
+  onRetry: () => void;
+  onStop: () => void;
+  onOpenSymbol: (symbol: string) => void;
+}) {
+  if (isLoading && !dashboard) {
+    return (
+      <section className="space-y-3">
+        <SectionLoadingState
+          title="EARLY SIGNALS"
+          step="Comparing structural evidence with the saved local baseline..."
+          detail="No AI is used. News requests are cancellable and results are retained locally for longitudinal comparison."
+        />
+        <button
+          type="button"
+          onClick={onStop}
+          className="inline-flex items-center gap-2 rounded border border-terminal-negative/40 px-3 py-2 text-xs text-terminal-negative transition-colors hover:bg-terminal-negative/10"
+        >
+          <Square size={12} />
+          STOP
+        </button>
+      </section>
+    );
+  }
+
+  if (error && !dashboard) {
+    return (
+      <SectionErrorState
+        title="EARLY SIGNALS UNAVAILABLE"
+        body="The local evidence scan could not finish. No model request was made and existing history was preserved."
+        onRetry={onRetry}
+      />
+    );
+  }
+
+  if (!dashboard) return null;
+
+  const baselineLabel = dashboard.baseline.status === 'established'
+    ? 'Established baseline'
+    : dashboard.baseline.status === 'partial'
+      ? 'Partial baseline'
+      : 'Baseline warming';
+
+  return (
+    <section
+      className="flex h-full min-h-0 flex-col overflow-hidden rounded border border-terminal-border bg-terminal-panel"
+      aria-busy={isRefreshing}
+      aria-labelledby="opportunities-early-signals-title"
+    >
+      <div className="opportunities-early-signals-header flex-shrink-0 border-b border-terminal-purple/25 px-4 py-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <Radar size={14} className="text-terminal-purple" />
+              <h2 id="opportunities-early-signals-title" className="text-xs font-bold tracking-[0.24em] text-terminal-purple">
+                EARLY SIGNALS
+              </h2>
+              <span className="text-[11px] text-terminal-faint">6–36 month monitor</span>
+            </div>
+            <div className="mt-2 text-base font-bold text-terminal-text">Weak, accelerating structural developments</div>
+            <div className="opportunities-header-summary mt-1 max-w-4xl text-xs leading-relaxed">
+              Deterministic evidence scan ranked against Charlie’s saved local history. Low-quality candidates are suppressed rather than filled with generic themes.
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {isRefreshing && (
+              <button
+                type="button"
+                onClick={onStop}
+                className="inline-flex items-center gap-2 rounded border border-terminal-negative/40 px-3 py-2 text-xs text-terminal-negative transition-colors hover:bg-terminal-negative/10"
+              >
+                <Square size={12} />
+                STOP
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onRetry}
+              className="inline-flex items-center gap-2 rounded border border-terminal-border px-3 py-2 text-xs text-terminal-text transition-colors hover:bg-terminal-hover"
+            >
+              <RefreshCw size={12} className={isRefreshing ? 'animate-spin' : ''} />
+              REFRESH EVIDENCE
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div
+        className="min-h-0 flex-1 overflow-y-auto px-4 py-3 focus:outline-none focus-visible:ring-1 focus-visible:ring-terminal-accent"
+        role="region"
+        aria-label="Early structural signals"
+        tabIndex={0}
+      >
+        <div className="grid grid-cols-2 divide-x divide-terminal-border border-b border-terminal-border pb-3 md:grid-cols-4">
+          <ThemeStatCard
+            label="SURFACED"
+            value={fmt.integer(dashboard.signals.length)}
+            detail="Candidates clearing all gates."
+          />
+          <ThemeStatCard
+            label="SUPPRESSED"
+            value={fmt.integer(dashboard.stats.suppressedCandidateCount)}
+            detail="Below evidence threshold."
+          />
+          <ThemeStatCard
+            label="SOURCE BASE"
+            value={fmt.integer(dashboard.stats.independentSourceCount)}
+            detail="Independent publishers retained."
+          />
+          <ThemeStatCard
+            label="HISTORY"
+            value={`${dashboard.stats.historySpanDays}d`}
+            detail={baselineLabel}
+          />
+        </div>
+
+        {dashboard.signals.length > 0 ? (
+          <div className="mt-3">
+            {dashboard.signals.map((signal) => (
+              <EarlySignalCard
+                key={signal.id}
+                signal={signal}
+                onOpenSymbol={onOpenSymbol}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="py-10">
+            <div className="text-sm font-bold tracking-[0.12em] text-terminal-text">NO CANDIDATE CLEARS THE GATES</div>
+            <p className="mt-2 max-w-3xl text-xs leading-relaxed text-terminal-muted">
+              Charlie needs repeated evidence across independent publishers and at least two active weeks. A cold start requires stronger support; as local history accumulates, the engine can compare recent rates with a real prior baseline.
+            </p>
+            <div className="mt-4 text-[11px] text-terminal-faint">
+              {dashboard.stats.evidenceCount} canonical observations retained · {dashboard.stats.candidateCount} structural candidates monitored · {baselineLabel.toLowerCase()}
+            </div>
+          </div>
+        )}
+
+        <details className="group border-t border-terminal-border py-3">
+          <summary className="cursor-pointer list-none text-[10px] tracking-[0.16em] text-terminal-faint marker:hidden">
+            <span className="inline-flex items-center gap-2">
+              <span className="transition-transform group-open:rotate-90">›</span>
+              METHODOLOGY & LIMITS
+            </span>
+          </summary>
+          <div className="mt-2 max-w-4xl space-y-2 text-[11px] leading-relaxed text-terminal-muted">
+            <p>
+              Signals require coherent topic terms, three or more recent observations, two or more independent publishers, multiple publication days, and persistence across at least two weeks. Acceleration compares the last 30 days with up to 150 prior days.
+            </p>
+            <p>
+              Company links require explicit references in at least two articles from two independent publishers. Otherwise Charlie shows only the supported value-chain role. Scores are relative research priorities, not probabilities, forecasts, or investment recommendations.
+            </p>
+            <p>
+              Phase-one history is local to this Charlie installation. Coverage begins when the view is first used and is limited by the available news feeds; absence from this panel is not evidence that a trend does not exist.
+            </p>
+          </div>
+        </details>
+      </div>
+    </section>
+  );
+}
+
 export function OpportunitiesPanel() {
   const { portfolio, watchlist, setActivePanel, openAISettings, updateOpenAISettings, debugMode } = useTerminalStore();
   const queryClient = useQueryClient();
   const quoteUniverse = useMemo(() => getDiscoveryAssetUniverse(), []);
-  const [activeWorkspace, setActiveWorkspace] = useState<'discovery' | 'topics'>('discovery');
+  const [activeWorkspace, setActiveWorkspace] = useState<'discovery' | 'topics' | 'early-signals'>('discovery');
   const [discoveryLoadingStepIndex, setDiscoveryLoadingStepIndex] = useState(0);
   const [topicLoadingStepIndex, setTopicLoadingStepIndex] = useState(0);
   const [showPromptDebug, setShowPromptDebug] = useState(false);
@@ -698,6 +919,8 @@ export function OpportunitiesPanel() {
   const [appliedTopics, setAppliedTopics] = useState<string[]>([]);
   const [discoveryAiPaused, setDiscoveryAiPaused] = useState(false);
   const [topicAiPaused, setTopicAiPaused] = useState(false);
+  const [discoveryAiRequested, setDiscoveryAiRequested] = useState(false);
+  const [topicAiRequested, setTopicAiRequested] = useState(false);
   const aiEnabledForOpportunities = openAISettings.hasStoredApiKey && Boolean(openAISettings.model.trim());
   const opportunityCacheContext = useMemo(
     () => opportunityContextKey({
@@ -764,6 +987,8 @@ export function OpportunitiesPanel() {
     if (!aiEnabledForOpportunities) {
       setDiscoveryAiPaused(false);
       setTopicAiPaused(false);
+      setDiscoveryAiRequested(false);
+      setTopicAiRequested(false);
     }
   }, [aiEnabledForOpportunities]);
 
@@ -831,7 +1056,11 @@ export function OpportunitiesPanel() {
       });
       return buildAIDiscoveryDashboard(baseInput, aiResult);
     },
-    enabled: Boolean(discoveryQuery.data) && openAISettings.hasStoredApiKey && Boolean(openAISettings.model.trim()) && !discoveryAiPaused,
+    enabled: Boolean(discoveryQuery.data) &&
+      openAISettings.hasStoredApiKey &&
+      Boolean(openAISettings.model.trim()) &&
+      discoveryAiRequested &&
+      !discoveryAiPaused,
     staleTime: HYBRID_CACHE_TTL_MS,
     gcTime: HYBRID_CACHE_TTL_MS * 2,
     refetchOnMount: false,
@@ -898,7 +1127,11 @@ export function OpportunitiesPanel() {
       });
       return applyAIThemeGuidanceDashboard(topicQuery.data, aiGuidance);
     },
-    enabled: Boolean(topicQuery.data && topicQuery.data.themes.length > 0) && openAISettings.hasStoredApiKey && Boolean(openAISettings.model.trim()) && !topicAiPaused,
+    enabled: Boolean(topicQuery.data && topicQuery.data.themes.length > 0) &&
+      openAISettings.hasStoredApiKey &&
+      Boolean(openAISettings.model.trim()) &&
+      topicAiRequested &&
+      !topicAiPaused,
     staleTime: HYBRID_CACHE_TTL_MS,
     gcTime: HYBRID_CACHE_TTL_MS * 2,
     refetchOnMount: false,
@@ -906,6 +1139,24 @@ export function OpportunitiesPanel() {
     refetchOnReconnect: false,
     retry: 0,
   });
+
+  const earlySignalsQuery = useQuery({
+    queryKey: ['opportunities-early-signals-v1'],
+    queryFn: ({ signal }) => fetchEarlySignalsDashboard(signal),
+    enabled: activeWorkspace === 'early-signals',
+    staleTime: EARLY_SIGNALS_QUERY_STALE_MS,
+    gcTime: HYBRID_CACHE_TTL_MS * 4,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: 0,
+  });
+
+  useEffect(() => {
+    if (activeWorkspace !== 'early-signals') {
+      void queryClient.cancelQueries({ queryKey: ['opportunities-early-signals-v1'] });
+    }
+  }, [activeWorkspace, queryClient]);
 
   useEffect(() => {
     const latestDiscoveryDashboard = discoveryAiQuery.data ?? discoveryQuery.data;
@@ -944,11 +1195,19 @@ export function OpportunitiesPanel() {
   const topicAiRefreshing = aiEnabledForOpportunities && topicAiQuery.isFetching;
   const discoveryPendingAiReveal = discoveryAiRefreshing && !discoveryAiQuery.data && Boolean(discoveryData);
   const topicPendingAiReveal = topicAiRefreshing && !topicAiQuery.data && Boolean(topicData);
+  const earlySignalsData = earlySignalsQuery.data;
+  const earlySignalsError = Boolean(earlySignalsQuery.error);
+  const earlySignalsLoading = !earlySignalsData && earlySignalsQuery.isFetching && !earlySignalsError;
+  const activeDashboardUsesAI = activeWorkspace === 'discovery'
+    ? discoveryData?.mode === 'ai'
+    : activeWorkspace === 'topics'
+      ? Boolean(topicData?.model)
+      : false;
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2 overflow-hidden p-3">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-terminal-border pb-2">
-        <div className="inline-flex gap-4" role="tablist" aria-label="Opportunity workspace">
+        <div className="inline-flex flex-wrap gap-x-4 gap-y-1" role="tablist" aria-label="Opportunity workspace">
           <button
             type="button"
             role="tab"
@@ -975,12 +1234,37 @@ export function OpportunitiesPanel() {
           >
             TOPIC RESEARCH{appliedTopics.length > 0 ? ` · ${appliedTopics.length}` : ''}
           </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeWorkspace === 'early-signals'}
+            onClick={() => setActiveWorkspace('early-signals')}
+            className={`border-b-2 px-0.5 py-1 text-xs font-bold tracking-[0.12em] transition-colors ${
+              activeWorkspace === 'early-signals'
+                ? 'border-terminal-purple text-terminal-purple'
+                : 'border-transparent text-terminal-muted hover:text-terminal-text'
+            }`}
+          >
+            EARLY SIGNALS
+          </button>
         </div>
 
         <div className="flex items-center gap-2 text-[11px] text-terminal-faint">
-          <span className={`h-1.5 w-1.5 rounded-full ${aiEnabledForOpportunities ? 'bg-terminal-positive' : 'bg-terminal-muted'}`} />
-          {aiEnabledForOpportunities ? `AI enriched · ${openAISettings.model}` : 'Local analysis · AI enrichment off'}
-          {!openAISettings.hasStoredApiKey && (
+          <span className={`h-1.5 w-1.5 rounded-full ${
+            activeWorkspace === 'early-signals'
+              ? 'bg-terminal-purple'
+              : aiEnabledForOpportunities
+                ? 'bg-terminal-positive'
+                : 'bg-terminal-muted'
+          }`} />
+          {activeWorkspace === 'early-signals'
+            ? 'Deterministic evidence · no AI'
+            : aiEnabledForOpportunities
+              ? activeDashboardUsesAI
+                ? `AI enriched · ${openAISettings.model}`
+                : 'Local analysis · refresh for AI'
+              : 'Local analysis · AI enrichment off'}
+          {!openAISettings.hasStoredApiKey && activeWorkspace !== 'early-signals' && (
             <button
               type="button"
               onClick={() => setActivePanel('settings')}
@@ -1047,37 +1331,41 @@ export function OpportunitiesPanel() {
 
       <div className="min-h-0 flex-1">
         {activeWorkspace === 'discovery' ? (
-        <DiscoveryPane
-          dashboard={discoveryData}
-          isLoading={discoveryLoading}
-          isRefreshing={discoveryRefreshing}
-          isAiRefreshing={discoveryAiRefreshing}
-          isPendingAiReveal={discoveryPendingAiReveal}
-          loadingStep={DISCOVERY_LOADING_STEPS[discoveryLoadingStepIndex]}
-          error={discoveryError}
-          onRetry={() => {
+          <DiscoveryPane
+            dashboard={discoveryData}
+            isLoading={discoveryLoading}
+            isRefreshing={discoveryRefreshing}
+            isAiRefreshing={discoveryAiRefreshing}
+            isPendingAiReveal={discoveryPendingAiReveal}
+            loadingStep={DISCOVERY_LOADING_STEPS[discoveryLoadingStepIndex]}
+            error={discoveryError}
+            onRetry={() => {
               setDiscoveryAiPaused(false);
+              setDiscoveryAiRequested(true);
               void discoveryQuery.refetch();
             }}
             onStop={() => {
               setDiscoveryAiPaused(true);
+              setDiscoveryAiRequested(false);
               void queryClient.cancelQueries({ queryKey: ['hybrid-opportunities-discovery-ai'] });
             }}
             onOpenSymbol={(symbol) => setActivePanel('equity', symbol)}
           />
-        ) : (
+        ) : activeWorkspace === 'topics' ? (
           <TopicPane
             dashboard={topicData}
             topicInput={topicInput}
             onTopicInputChange={setTopicInput}
             onApplyTopics={() => {
               setTopicAiPaused(false);
+              setTopicAiRequested(true);
               setAppliedTopics(parseTopicInput(topicInput));
             }}
             onResetTopics={() => {
               const nextValue = '';
               setTopicInput(nextValue);
               setTopicAiPaused(false);
+              setTopicAiRequested(false);
               setAppliedTopics([]);
             }}
           previewTopics={parseTopicInput(topicInput)}
@@ -1087,13 +1375,29 @@ export function OpportunitiesPanel() {
           isPendingAiReveal={topicPendingAiReveal}
           loadingStep={TOPIC_LOADING_STEPS[topicLoadingStepIndex]}
           error={topicError}
-          onRetry={() => {
+            onRetry={() => {
               setTopicAiPaused(false);
+              setTopicAiRequested(true);
               void topicQuery.refetch();
             }}
             onStop={() => {
               setTopicAiPaused(true);
+              setTopicAiRequested(false);
               void queryClient.cancelQueries({ queryKey: ['hybrid-opportunities-topics-ai'] });
+            }}
+            onOpenSymbol={(symbol) => setActivePanel('equity', symbol)}
+          />
+        ) : (
+          <EarlySignalsPane
+            dashboard={earlySignalsData}
+            isLoading={earlySignalsLoading}
+            isRefreshing={earlySignalsQuery.isFetching}
+            error={earlySignalsError}
+            onRetry={() => {
+              void earlySignalsQuery.refetch();
+            }}
+            onStop={() => {
+              void queryClient.cancelQueries({ queryKey: ['opportunities-early-signals-v1'] });
             }}
             onOpenSymbol={(symbol) => setActivePanel('equity', symbol)}
           />
