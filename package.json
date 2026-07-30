@@ -17,6 +17,7 @@
     "dist:desktop:win": "npm run build && npm run build:icon && electron-builder --win nsis portable --x64 --arm64",
     "preview": "vite preview",
     "check:secrets": "node scripts/check-secrets.mjs",
+    "check:opportunities-quality": "node scripts/check-opportunities-quality.mjs",
     "verify:desktop": "node scripts/verify-macos-build.mjs"
   },
   "dependencies": {

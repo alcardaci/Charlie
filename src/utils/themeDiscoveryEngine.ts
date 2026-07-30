@@ -289,23 +289,37 @@ type KeywordTopic = {
 };
 
 const GENERIC_WORDS = new Set([
-  'about', 'after', 'again', 'also', 'amid', 'analyst', 'analysts', 'and', 'are', 'around', 'bank',
-  'because', 'before', 'below', 'between', 'boost', 'business', 'could', 'data', 'despite', 'during',
-  'earnings', 'economy', 'financial', 'finance', 'from', 'global', 'have', 'headline', 'headlines',
-  'higher', 'impact', 'into', 'investor', 'investors', 'lower', 'market', 'markets', 'more', 'news',
-  'outlook', 'over', 'rate', 'rates', 'report', 'reports', 'risk', 'said', 'sector', 'shares', 'signal',
-  'signals', 'since', 'stock', 'stocks', 'story', 'their', 'there', 'these', 'they', 'this', 'through',
-  'today', 'under', 'update', 'when', 'while', 'with', 'worry', 'worries',
+  'about', 'according', 'after', 'again', 'all', 'also', 'amid', 'analyst', 'analysts', 'and', 'annual',
+  'announced', 'announces', 'any', 'are', 'around', 'bank', 'because', 'been', 'before', 'being', 'below',
+  'between', 'boost', 'breaking', 'business', 'but', 'can', 'could', 'daily', 'data', 'despite', 'during',
+  'earnings', 'economy', 'exclusive', 'financial', 'finance', 'first', 'for', 'fourth', 'from', 'global',
+  'had', 'has', 'have', 'headline', 'headlines', 'her', 'here', 'higher', 'him', 'his', 'hit', 'hits',
+  'how', 'impact', 'inc', 'into', 'investor', 'investors', 'its', 'latest', 'live', 'lower', 'market',
+  'markets', 'may', 'might', 'month', 'monthly', 'months', 'more', 'must', 'new', 'news', 'nor', 'not',
+  'now', 'one', 'opinion', 'our', 'outlook', 'over', 'quarter', 'quarterly', 'quarters', 'rate', 'rates',
+  'report', 'reported', 'reporting', 'reports', 'results', 'risk', 'said', 'say', 'says', 'second',
+  'sector', 'shares', 'should', 'signal', 'signals', 'since', 'some', 'stock', 'stocks', 'story', 'than',
+  'the', 'their', 'them', 'then', 'there', 'these', 'they', 'third', 'this', 'those', 'through', 'today',
+  'two', 'under', 'update', 'updates', 'was', 'watch', 'weekly', 'were', 'what', 'when', 'where', 'which',
+  'while', 'who', 'why', 'will', 'with', 'world', 'worry', 'worries', 'would', 'year', 'years', 'yet',
+  'you', 'your',
+  'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october',
+  'november', 'december', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
+  'politics', 'q1', 'q2', 'q3', 'q4',
 ]);
 
 const ASSET_HINTS: Array<{ keywords: string[]; symbols: string[] }> = [
-  { keywords: ['ai', 'artificial intelligence', 'semiconductor', 'chip', 'chips', 'gpu', 'server', 'data center', 'cloud'], symbols: ['NVDA', 'AMD', 'AVGO', 'SMH', 'MSFT', 'AMZN', 'GOOGL'] },
-  { keywords: ['oil', 'crude', 'lng', 'natural gas', 'opec', 'refinery', 'brent', 'gas'], symbols: ['XLE', 'XOM', 'CVX', 'COP', 'SLB', 'UNG'] },
+  { keywords: ['semiconductor', 'chip', 'chips', 'gpu'], symbols: ['SMH', 'NVDA', 'AMD', 'AVGO'] },
+  { keywords: ['ai', 'artificial intelligence'], symbols: ['NVDA', 'MSFT', 'GOOGL', 'AMZN'] },
+  { keywords: ['data center', 'cloud'], symbols: ['MSFT', 'AMZN', 'GOOGL'] },
+  { keywords: ['oil', 'crude', 'opec', 'refinery', 'brent'], symbols: ['XLE', 'XOM', 'CVX', 'COP', 'SLB'] },
+  { keywords: ['lng', 'natural gas'], symbols: ['UNG'] },
   { keywords: ['shipping', 'freight', 'port', 'ports', 'canal', 'logistics', 'container', 'rerouting'], symbols: ['ZIM', 'MATX', 'KEX', 'UPS', 'FDX'] },
-  { keywords: ['defense', 'military', 'missile', 'missiles', 'drone', 'security', 'rearmament'], symbols: ['ITA', 'LMT', 'RTX', 'NOC', 'GD'] },
-  { keywords: ['inflation', 'fed', 'treasury', 'yield', 'yields', 'payrolls', 'cpi', 'pce', 'rate cuts', 'policy'], symbols: ['TLT', 'IEF', 'IWM', 'XLRE', 'XLF', 'KRE'] },
+  { keywords: ['defense', 'defense spending', 'military', 'missile', 'missiles', 'drone', 'national security', 'rearmament'], symbols: ['ITA', 'LMT', 'RTX', 'NOC', 'GD'] },
+  { keywords: ['inflation', 'fed', 'treasury', 'yield', 'yields', 'payrolls', 'cpi', 'pce', 'rate cuts', 'policy'], symbols: ['TLT', 'IEF'] },
   { keywords: ['gold', 'safe haven'], symbols: ['GLD'] },
-  { keywords: ['consumer', 'retail', 'tariff', 'tariffs'], symbols: ['XLY', 'XLP', 'WMT', 'COST'] },
+  { keywords: ['consumer', 'retail'], symbols: ['XLY', 'XLP', 'WMT', 'COST'] },
+  { keywords: ['tariff', 'tariffs'], symbols: ['XLY', 'XLP'] },
   { keywords: ['banks', 'banking', 'credit', 'regional bank'], symbols: ['XLF', 'KRE', 'JPM'] },
 ];
 
@@ -344,7 +358,14 @@ function tokenize(text: string): string[] {
   return normalizeText(text)
     .split(' ')
     .map((token) => token.trim())
-    .filter((token) => token.length >= 3 && token.length <= 24 && !GENERIC_WORDS.has(token) && !/^\d+$/.test(token));
+    .filter(isInformativeToken);
+}
+
+function isInformativeToken(token: string): boolean {
+  return token.length >= 3 &&
+    token.length <= 24 &&
+    !GENERIC_WORDS.has(token) &&
+    !/^\d+$/.test(token);
 }
 
 function extractKeywords(...segments: Array<string | null | undefined>): string[] {
@@ -360,11 +381,11 @@ function extractPhrases(...segments: Array<string | null | undefined>): string[]
 
   for (const segment of segments) {
     if (!segment) continue;
-    const tokens = tokenize(segment);
+    const tokens = normalizeText(segment).split(' ').filter(Boolean);
 
     for (let index = 0; index < tokens.length - 1; index += 1) {
-      const phrase = `${tokens[index]} ${tokens[index + 1]}`;
-      if (!GENERIC_WORDS.has(tokens[index]) && !GENERIC_WORDS.has(tokens[index + 1])) {
+      if (isInformativeToken(tokens[index]) && isInformativeToken(tokens[index + 1])) {
+        const phrase = `${tokens[index]} ${tokens[index + 1]}`;
         phrases.push(phrase);
       }
     }
@@ -458,6 +479,92 @@ function topKeys(counts: Map<string, number>, limit = 8): string[] {
     .map(([key]) => key);
 }
 
+type ClusterQuality = {
+  eligible: boolean;
+  score: number;
+  repeatedKeywords: string[];
+  repeatedPhrases: string[];
+  properNameTokens: Set<string>;
+};
+
+function isCapitalizedNameWord(word: string): boolean {
+  return /^[A-Z][a-z]+(?:['-][A-Z]?[a-z]+)?$/.test(word);
+}
+
+function getProperNameTokens(cluster: Cluster): Set<string> {
+  const properNames = new Set<string>();
+  const nameLeadWords = new Set([
+    'candidate', 'ceo', 'chairman', 'could', 'did', 'does', 'dr', 'governor', 'mayor', 'minister',
+    'mr', 'mrs', 'ms', 'president', 'representative', 'senator', 'should', 'will', 'would',
+  ]);
+
+  for (const signal of cluster.signals) {
+    const words = signal.title.match(/[A-Za-z][A-Za-z'-]*/g) ?? [];
+    for (let index = 0; index < words.length - 1; index += 1) {
+      const left = normalizeText(words[index]);
+      const right = normalizeText(words[index + 1]);
+      const previous = normalizeText(words[index - 1] ?? '');
+      const hasNameContext = signal.type === 'prediction' || nameLeadWords.has(previous);
+      if (
+        hasNameContext &&
+        isCapitalizedNameWord(words[index]) &&
+        isCapitalizedNameWord(words[index + 1]) &&
+        isInformativeToken(left) &&
+        isInformativeToken(right)
+      ) {
+        properNames.add(left);
+        properNames.add(right);
+      }
+    }
+  }
+
+  return properNames;
+}
+
+function analyzeClusterQuality(cluster: Cluster): ClusterQuality {
+  const properNameTokens = getProperNameTokens(cluster);
+  const repeatedKeywords = [...cluster.keywordCounts.entries()]
+    .filter(([keyword, count]) => count >= 2 && isInformativeToken(keyword) && !properNameTokens.has(keyword))
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([keyword]) => keyword);
+  const repeatedPhrases = [...cluster.phraseCounts.entries()]
+    .filter(([phrase, count]) => {
+      if (count < 2) return false;
+      const tokens = phrase.split(' ').filter(Boolean);
+      return tokens.length === 2 &&
+        tokens.every(isInformativeToken) &&
+        !tokens.every((token) => properNameTokens.has(token));
+    })
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([phrase]) => phrase);
+  const uniqueEvidenceCount = new Set(
+    cluster.signals.map((signal) => signal.url?.trim().toLowerCase() || normalizeText(signal.title))
+  ).size;
+  const enoughEvidence = uniqueEvidenceCount >= 2 &&
+    (cluster.sourceCounts.size >= 2 || cluster.signals.length >= 3);
+  const semanticallyCoherent = repeatedPhrases.length > 0 || repeatedKeywords.length >= 2;
+  const score = repeatedPhrases.length * 5 +
+    Math.min(repeatedKeywords.length, 6) * 2 +
+    Math.min(cluster.sourceCounts.size, 4) * 2 +
+    Math.min(uniqueEvidenceCount, 6);
+
+  return {
+    eligible: enoughEvidence && semanticallyCoherent,
+    score,
+    repeatedKeywords,
+    repeatedPhrases,
+    properNameTokens,
+  };
+}
+
+function proposedThemeLabelIsGrounded(label: string, cluster: Cluster, quality = analyzeClusterQuality(cluster)): boolean {
+  const labelTokens = tokenize(label).filter((token) => !quality.properNameTokens.has(token));
+  if (labelTokens.length < 2) return false;
+
+  const supportedTokens = labelTokens.filter((token) => (cluster.keywordCounts.get(token) ?? 0) >= 2);
+  return supportedTokens.length >= 2;
+}
+
 function createCluster(signal: DiscoveredSignal, index: number): Cluster {
   const cluster: Cluster = {
     id: `cluster-${index}-${signal.id}`,
@@ -501,8 +608,17 @@ function clusterSimilarity(signal: DiscoveredSignal, cluster: Cluster): number {
   const sharedPhrases = intersectionCount(signal.phrases, topKeys(cluster.phraseCounts, 10));
   const hoursGap = Math.abs(cluster.newestAt - signal.timestamp) / 3_600_000;
   const recencyBonus = hoursGap <= 8 ? 1.5 : hoursGap <= 24 ? 0.9 : hoursGap <= 72 ? 0.35 : 0;
+  const hasSemanticMatch = sharedPhrases > 0 ||
+    sharedKeywords >= 2 ||
+    (sharedCountries > 0 && sharedKeywords > 0);
 
-  return sharedAssets * 3.2 + sharedCountries * 2.2 + sharedPhrases * 2.4 + sharedKeywords * 1.25 + recencyBonus;
+  if (!hasSemanticMatch) return 0;
+
+  return Math.min(sharedAssets, 2) * 0.8 +
+    sharedCountries * 2.2 +
+    sharedPhrases * 2.8 +
+    sharedKeywords * 1.6 +
+    recencyBonus;
 }
 
 function clusterSignals(signals: DiscoveredSignal[]): Cluster[] {
@@ -531,28 +647,19 @@ function clusterSignals(signals: DiscoveredSignal[]): Cluster[] {
   return clusters;
 }
 
-function trimRepresentativeTitle(title: string): string {
-  return title.length <= 46 ? title : `${title.slice(0, 43).trim()}...`;
-}
+function pickClusterLabel(cluster: Cluster, quality = analyzeClusterQuality(cluster)): string | null {
+  if (!quality.eligible) return null;
 
-function pickClusterLabel(cluster: Cluster): string {
-  const topPhrases = topKeys(cluster.phraseCounts, 4);
-  if (topPhrases[0] && (cluster.phraseCounts.get(topPhrases[0]) ?? 0) >= 2) {
-    return toTitleCase(topPhrases[0]);
+  const phraseCandidate = quality.repeatedPhrases.find((phrase) =>
+    proposedThemeLabelIsGrounded(phrase, cluster, quality)
+  );
+  if (phraseCandidate) return toTitleCase(phraseCandidate);
+
+  if (quality.repeatedKeywords.length >= 2) {
+    return toTitleCase(quality.repeatedKeywords.slice(0, 2).join(' '));
   }
 
-  const topCountries = topKeys(cluster.countryCounts, 2);
-  const topKeywords = topKeys(cluster.keywordCounts, 4);
-
-  if (topCountries[0] && topKeywords[0]) {
-    return toTitleCase(`${topCountries[0]} ${topKeywords[0]}`);
-  }
-
-  if (topKeywords.length >= 2) {
-    return toTitleCase(`${topKeywords[0]} / ${topKeywords[1]}`);
-  }
-
-  return trimRepresentativeTitle(cluster.signals[0]?.title ?? 'Emerging Theme');
+  return null;
 }
 
 function summarizeCluster(cluster: Cluster, sourceDiversity: number, topAssets: string[]): string {
@@ -774,7 +881,10 @@ function buildLinkedAssets(
   portfolioSymbols: Set<string>,
   watchlistSymbols: Set<string>
 ): DiscoveredThemeAsset[] {
+  const minimumSupport = Math.max(2, Math.ceil(cluster.signals.length * 0.25));
+
   return [...cluster.assetCounts.entries()]
+    .filter(([, mentionCount]) => mentionCount >= minimumSupport)
     .sort((left, right) => right[1] - left[1])
     .slice(0, 6)
     .map(([symbol, mentionCount]) => {
@@ -884,9 +994,12 @@ function buildDisplayAssets(
 ): DiscoveredThemeAsset[] {
   const rankedFromCluster = buildLinkedAssets(cluster, quoteMap, portfolioSymbols, watchlistSymbols);
   const merged = new Map(rankedFromCluster.map((asset) => [asset.symbol, asset]));
+  const minimumSupport = Math.max(2, Math.ceil(cluster.signals.length * 0.25));
 
   for (const symbol of symbols.map(upper)) {
     if (merged.has(symbol)) continue;
+    const mentionCount = cluster.assetCounts.get(symbol) ?? 0;
+    if (mentionCount < minimumSupport) continue;
 
     const quote = quoteMap.get(symbol);
     const overlap: DiscoveryAssetOverlap = portfolioSymbols.has(symbol)
@@ -899,7 +1012,7 @@ function buildDisplayAssets(
       symbol,
       label: quote?.shortName ?? symbol,
       overlap,
-      mentionCount: cluster.assetCounts.get(symbol) ?? 1,
+      mentionCount,
       price: quote?.regularMarketPrice ?? null,
       changePct: quote?.regularMarketChangePercent ?? null,
     });
@@ -1448,10 +1561,17 @@ function buildDiscoveredThemes(input: DiscoveryInput): DiscoveredTheme[] {
   const rawSignals = buildRawSignals(input);
 
   const clusters = clusterSignals(rawSignals)
-    .filter((cluster) => cluster.signals.length >= 2 || cluster.sourceCounts.size >= 2)
-    .sort((left, right) => right.totalIntensity - left.totalIntensity);
+    .flatMap((cluster) => {
+      const quality = analyzeClusterQuality(cluster);
+      const label = pickClusterLabel(cluster, quality);
+      return quality.eligible && label ? [{ cluster, quality, label }] : [];
+    })
+    .sort((left, right) => {
+      if (right.quality.score !== left.quality.score) return right.quality.score - left.quality.score;
+      return right.cluster.totalIntensity - left.cluster.totalIntensity;
+    });
 
-    return clusters.slice(0, 8).map((cluster) => {
+  return clusters.slice(0, 8).map(({ cluster, quality, label }) => {
     const linkedAssets = buildLinkedAssets(cluster, quoteMap, portfolioSymbols, watchlistSymbols);
     const portfolioImpact = buildPortfolioImpact(linkedAssets.map((asset) => asset.symbol), holdings, watchlistSymbols);
     const signalCount = cluster.signals.length;
@@ -1473,7 +1593,6 @@ function buildDiscoveredThemes(input: DiscoveryInput): DiscoveredTheme[] {
     const sourceMix = [...cluster.sourceCounts.entries()]
       .sort((left, right) => right[1] - left[1])
       .map(([source, count]) => ({ source, count }));
-    const label = pickClusterLabel(cluster);
     const watchItems = buildWatchItems(cluster, linkedAssets);
     const invalidationSignals = buildInvalidationSignals(cluster, linkedAssets);
     const implications = buildImplications(cluster, sourceDiversity, linkedAssets, portfolioImpact);
@@ -1502,7 +1621,7 @@ function buildDiscoveredThemes(input: DiscoveryInput): DiscoveredTheme[] {
       signalCount,
       sourceDiversity,
       freshestAt: closestSignalTimestamp(cluster),
-      keywords: topKeys(cluster.keywordCounts, 6).map((keyword) => toTitleCase(keyword)),
+      keywords: quality.repeatedKeywords.slice(0, 6).map((keyword) => toTitleCase(keyword)),
       sourceMix,
       linkedAssets,
       catalysts: buildCatalysts(cluster),
@@ -1546,9 +1665,15 @@ export function buildAIDiscoveryDashboard(input: DiscoveryInput, aiResult: AIThe
         .map((signalId) => signalMap.get(signalId))
         .filter((signal): signal is DiscoveredSignal => Boolean(signal));
 
-      if (resolvedSignals.length === 0) return [];
+      if (resolvedSignals.length < 2) return [];
 
       const cluster = buildClusterFromSignals(resolvedSignals, theme.id || `ai-theme-${index}`);
+      const quality = analyzeClusterQuality(cluster);
+      const groundedFallbackLabel = pickClusterLabel(cluster, quality);
+      if (!quality.eligible || !groundedFallbackLabel) return [];
+      const label = proposedThemeLabelIsGrounded(theme.label, cluster, quality)
+        ? theme.label.trim()
+        : groundedFallbackLabel;
       const supportedAssets = new Set(resolvedSignals.flatMap((signal) => signal.assets));
       const modelAssets = theme.linkedAssets.filter((symbol) => supportedAssets.has(upper(symbol)));
       const linkedAssets = buildDisplayAssets(
@@ -1596,7 +1721,7 @@ export function buildAIDiscoveryDashboard(input: DiscoveryInput, aiResult: AIThe
 
       return [{
         id: theme.id || `ai-theme-${index}`,
-        label: theme.label,
+        label,
         summary: theme.summary,
         thesis: theme.thesis,
         whyItMatters: theme.whyItMatters,
@@ -1612,7 +1737,7 @@ export function buildAIDiscoveryDashboard(input: DiscoveryInput, aiResult: AIThe
         signalCount,
         sourceDiversity,
         freshestAt: closestSignalTimestamp(cluster),
-        keywords: topKeys(cluster.keywordCounts, 6).map((keyword) => toTitleCase(keyword)),
+        keywords: quality.repeatedKeywords.slice(0, 6).map((keyword) => toTitleCase(keyword)),
         sourceMix,
         linkedAssets,
         catalysts: theme.catalysts.length > 0 ? theme.catalysts.slice(0, 4) : buildCatalysts(cluster),

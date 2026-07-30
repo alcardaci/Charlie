@@ -331,13 +331,11 @@ function SectionErrorState({
 
 function ExperimentalFeatureNotice() {
   return (
-    <section className="rounded border border-amber-400/35 bg-amber-400/10 px-3 py-2">
-      <div className="flex items-center gap-2">
-        <AlertTriangle size={14} className="flex-shrink-0 text-amber-300" />
-        <div className="min-w-0 text-xs leading-relaxed text-terminal-muted">
-          <span className="font-bold tracking-[0.14em] text-amber-300">EXPERIMENTAL</span>
-          {' '}Treat themes as research leads. Verify the linked evidence before acting.
-        </div>
+    <section className="flex items-center gap-2 text-[11px] text-terminal-muted">
+      <AlertTriangle size={12} className="flex-shrink-0 text-amber-300" />
+      <div className="min-w-0 truncate">
+        <span className="font-bold tracking-[0.12em] text-amber-300">EXPERIMENTAL</span>
+        {' '}Research leads only. Verify evidence before acting.
       </div>
     </section>
   );
@@ -444,7 +442,7 @@ function DiscoveryPane({
         aria-label="Discovered opportunity themes"
         tabIndex={0}
       >
-        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <div className="grid grid-cols-2 divide-x divide-terminal-border border-y border-terminal-border lg:grid-cols-4">
           <ThemeStatCard
             label="DISCOVERED THEMES"
             value={fmt.integer(dashboard.stats.clusterCount)}
@@ -616,12 +614,12 @@ function TopicPane({
             <div className="mt-1 text-[11px] text-terminal-faint">Use commas to separate topics. Up to five topics are tracked at once.</div>
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            {(dashboard.requestedTopics.length > 0 ? dashboard.requestedTopics : previewTopics).map((topic) => (
-              <span key={topic} className="rounded border border-terminal-accent/30 bg-terminal-accent/10 px-2 py-1 text-xs text-terminal-accent">
-                {topic}
-              </span>
-            ))}
+          <div className="truncate text-[11px] text-terminal-muted">
+            <span className="text-terminal-faint">TOPICS</span>
+            {' · '}
+            <span className="text-terminal-accent">
+              {(dashboard.requestedTopics.length > 0 ? dashboard.requestedTopics : previewTopics).join(' · ')}
+            </span>
           </div>
 
           {dashboard.unmatchedTopics.length > 0 && (
@@ -640,7 +638,7 @@ function TopicPane({
         tabIndex={0}
       >
         {dashboard.requestedTopics.length > 0 && (
-          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+          <div className="grid grid-cols-2 divide-x divide-terminal-border border-y border-terminal-border lg:grid-cols-4">
             <ThemeStatCard
               label="REQUESTED"
               value={fmt.integer(dashboard.stats.requestedTopicCount)}
@@ -948,19 +946,18 @@ export function OpportunitiesPanel() {
   const topicPendingAiReveal = topicAiRefreshing && !topicAiQuery.data && Boolean(topicData);
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden p-4">
-      <ExperimentalFeatureNotice />
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="inline-flex rounded border border-terminal-border bg-terminal-panel p-1" role="tablist" aria-label="Opportunity workspace">
+    <div className="flex h-full min-h-0 flex-col gap-2 overflow-hidden p-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-terminal-border pb-2">
+        <div className="inline-flex gap-4" role="tablist" aria-label="Opportunity workspace">
           <button
             type="button"
             role="tab"
             aria-selected={activeWorkspace === 'discovery'}
             onClick={() => setActiveWorkspace('discovery')}
-            className={`rounded px-3 py-1.5 text-xs font-bold tracking-[0.12em] transition-colors ${
+            className={`border-b-2 px-0.5 py-1 text-xs font-bold tracking-[0.12em] transition-colors ${
               activeWorkspace === 'discovery'
-                ? 'bg-terminal-accent/15 text-terminal-accent'
-                : 'text-terminal-muted hover:bg-terminal-hover hover:text-terminal-text'
+                ? 'border-terminal-accent text-terminal-accent'
+                : 'border-transparent text-terminal-muted hover:text-terminal-text'
             }`}
           >
             DISCOVERED THEMES
@@ -970,10 +967,10 @@ export function OpportunitiesPanel() {
             role="tab"
             aria-selected={activeWorkspace === 'topics'}
             onClick={() => setActiveWorkspace('topics')}
-            className={`rounded px-3 py-1.5 text-xs font-bold tracking-[0.12em] transition-colors ${
+            className={`border-b-2 px-0.5 py-1 text-xs font-bold tracking-[0.12em] transition-colors ${
               activeWorkspace === 'topics'
-                ? 'bg-amber-400/15 text-amber-300'
-                : 'text-terminal-muted hover:bg-terminal-hover hover:text-terminal-text'
+                ? 'border-amber-300 text-amber-300'
+                : 'border-transparent text-terminal-muted hover:text-terminal-text'
             }`}
           >
             TOPIC RESEARCH{appliedTopics.length > 0 ? ` · ${appliedTopics.length}` : ''}
@@ -994,6 +991,7 @@ export function OpportunitiesPanel() {
           )}
         </div>
       </div>
+      <ExperimentalFeatureNotice />
 
       {debugMode && (
         <div className="flex max-h-[38vh] flex-shrink-0 flex-col gap-2 overflow-y-auto">

@@ -71,6 +71,8 @@ export const DEFAULT_THEME_DISCOVERY_SYSTEM_PROMPT = [
   'Prefer a small number of specific, investable themes over broad vague narratives.',
   'A valid theme should be supported by multiple signals, a coherent underlying driver, and a clear market implication.',
   'Name the concrete driver, affected market, and transmission mechanism; avoid generic labels such as uncertainty, volatility, momentum, or AI opportunity without further specificity.',
+  'Never use headline fragments, question scaffolding, dates, months, publishing cadence, generic verbs, or a person name without a coherent market subject as a theme label.',
+  'If the evidence does not support an informative label with at least two meaningful concepts, omit the cluster rather than returning a weak theme.',
   'Distinguish observed evidence from interpretation and lower confidence when the source mix is narrow or evidence is only headline-level.',
   'Link an asset only when a supplied signal explicitly supports that relationship.',
   'Use only the supplied signals. Do not invent events, companies, or catalysts.',
