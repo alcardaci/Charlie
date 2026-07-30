@@ -172,6 +172,7 @@ const semiconductorInput = baseInput({
     news('Semiconductor capacity plans accelerate with new fabs', 22),
     news('Chipmakers expand semiconductor capacity amid capex boom', 23),
   ],
+  quotes: [{ symbol: 'AAPL', shortName: 'Apple Inc.', regularMarketPrice: 200, regularMarketChangePercent: 0 }],
 });
 const semiconductorDashboard = buildDiscoveryDashboard(semiconductorInput);
 assert(semiconductorDashboard.themes.length === 1, 'A coherent semiconductor-capacity cluster should survive');
@@ -209,9 +210,10 @@ const aiDashboard = buildAIDiscoveryDashboard(semiconductorInput, {
   themes: [{
     id: 'fixture-ai-theme',
     label: 'MONTHLY HIT',
-    summary: 'Fixture summary',
+    summary: 'Chipmakers are accelerating new fab spending to expand semiconductor capacity.',
     thesis: 'Fixture thesis',
-    whyItMatters: 'Fixture why',
+    whyItMatters: 'More semiconductor capacity can lift demand for chipmaking equipment as fab spending accelerates.',
+    whyItMattersSignalIds: signalIds,
     actionSummary: 'Fixture action',
     portfolioAngle: 'Fixture portfolio',
     watchlistAngle: 'Fixture watchlist',
@@ -237,9 +239,40 @@ assert(
   'AI asset output must still meet cluster-level support thresholds',
 );
 assert(
-  aiDashboard.themes[0].summary.includes('Semiconductor Capacity is the common thread') &&
-    aiDashboard.themes[0].whyItMatters.includes('It matters because'),
-  'AI-selected discovery themes must retain deterministic evidence-grounded summary and impact wording',
+  aiDashboard.themes[0].summary === 'Chipmakers are accelerating new fab spending to expand semiconductor capacity.' &&
+    aiDashboard.themes[0].whyItMatters === 'More semiconductor capacity can lift demand for chipmaking equipment as fab spending accelerates.',
+  'AI-selected discovery themes must retain concise, evidence-grounded market interpretation wording',
+);
+
+const ungroundedAiDashboard = buildAIDiscoveryDashboard(semiconductorInput, {
+  generatedAt: new Date(now).toISOString(),
+  model: 'fixture-model',
+  themes: [{
+    id: 'fixture-ungrounded-theme',
+    label: 'Semiconductor Capacity',
+    summary: 'Semiconductor capacity expansion will make AAPL the main beneficiary.',
+    thesis: 'Fixture thesis',
+    whyItMatters: 'Buy XYZ before this market trend accelerates.',
+    whyItMattersSignalIds: signalIds,
+    actionSummary: 'Fixture action',
+    portfolioAngle: 'Fixture portfolio',
+    watchlistAngle: 'Fixture watchlist',
+    opportunityAngle: 'Fixture opportunity',
+    primaryRecommendation: 'Fixture recommendation',
+    playbook: [],
+    signalIds,
+    linkedAssets: ['XYZ'],
+    catalysts: [],
+    invalidationSignals: [],
+    watchItems: [],
+    confidence: 75,
+    importance: 75,
+  }],
+});
+assert(
+  ungroundedAiDashboard.themes[0].summary.includes('Semiconductor Capacity is the common thread') &&
+    ungroundedAiDashboard.themes[0].whyItMatters.includes('It matters because'),
+  'Generic or recommendation-like AI copy must fall back to deterministic evidence wording',
 );
 
 console.log(JSON.stringify({

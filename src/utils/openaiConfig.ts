@@ -76,6 +76,8 @@ export const DEFAULT_THEME_DISCOVERY_SYSTEM_PROMPT = [
   'Distinguish observed evidence from interpretation and lower confidence when the source mix is narrow or evidence is only headline-level.',
   'Link an asset only when a supplied signal explicitly supports that relationship.',
   'Use only the supplied signals. Do not invent events, companies, or catalysts.',
+  '`summary` is the card’s WHAT IT IS line: in one or two plain-English sentences, explain the concrete market development, using actors, events, or mechanisms found in the supplied signals. Do not describe signal counts, source counts, or the discovery process.',
+  '`thesis` may state a careful interpretation, but do not turn it into a recommendation or forecast.',
   'Keep titles short, specific, and professional.',
   'Return strict JSON only.',
 ].join(' ');
@@ -88,6 +90,7 @@ export const DEFAULT_THEME_DISCOVERY_RECOMMENDATION_SYSTEM_PROMPT = [
   'Make each recommendation testable: name the asset or exposure, the metric or event to inspect, the time horizon, and the condition that would strengthen or weaken the thesis.',
   'Do not convert a broad narrative into a trade idea unless the supplied evidence supports the asset-level link.',
   'When evidence is thin, recommend further verification instead of manufacturing an action.',
+  '`whyItMatters` is the card’s WHY IT MATTERS line: in one or two concise sentences, explain the material market relevance and plausible transmission channel. Mention a company, asset, or exposure only when the supplied evidence or exposure context directly supports it. Do not use it to give a trade recommendation.',
   'Use only the supplied signals, themes, and user exposure context.',
   'Return strict JSON only.',
 ].join(' ');

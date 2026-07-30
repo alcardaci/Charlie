@@ -201,6 +201,7 @@ export interface AIThemeDiscoveryTheme {
   summary: string;
   thesis: string;
   whyItMatters: string;
+  whyItMattersSignalIds?: string[];
   actionSummary: string;
   portfolioAngle: string;
   watchlistAngle: string;
@@ -692,6 +693,44 @@ function summarizeWhyItMatters(
         ? ` Repeated evidence links it to ${linkedAssets.slice(0, 3).map((asset) => asset.symbol).join(', ')} for follow-up research.`
         : '';
   return `It matters because ${confirmation}${portfolioContext}`;
+}
+
+const INTERPRETATION_METADATA_PATTERNS = [
+  /\b(?:validated\s+)?signals?\b/i,
+  /\bsource\s+types?\b/i,
+  /\bcommon\s+thread\b/i,
+  /\btheme\s+(?:is|has|shows|matters)\b/i,
+  /\bfollow-?up\s+research\b/i,
+];
+
+const INTERPRETATION_RECOMMENDATION_PATTERNS = [
+  /\b(?:buy|sell|add|trim|reduce|increase|overweight|underweight)\b/i,
+  /\bshould\s+(?:buy|sell|add|trim|reduce|increase)\b/i,
+];
+
+function modelInterpretationIsGrounded(
+  candidate: string | undefined,
+  label: string,
+  signals: DiscoveredSignal[],
+  allowedAssets: Set<string>,
+  knownSymbols: Set<string>,
+  allowRecommendation: boolean,
+): candidate is string {
+  const text = candidate?.trim() ?? '';
+  if (!text || text.length > 420) return false;
+  if (INTERPRETATION_METADATA_PATTERNS.some((pattern) => pattern.test(text))) return false;
+  if (!allowRecommendation && INTERPRETATION_RECOMMENDATION_PATTERNS.some((pattern) => pattern.test(text))) return false;
+
+  const evidenceTerms = new Set(extractKeywords(
+    label,
+    ...signals.flatMap((signal) => [signal.title, signal.detail, signal.context]),
+  ));
+  const matchingTerms = unique(tokenize(text).filter((token) => evidenceTerms.has(token)));
+  if (matchingTerms.length < 2) return false;
+
+  const mentionedSymbols = Array.from(text.matchAll(/\b[A-Z]{2,5}\b/g), (match) => match[0])
+    .filter((symbol) => knownSymbols.has(symbol));
+  return mentionedSymbols.every((symbol) => allowedAssets.has(symbol));
 }
 
 function buildNewsSignals(newsItems: NewsItem[], sourceLabel: string): DiscoveredSignal[] {
@@ -1685,6 +1724,11 @@ export function buildAIDiscoveryDashboard(input: DiscoveryInput, aiResult: AIThe
   const holdings = buildPortfolioHoldings(input.portfolio, quoteMap);
   const portfolioSymbols = new Set(holdings.map((holding) => holding.symbol));
   const watchlistSymbols = new Set(input.watchlist.map(upper));
+  const knownSymbols = new Set([
+    ...input.quotes.map((quote) => upper(quote.symbol)),
+    ...portfolioSymbols,
+    ...watchlistSymbols,
+  ]);
 
   const themes = aiResult.themes
     .flatMap((theme, index) => {
@@ -1711,6 +1755,9 @@ export function buildAIDiscoveryDashboard(input: DiscoveryInput, aiResult: AIThe
         watchlistSymbols
       );
       const portfolioImpact = buildPortfolioImpact(linkedAssets.map((asset) => asset.symbol), holdings, watchlistSymbols);
+      const supportedInterpretationAssets = new Set([
+        ...resolvedSignals.flatMap((signal) => signal.assets.map(upper)),
+      ]);
       const signalCount = cluster.signals.length;
       const sourceDiversity = cluster.sourceCounts.size;
       const scoreCap = evidenceScoreCap(sourceDiversity);
@@ -1736,8 +1783,33 @@ export function buildAIDiscoveryDashboard(input: DiscoveryInput, aiResult: AIThe
         { label: 'Primary', detail: theme.primaryRecommendation },
         ...theme.playbook.slice(0, 3).map((detail, itemIndex) => ({ label: `Step ${itemIndex + 1}`, detail })),
       ].filter((item) => item.detail);
+      const deterministicSummary = summarizeCluster(label, cluster, sourceDiversity);
+      const deterministicWhyItMatters = summarizeWhyItMatters(label, cluster, sourceDiversity, linkedAssets, portfolioImpact);
+      const supportedWhyItMattersSignals = unique(theme.whyItMattersSignalIds ?? [])
+        .map((signalId) => signalMap.get(signalId))
+        .filter((signal): signal is DiscoveredSignal => Boolean(signal));
+      const summary = modelInterpretationIsGrounded(
+        theme.summary,
+        label,
+        resolvedSignals,
+        supportedInterpretationAssets,
+        knownSymbols,
+        false,
+      )
+        ? theme.summary.trim()
+        : deterministicSummary;
+      const whyItMatters = supportedWhyItMattersSignals.length > 0 && modelInterpretationIsGrounded(
+        theme.whyItMatters,
+        label,
+        supportedWhyItMattersSignals,
+        supportedInterpretationAssets,
+        knownSymbols,
+        false,
+      )
+        ? theme.whyItMatters.trim()
+        : deterministicWhyItMatters;
       const implications = [
-        summarizeCluster(label, cluster, sourceDiversity),
+        summary,
         theme.thesis,
         portfolioImpact.holdings.length > 0
           ? `This theme already affects ${portfolioImpact.holdings.length} portfolio holding${portfolioImpact.holdings.length === 1 ? '' : 's'} with ${portfolioImpact.portfolioWeightPct.toFixed(1)}% total weight.`
@@ -1749,9 +1821,9 @@ export function buildAIDiscoveryDashboard(input: DiscoveryInput, aiResult: AIThe
       return [{
         id: theme.id || `ai-theme-${index}`,
         label,
-        summary: summarizeCluster(label, cluster, sourceDiversity),
+        summary,
         thesis: theme.thesis,
-        whyItMatters: summarizeWhyItMatters(label, cluster, sourceDiversity, linkedAssets, portfolioImpact),
+        whyItMatters,
         actionSummary: theme.actionSummary,
         primaryRecommendation: theme.primaryRecommendation,
         playbook: theme.playbook.slice(0, 4),
