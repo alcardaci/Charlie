@@ -191,6 +191,16 @@ assert(
   ),
   'Semiconductor-only evidence must not attach cloud-platform assets',
 );
+assert(
+  semiconductorTheme.summary.includes('Semiconductor Capacity is the common thread') &&
+    semiconductorTheme.summary.includes('chipmakers raise capex'),
+  `Theme summary must explain the validated evidence, received "${semiconductorTheme.summary}"`,
+);
+assert(
+  semiconductorTheme.whyItMatters.includes('It matters because') &&
+    semiconductorTheme.whyItMatters.includes('one signal type'),
+  `Theme impact must disclose narrow evidence context, received "${semiconductorTheme.whyItMatters}"`,
+);
 
 const signalIds = buildThemeDiscoverySignalPayload(semiconductorInput).signals.map((signal) => signal.id);
 const aiDashboard = buildAIDiscoveryDashboard(semiconductorInput, {
@@ -225,6 +235,11 @@ assert(
 assert(
   aiDashboard.themes[0].linkedAssets.every((asset) => asset.symbol !== 'XYZ'),
   'AI asset output must still meet cluster-level support thresholds',
+);
+assert(
+  aiDashboard.themes[0].summary.includes('Semiconductor Capacity is the common thread') &&
+    aiDashboard.themes[0].whyItMatters.includes('It matters because'),
+  'AI-selected discovery themes must retain deterministic evidence-grounded summary and impact wording',
 );
 
 console.log(JSON.stringify({

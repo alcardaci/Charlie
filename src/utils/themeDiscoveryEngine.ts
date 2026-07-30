@@ -662,10 +662,36 @@ function pickClusterLabel(cluster: Cluster, quality = analyzeClusterQuality(clus
   return null;
 }
 
-function summarizeCluster(cluster: Cluster, sourceDiversity: number, topAssets: string[]): string {
-  const topSource = [...cluster.sourceCounts.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] ?? 'signals';
-  const assetText = topAssets.length > 0 ? ` Linked assets: ${topAssets.join(', ')}.` : '';
-  return `${cluster.signals.length} signals across ${sourceDiversity} source types, led by ${topSource}.${assetText}`;
+function summarizeCluster(label: string, cluster: Cluster, sourceDiversity: number): string {
+  const leadSignal = [...cluster.signals]
+    .sort((left, right) => right.timestamp - left.timestamp)[0];
+  const evidenceLead = leadSignal?.title?.trim()
+    ? ` The newest supporting evidence is: ${leadSignal.title.trim()}.`
+    : '';
+  const breadth = sourceDiversity > 1
+    ? `${sourceDiversity} signal types`
+    : 'one signal type';
+  return `${label} is the common thread across ${cluster.signals.length} validated signals from ${breadth}.${evidenceLead}`;
+}
+
+function summarizeWhyItMatters(
+  label: string,
+  cluster: Cluster,
+  sourceDiversity: number,
+  linkedAssets: DiscoveredThemeAsset[],
+  portfolioImpact: Pick<DiscoveredTheme['portfolioImpact'], 'holdings' | 'portfolioWeightPct' | 'watchlistOverlap'>,
+): string {
+  const confirmation = sourceDiversity > 1
+    ? `${sourceDiversity} signal types are reinforcing the same ${label.toLowerCase()} development rather than one isolated headline.`
+    : `${cluster.signals.length} signals point to the same development, but they come from one signal type, so confirmation is still limited.`;
+  const portfolioContext = portfolioImpact.holdings.length > 0
+    ? ` It already touches ${portfolioImpact.holdings.length} portfolio holding${portfolioImpact.holdings.length === 1 ? '' : 's'} (${portfolioImpact.portfolioWeightPct.toFixed(1)}% by value).`
+    : portfolioImpact.watchlistOverlap.length > 0
+      ? ` It already overlaps the watchlist through ${portfolioImpact.watchlistOverlap.slice(0, 3).join(', ')}.`
+      : linkedAssets.length > 0
+        ? ` Repeated evidence links it to ${linkedAssets.slice(0, 3).map((asset) => asset.symbol).join(', ')} for follow-up research.`
+        : '';
+  return `It matters because ${confirmation}${portfolioContext}`;
 }
 
 function buildNewsSignals(newsItems: NewsItem[], sourceLabel: string): DiscoveredSignal[] {
@@ -1597,8 +1623,9 @@ function buildDiscoveredThemes(input: DiscoveryInput): DiscoveredTheme[] {
     const invalidationSignals = buildInvalidationSignals(cluster, linkedAssets);
     const implications = buildImplications(cluster, sourceDiversity, linkedAssets, portfolioImpact);
     const actionItems = buildActionItems(cluster, linkedAssets, portfolioImpact);
-    const thesis = implications[0] ?? summarizeCluster(cluster, sourceDiversity, linkedAssets.slice(0, 3).map((asset) => asset.symbol));
-    const whyItMatters = implications[1] ?? `This theme is building through ${signalCount} signals across ${sourceDiversity} source types.`;
+    const summary = summarizeCluster(label, cluster, sourceDiversity);
+    const thesis = implications[0] ?? summary;
+    const whyItMatters = summarizeWhyItMatters(label, cluster, sourceDiversity, linkedAssets, portfolioImpact);
     const actionSummary = actionItems.slice(0, 2).map((item) => item.detail).join(' ');
     const playbook = actionItems.map((item) => item.detail).slice(0, 4);
     const primaryRecommendation = playbook[0] ?? portfolioImpact.portfolioRecommendation;
@@ -1606,7 +1633,7 @@ function buildDiscoveredThemes(input: DiscoveryInput): DiscoveredTheme[] {
     return {
       id: cluster.id,
       label,
-      summary: summarizeCluster(cluster, sourceDiversity, linkedAssets.slice(0, 3).map((asset) => asset.symbol)),
+      summary,
       thesis,
       whyItMatters,
       actionSummary,
@@ -1710,7 +1737,7 @@ export function buildAIDiscoveryDashboard(input: DiscoveryInput, aiResult: AIThe
         ...theme.playbook.slice(0, 3).map((detail, itemIndex) => ({ label: `Step ${itemIndex + 1}`, detail })),
       ].filter((item) => item.detail);
       const implications = [
-        theme.summary,
+        summarizeCluster(label, cluster, sourceDiversity),
         theme.thesis,
         portfolioImpact.holdings.length > 0
           ? `This theme already affects ${portfolioImpact.holdings.length} portfolio holding${portfolioImpact.holdings.length === 1 ? '' : 's'} with ${portfolioImpact.portfolioWeightPct.toFixed(1)}% total weight.`
@@ -1722,9 +1749,9 @@ export function buildAIDiscoveryDashboard(input: DiscoveryInput, aiResult: AIThe
       return [{
         id: theme.id || `ai-theme-${index}`,
         label,
-        summary: theme.summary,
+        summary: summarizeCluster(label, cluster, sourceDiversity),
         thesis: theme.thesis,
-        whyItMatters: theme.whyItMatters,
+        whyItMatters: summarizeWhyItMatters(label, cluster, sourceDiversity, linkedAssets, portfolioImpact),
         actionSummary: theme.actionSummary,
         primaryRecommendation: theme.primaryRecommendation,
         playbook: theme.playbook.slice(0, 4),

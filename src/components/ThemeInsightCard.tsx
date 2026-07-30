@@ -134,7 +134,16 @@ export function ThemeInsightCard({
               </span>
               <span className="text-[11px] text-terminal-faint">{theme.signalCount} signals · {theme.sourceDiversity} source types</span>
             </div>
-            <p className="mt-2 text-sm leading-relaxed text-terminal-text">{theme.summary}</p>
+            <div className="mt-2 space-y-1.5 text-sm leading-relaxed text-terminal-text">
+              <p>
+                <span className="mr-2 text-[10px] font-bold tracking-[0.14em] text-terminal-faint">WHAT IT IS</span>
+                {theme.summary}
+              </p>
+              <p className="text-xs text-terminal-muted">
+                <span className="mr-2 text-[10px] font-bold tracking-[0.14em] text-terminal-faint">WHY IT MATTERS</span>
+                {theme.whyItMatters}
+              </p>
+            </div>
             <p className="mt-1 text-[11px] text-terminal-muted">
               Nearest signal {formatSignalTiming(theme.freshestAt)} · {theme.keywords.join(', ')}
             </p>
@@ -157,10 +166,6 @@ export function ThemeInsightCard({
               <div className="grid gap-1 py-2.5 md:grid-cols-[8rem_minmax(0,1fr)] md:gap-3">
                 <dt className="text-[10px] tracking-[0.14em] text-terminal-faint">THESIS</dt>
                 <dd className="text-xs leading-relaxed text-terminal-text">{theme.thesis}</dd>
-              </div>
-              <div className="grid gap-1 py-2.5 md:grid-cols-[8rem_minmax(0,1fr)] md:gap-3">
-                <dt className="text-[10px] tracking-[0.14em] text-terminal-faint">WHY IT MATTERS</dt>
-                <dd className="text-xs leading-relaxed text-terminal-text">{theme.whyItMatters}</dd>
               </div>
               <div className="grid gap-1 py-2.5 md:grid-cols-[8rem_minmax(0,1fr)] md:gap-3">
                 <dt className="text-[10px] tracking-[0.14em] text-terminal-faint">NEXT MOVE</dt>

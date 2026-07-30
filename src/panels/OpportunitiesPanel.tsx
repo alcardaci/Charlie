@@ -52,7 +52,7 @@ import {
 
 const LOOKBACK_HOURS = 72;
 const TOPIC_STORAGE_KEY = 'bterminal-hybrid-opportunity-topics-v1';
-const DISCOVERY_CACHE_KEY = 'bterminal-hybrid-discovery-cache-v1';
+const DISCOVERY_CACHE_KEY = 'bterminal-hybrid-discovery-cache-v3';
 const TOPIC_CACHE_KEY_PREFIX = 'bterminal-hybrid-topic-cache-v1';
 const HYBRID_CACHE_TTL_MS = 30 * 60 * 1000;
 const BASE_INPUT_QUERY_STALE_MS = 5 * 60 * 1000;
