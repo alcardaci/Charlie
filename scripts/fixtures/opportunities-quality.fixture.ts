@@ -3,6 +3,8 @@ import {
   buildDiscoveryDashboard,
   buildThemeDiscoverySignalPayload,
 } from '../../src/utils/themeDiscoveryEngine.ts';
+import { isCachedDiscoverySnapshot } from '../../src/utils/discoveryCache.ts';
+import { sanitizePersistedCountryCounts } from '../../src/utils/geopoliticalCache.ts';
 
 const now = Date.now();
 
@@ -203,6 +205,113 @@ assert(
   `Theme impact must disclose narrow evidence context, received "${semiconductorTheme.whyItMatters}"`,
 );
 
+const priceActionInput = baseInput({
+  marketNews: [
+    news('Broker adjusts price target after routine review', 24),
+    news('Analyst adjusts price target in latest update', 25),
+    news('Research firm adjusts price target after results', 26),
+  ],
+});
+const priceActionSignalIds = buildThemeDiscoverySignalPayload(priceActionInput).signals.map((signal) => signal.id);
+const priceActionDashboard = buildAIDiscoveryDashboard(priceActionInput, {
+  generatedAt: new Date(now).toISOString(),
+  model: 'fixture-model',
+  themes: [{
+    id: 'fixture-adjusts-price',
+    label: 'Adjusts Price',
+    summary: 'Routine price-target changes repeated across several headlines.',
+    thesis: 'Fixture thesis',
+    whyItMatters: 'Fixture relevance',
+    whyItMattersSignalIds: priceActionSignalIds,
+    actionSummary: 'Fixture action',
+    portfolioAngle: 'Fixture portfolio',
+    watchlistAngle: 'Fixture watchlist',
+    opportunityAngle: 'Fixture opportunity',
+    primaryRecommendation: 'Fixture recommendation',
+    playbook: [],
+    signalIds: priceActionSignalIds,
+    linkedAssets: [],
+    catalysts: [],
+    invalidationSignals: [],
+    watchItems: [],
+    confidence: 60,
+    importance: 55,
+  }],
+});
+assert(
+  priceActionDashboard.themes.length === 0,
+  'The headline fragment "Adjusts Price" must be suppressed when no coherent market subject is available',
+);
+
+const adjustedSemiconductorInput = baseInput({
+  marketNews: [
+    news('Chipmaker adjusts price as semiconductor capacity expands', 27),
+    news('Supplier adjusts price while semiconductor capacity grows', 28),
+    news('Manufacturer adjusts price amid semiconductor capacity investment', 29),
+  ],
+});
+const adjustedSemiconductorSignalIds = buildThemeDiscoverySignalPayload(adjustedSemiconductorInput).signals.map((signal) => signal.id);
+const adjustedSemiconductorDashboard = buildAIDiscoveryDashboard(adjustedSemiconductorInput, {
+  generatedAt: new Date(now).toISOString(),
+  model: 'fixture-model',
+  themes: [{
+    id: 'fixture-adjusts-price-with-fallback',
+    label: 'Adjusts Price',
+    summary: 'Semiconductor capacity is expanding across chipmakers and suppliers.',
+    thesis: 'Fixture thesis',
+    whyItMatters: 'Semiconductor capacity expansion can change equipment demand and supply conditions.',
+    whyItMattersSignalIds: adjustedSemiconductorSignalIds,
+    actionSummary: 'Fixture action',
+    portfolioAngle: 'Fixture portfolio',
+    watchlistAngle: 'Fixture watchlist',
+    opportunityAngle: 'Fixture opportunity',
+    primaryRecommendation: 'Fixture recommendation',
+    playbook: [],
+    signalIds: adjustedSemiconductorSignalIds,
+    linkedAssets: [],
+    catalysts: [],
+    invalidationSignals: [],
+    watchItems: [],
+    confidence: 75,
+    importance: 75,
+  }],
+});
+assert(adjustedSemiconductorDashboard.themes.length === 1, 'A coherent grounded fallback should preserve the AI-selected evidence cluster');
+assert(
+  adjustedSemiconductorDashboard.themes[0].label === 'Semiconductor Capacity',
+  `"Adjusts Price" should fall back to "Semiconductor Capacity", received "${adjustedSemiconductorDashboard.themes[0].label}"`,
+);
+
+const validAiLabelDashboard = buildAIDiscoveryDashboard(semiconductorInput, {
+  generatedAt: new Date(now).toISOString(),
+  model: 'fixture-model',
+  themes: [{
+    id: 'fixture-valid-market-label',
+    label: 'Semiconductor Capacity',
+    summary: 'Chipmakers are expanding semiconductor capacity through new fab spending.',
+    thesis: 'Fixture thesis',
+    whyItMatters: 'Semiconductor capacity expansion can affect equipment demand and supply conditions.',
+    whyItMattersSignalIds: buildThemeDiscoverySignalPayload(semiconductorInput).signals.map((signal) => signal.id),
+    actionSummary: 'Fixture action',
+    portfolioAngle: 'Fixture portfolio',
+    watchlistAngle: 'Fixture watchlist',
+    opportunityAngle: 'Fixture opportunity',
+    primaryRecommendation: 'Fixture recommendation',
+    playbook: [],
+    signalIds: buildThemeDiscoverySignalPayload(semiconductorInput).signals.map((signal) => signal.id),
+    linkedAssets: [],
+    catalysts: [],
+    invalidationSignals: [],
+    watchItems: [],
+    confidence: 75,
+    importance: 75,
+  }],
+});
+assert(
+  validAiLabelDashboard.themes[0]?.label === 'Semiconductor Capacity',
+  'A coherent, repeatedly evidenced market-theme label should remain eligible',
+);
+
 const signalIds = buildThemeDiscoverySignalPayload(semiconductorInput).signals.map((signal) => signal.id);
 const aiDashboard = buildAIDiscoveryDashboard(semiconductorInput, {
   generatedAt: new Date(now).toISOString(),
@@ -273,6 +382,52 @@ assert(
   ungroundedAiDashboard.themes[0].summary.includes('Semiconductor Capacity is the common thread') &&
     ungroundedAiDashboard.themes[0].whyItMatters.includes('It matters because'),
   'Generic or recommendation-like AI copy must fall back to deterministic evidence wording',
+);
+
+const cachedAiSnapshot = {
+  dashboard: aiDashboard,
+  evidenceKey: 'fixture-evidence',
+};
+assert(isCachedDiscoverySnapshot(cachedAiSnapshot), 'A validated AI dashboard cache should be accepted');
+assert(
+  !isCachedDiscoverySnapshot(aiDashboard) &&
+    !isCachedDiscoverySnapshot({ dashboard: null, evidenceKey: 'fixture-evidence' }) &&
+    !isCachedDiscoverySnapshot({ dashboard: aiDashboard, evidenceKey: null }),
+  'Plain, null, or incompatible discovery cache records must be treated as cache misses',
+);
+
+const validCachedCountry = {
+  key: 'united-states',
+  label: 'United States',
+  shortLabel: 'US',
+  countryCode: ' us ',
+  region: 'north-america',
+  count: 2,
+  query: 'markets',
+  source: 'Fixture cache',
+  latestAt: now,
+  x: 10,
+  y: 20,
+  stories: [news('Valid cached geopolitical story', 30), { title: null }],
+};
+const sanitizedCountries = sanitizePersistedCountryCounts([
+  { count: 1, label: 'Legacy row without a country code' },
+  validCachedCountry,
+]);
+assert(sanitizedCountries?.length === 1, 'Malformed cached country rows should be discarded');
+assert(sanitizedCountries[0].countryCode === 'US', 'Cached country codes should be normalized');
+assert(sanitizedCountries[0].stories?.length === 1, 'Malformed cached stories should be discarded');
+assert(
+  sanitizePersistedCountryCounts({ countries: [] }) === null &&
+    sanitizePersistedCountryCounts([{ count: 1 }]) === null,
+  'Malformed or legacy country-count cache shapes should be treated as cache misses',
+);
+const safeCachedCountryDashboard = buildDiscoveryDashboard(baseInput({
+  countryCounts: sanitizePersistedCountryCounts([{ count: 1 }]) ?? [],
+}));
+assert(
+  safeCachedCountryDashboard.stats.clusterCount === 0,
+  'A malformed geopolitical cache must degrade to empty evidence instead of breaking discovery',
 );
 
 console.log(JSON.stringify({

@@ -29,6 +29,13 @@ function overlapTone(overlap: DiscoveredTheme['linkedAssets'][number]['overlap']
   }
 }
 
+function scoreIntensityTone(value: number): string {
+  if (value >= 80) return 'text-terminal-negative';
+  if (value >= 65) return 'text-amber-300';
+  if (value >= 40) return 'text-terminal-muted';
+  return 'text-terminal-positive';
+}
+
 const SCORE_HELP: Record<'emergence' | 'breadth' | 'urgency' | 'relevance', { description: string; source: string }> = {
   emergence: {
     description: 'How newly and quickly this theme is starting to form.',
@@ -84,14 +91,22 @@ function ScoreTile({
   value: number;
   help: { description: string; source: string };
 }) {
+  const displayLabel = label[0].toUpperCase() + label.slice(1);
+
   return (
-    <div className="flex min-w-0 items-baseline gap-1.5">
-      <div className="flex items-center gap-1 text-terminal-faint">
-        <span className="truncate">{label[0].toUpperCase() + label.slice(1)}</span>
+    <div className="grid min-h-[5rem] min-w-0 grid-rows-[minmax(2.25rem,1fr)_auto] border-l border-terminal-border pl-3">
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <span className="truncate text-[13px] font-semibold leading-tight tracking-[0.04em] text-terminal-muted">
+          {displayLabel}
+        </span>
         <InfoTooltip label={label} description={help.description} source={help.source} />
       </div>
-      <div className="font-bold text-terminal-text" aria-label={`${label} score ${value} out of 100`}>
-        {value}<span className="text-[10px] font-normal text-terminal-faint">/100</span>
+      <div
+        className={`flex items-baseline gap-0.5 text-xl font-bold leading-none ${scoreIntensityTone(value)}`}
+        aria-label={`${label} score ${value} out of 100; color indicates relative score intensity, not direction or recommendation`}
+        title="Relative score intensity only; color does not indicate a positive or negative market outcome."
+      >
+        {value}<span className="text-[11px] font-normal text-terminal-faint">/100</span>
       </div>
     </div>
   );
@@ -149,7 +164,7 @@ export function ThemeInsightCard({
             </p>
           </div>
 
-          <div className="flex w-full flex-wrap gap-x-4 gap-y-1 border-t border-terminal-border pt-2 text-[11px] sm:w-auto sm:border-0 sm:pt-0">
+          <div className="grid w-full grid-cols-2 gap-x-4 gap-y-4 border-t border-terminal-border pt-3 md:w-[32rem] md:border-0 md:pt-0">
             <ScoreTile label="emergence" value={theme.emergenceScore} help={SCORE_HELP.emergence} />
             <ScoreTile label="breadth" value={theme.breadthScore} help={SCORE_HELP.breadth} />
             <ScoreTile label="urgency" value={theme.urgencyScore} help={SCORE_HELP.urgency} />

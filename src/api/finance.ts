@@ -59,6 +59,7 @@ import {
 } from '../data/macroRegistry';
 import { POLICY_SCHEDULE_EVENTS } from '../data/policyCalendar';
 import type { AIThemeDiscoveryResult, AIThemeGuidanceResult } from '../utils/themeDiscoveryEngine';
+import { sanitizePersistedCountryCounts } from '../utils/geopoliticalCache';
 
 const YF = '/api/yf';
 const FH = '/api/finnhub';
@@ -3061,7 +3062,7 @@ export function readCachedGeopoliticalMapCountryCounts(
 ): CountryNewsCount[] | null {
   const cacheKey = buildGeopoliticalMapCacheKey(lookbackHours, options);
   const persisted = readPersistedGeopoliticalMapDataset(cacheKey);
-  return persisted?.countries ?? null;
+  return sanitizePersistedCountryCounts(persisted?.countries);
 }
 
 export function writeGeopoliticalMapCountryCountCache(

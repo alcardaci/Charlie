@@ -488,6 +488,42 @@ type ClusterQuality = {
   properNameTokens: Set<string>;
 };
 
+const DISCOVERED_LABEL_ACTION_WORDS = new Set([
+  'adjust', 'adjusted', 'adjusting', 'adjusts',
+  'boost', 'boosted', 'boosting', 'boosts',
+  'change', 'changed', 'changes', 'changing',
+  'cut', 'cuts', 'cutting',
+  'downgrade', 'downgraded', 'downgrades', 'downgrading',
+  'expect', 'expected', 'expects',
+  'initiate', 'initiated', 'initiates', 'initiating',
+  'lift', 'lifted', 'lifting', 'lifts',
+  'lower', 'lowered', 'lowering', 'lowers',
+  'maintain', 'maintained', 'maintains', 'maintaining',
+  'raise', 'raised', 'raises', 'raising',
+  'reiterate', 'reiterated', 'reiterates', 'reiterating',
+  'revise', 'revised', 'revises', 'revising',
+  'rise', 'rises', 'rising',
+  'set', 'sets', 'setting',
+  'trim', 'trimmed', 'trimming', 'trims',
+  'upgrade', 'upgraded', 'upgrades', 'upgrading',
+]);
+
+const DISCOVERED_LABEL_ACTION_OBJECTS = new Set([
+  'estimate', 'estimates', 'forecast', 'forecasts', 'outlook', 'price', 'prices',
+  'rating', 'ratings', 'recommendation', 'recommendations', 'target', 'targets',
+]);
+
+const DISCOVERED_LABEL_LEADING_SCAFFOLD = new Set([
+  'avoid', 'buy', 'can', 'consider', 'could', 'expect', 'how', 'should', 'sell',
+  'watch', 'what', 'when', 'where', 'why', 'will', 'would',
+]);
+
+const DISCOVERED_LABEL_CADENCE_WORDS = new Set([
+  'annual', 'daily', 'earnings', 'latest', 'month', 'monthly', 'q1', 'q2', 'q3', 'q4',
+  'quarter', 'quarterly', 'report', 'reports', 'results', 'today', 'update', 'updates',
+  'week', 'weekly', 'year', 'yearly',
+]);
+
 function isCapitalizedNameWord(word: string): boolean {
   return /^[A-Z][a-z]+(?:['-][A-Z]?[a-z]+)?$/.test(word);
 }
@@ -558,7 +594,38 @@ function analyzeClusterQuality(cluster: Cluster): ClusterQuality {
   };
 }
 
+function discoveredThemeLabelIsCoherent(label: string, cluster: Cluster, quality: ClusterQuality): boolean {
+  const normalizedLabel = normalizeText(label);
+  const rawTokens = normalizedLabel.split(' ').filter(Boolean);
+  if (rawTokens.length < 2 || rawTokens.length > 7) return false;
+  if (label.includes('?') || DISCOVERED_LABEL_LEADING_SCAFFOLD.has(rawTokens[0])) return false;
+  if (rawTokens.some((token) => DISCOVERED_LABEL_CADENCE_WORDS.has(token))) return false;
+  if (DISCOVERED_LABEL_ACTION_WORDS.has(rawTokens[0])) return false;
+
+  const labelTokens = tokenize(label).filter((token) => !quality.properNameTokens.has(token));
+  const actionTokenCount = labelTokens.filter((token) => DISCOVERED_LABEL_ACTION_WORDS.has(token)).length;
+  const subjectTokens = labelTokens.filter((token) =>
+    !DISCOVERED_LABEL_ACTION_WORDS.has(token) &&
+    !DISCOVERED_LABEL_ACTION_OBJECTS.has(token)
+  );
+
+  if (subjectTokens.length === 0) return false;
+  if (actionTokenCount > 0 && subjectTokens.length < 2) return false;
+
+  if (cluster.sourceCounts.size === 1) {
+    const repeatedAsPhrase = (cluster.phraseCounts.get(normalizedLabel) ?? 0) >= 3;
+    const stronglyRepeatedSubjects = subjectTokens.filter(
+      (token) => (cluster.keywordCounts.get(token) ?? 0) >= 3
+    );
+    if (!repeatedAsPhrase && stronglyRepeatedSubjects.length < 2) return false;
+  }
+
+  return true;
+}
+
 function proposedThemeLabelIsGrounded(label: string, cluster: Cluster, quality = analyzeClusterQuality(cluster)): boolean {
+  if (!discoveredThemeLabelIsCoherent(label, cluster, quality)) return false;
+
   const labelTokens = tokenize(label).filter((token) => !quality.properNameTokens.has(token));
   if (labelTokens.length < 2) return false;
 
@@ -656,8 +723,14 @@ function pickClusterLabel(cluster: Cluster, quality = analyzeClusterQuality(clus
   );
   if (phraseCandidate) return toTitleCase(phraseCandidate);
 
-  if (quality.repeatedKeywords.length >= 2) {
-    return toTitleCase(quality.repeatedKeywords.slice(0, 2).join(' '));
+  const candidateKeywords = quality.repeatedKeywords.slice(0, 6);
+  for (let leftIndex = 0; leftIndex < candidateKeywords.length - 1; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < candidateKeywords.length; rightIndex += 1) {
+      const candidate = `${candidateKeywords[leftIndex]} ${candidateKeywords[rightIndex]}`;
+      if (proposedThemeLabelIsGrounded(candidate, cluster, quality)) {
+        return toTitleCase(candidate);
+      }
+    }
   }
 
   return null;
