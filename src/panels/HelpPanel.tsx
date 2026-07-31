@@ -5,7 +5,7 @@ import { useAppVersion } from '../utils/appVersion';
 const WORKSPACES = [
   { title: 'Market Overview', command: 'HOME', summary: 'Cross-asset pulse, movers, sentiment, portfolio snapshot, macro calendar, and prediction-market forecasts.' },
   { title: 'Portfolio', command: 'PORT', summary: 'Lots, cost basis, exposures, and editable portfolio bookkeeping.' },
-  { title: 'Opportunities', command: 'OPPS', summary: 'Live theme discovery plus keyword-driven topic cards.' },
+  { title: 'Opportunities', command: 'OPPS', summary: 'Live themes, keyword research, and locally baselined early structural signals.' },
   { title: 'Research Workspace', command: 'AAPL', summary: 'Ticker-level company stats, leadership, filings, segment data, and analyst context.' },
   { title: 'Chart View', command: 'MSFT GP', summary: 'Interactive price action with multiple chart styles and timeframes.' },
   { title: 'News + Geopolitics', command: 'NEWS', summary: 'World news, geopolitical risk, and the global event map in one view.' },

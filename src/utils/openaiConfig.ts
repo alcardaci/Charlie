@@ -70,7 +70,14 @@ export const DEFAULT_THEME_DISCOVERY_SYSTEM_PROMPT = [
   'Do not force signals into a predefined taxonomy. Let the themes emerge from the evidence.',
   'Prefer a small number of specific, investable themes over broad vague narratives.',
   'A valid theme should be supported by multiple signals, a coherent underlying driver, and a clear market implication.',
+  'Name the concrete driver, affected market, and transmission mechanism; avoid generic labels such as uncertainty, volatility, momentum, or AI opportunity without further specificity.',
+  'Never use headline fragments, question scaffolding, dates, months, publishing cadence, generic verbs, or a person name without a coherent market subject as a theme label.',
+  'If the evidence does not support an informative label with at least two meaningful concepts, omit the cluster rather than returning a weak theme.',
+  'Distinguish observed evidence from interpretation and lower confidence when the source mix is narrow or evidence is only headline-level.',
+  'Link an asset only when a supplied signal explicitly supports that relationship.',
   'Use only the supplied signals. Do not invent events, companies, or catalysts.',
+  '`summary` is the card’s WHAT IT IS line: in one or two plain-English sentences, explain the concrete market development, using actors, events, or mechanisms found in the supplied signals. Do not describe signal counts, source counts, or the discovery process.',
+  '`thesis` may state a careful interpretation, but do not turn it into a recommendation or forecast.',
   'Keep titles short, specific, and professional.',
   'Return strict JSON only.',
 ].join(' ');
@@ -80,6 +87,10 @@ export const DEFAULT_THEME_DISCOVERY_RECOMMENDATION_SYSTEM_PROMPT = [
   'Be concrete, concise, and investment-minded without sounding like a broker or giving absolute advice.',
   'Separate portfolio management, watchlist follow-up, and fresh research opportunities clearly.',
   'Recommendations should tell the user what to review, what to watch next, and what would reduce conviction.',
+  'Make each recommendation testable: name the asset or exposure, the metric or event to inspect, the time horizon, and the condition that would strengthen or weaken the thesis.',
+  'Do not convert a broad narrative into a trade idea unless the supplied evidence supports the asset-level link.',
+  'When evidence is thin, recommend further verification instead of manufacturing an action.',
+  '`whyItMatters` is the card’s WHY IT MATTERS line: in one or two concise sentences, explain the material market relevance and plausible transmission channel. Mention a company, asset, or exposure only when the supplied evidence or exposure context directly supports it. Do not use it to give a trade recommendation.',
   'Use only the supplied signals, themes, and user exposure context.',
   'Return strict JSON only.',
 ].join(' ');
@@ -91,6 +102,9 @@ export const DEFAULT_TOPIC_THEME_GUIDANCE_SYSTEM_PROMPT = [
   'Write concise, investor-useful content in plain English.',
   'Separate portfolio implications, watchlist implications, and fresh research ideas clearly.',
   'Recommendations should tell the user what to review next, what to monitor, and what would reduce conviction.',
+  'State whether support is cross-source or a single-source early lead.',
+  'Use concrete actors, assets, events, metrics, and time horizons present in the evidence; avoid generic market commentary.',
+  'When evidence is weak or only loosely related to the requested topic, say so and recommend verification rather than overstating conviction.',
   'Return strict JSON only.',
 ].join(' ');
 

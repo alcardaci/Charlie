@@ -16,6 +16,7 @@ type DiscoveredSignal = {
   sourceLabel: string;
   title: string;
   detail: string;
+  context?: string;
   url?: string | null;
   timestamp: number;
   intensity: number;
@@ -31,6 +32,8 @@ export interface ThemeDiscoverySignalPayload {
   sourceLabel: string;
   title: string;
   detail: string;
+  context?: string;
+  url?: string | null;
   timestamp: number;
   assets: string[];
   countries: string[];
@@ -53,6 +56,7 @@ export interface DiscoveredThemeEvidence {
   type: SignalType;
   title: string;
   detail: string;
+  context?: string;
   sourceLabel: string;
   url?: string | null;
   timestamp: number;
@@ -173,7 +177,9 @@ export interface TopicThemeGuidanceSnapshot {
       type: SignalType;
       title: string;
       detail: string;
+      context?: string;
       sourceLabel: string;
+      url?: string | null;
       timestamp: number;
     }>;
     portfolioImpact: {
@@ -195,6 +201,7 @@ export interface AIThemeDiscoveryTheme {
   summary: string;
   thesis: string;
   whyItMatters: string;
+  whyItMattersSignalIds?: string[];
   actionSummary: string;
   portfolioAngle: string;
   watchlistAngle: string;
@@ -243,8 +250,10 @@ type DiscoveryInput = {
   techNews: NewsItem[];
   economyNews: NewsItem[];
   energyNews: NewsItem[];
+  geopoliticsNews: NewsItem[];
   countryCounts: CountryNewsCount[];
   predictions: PredictionForecast[];
+  predictionsUpdatedAt?: string;
   sentiment: MarketSentimentSnapshot | null;
   calendarEvents: CalendarEvent[];
   portfolio: PortfolioPosition[];
@@ -281,23 +290,37 @@ type KeywordTopic = {
 };
 
 const GENERIC_WORDS = new Set([
-  'about', 'after', 'again', 'also', 'amid', 'analyst', 'analysts', 'and', 'are', 'around', 'bank',
-  'because', 'before', 'below', 'between', 'boost', 'business', 'could', 'data', 'despite', 'during',
-  'earnings', 'economy', 'financial', 'finance', 'from', 'global', 'have', 'headline', 'headlines',
-  'higher', 'impact', 'into', 'investor', 'investors', 'lower', 'market', 'markets', 'more', 'news',
-  'outlook', 'over', 'rate', 'rates', 'report', 'reports', 'risk', 'said', 'sector', 'shares', 'signal',
-  'signals', 'since', 'stock', 'stocks', 'story', 'their', 'there', 'these', 'they', 'this', 'through',
-  'today', 'under', 'update', 'when', 'while', 'with', 'worry', 'worries',
+  'about', 'according', 'after', 'again', 'all', 'also', 'amid', 'analyst', 'analysts', 'and', 'annual',
+  'announced', 'announces', 'any', 'are', 'around', 'bank', 'because', 'been', 'before', 'being', 'below',
+  'between', 'boost', 'breaking', 'business', 'but', 'can', 'could', 'daily', 'data', 'despite', 'during',
+  'earnings', 'economy', 'exclusive', 'financial', 'finance', 'first', 'for', 'fourth', 'from', 'global',
+  'had', 'has', 'have', 'headline', 'headlines', 'her', 'here', 'higher', 'him', 'his', 'hit', 'hits',
+  'how', 'impact', 'inc', 'into', 'investor', 'investors', 'its', 'latest', 'live', 'lower', 'market',
+  'markets', 'may', 'might', 'month', 'monthly', 'months', 'more', 'must', 'new', 'news', 'nor', 'not',
+  'now', 'one', 'opinion', 'our', 'outlook', 'over', 'quarter', 'quarterly', 'quarters', 'rate', 'rates',
+  'report', 'reported', 'reporting', 'reports', 'results', 'risk', 'said', 'say', 'says', 'second',
+  'sector', 'shares', 'should', 'signal', 'signals', 'since', 'some', 'stock', 'stocks', 'story', 'than',
+  'the', 'their', 'them', 'then', 'there', 'these', 'they', 'third', 'this', 'those', 'through', 'today',
+  'two', 'under', 'update', 'updates', 'was', 'watch', 'weekly', 'were', 'what', 'when', 'where', 'which',
+  'while', 'who', 'why', 'will', 'with', 'world', 'worry', 'worries', 'would', 'year', 'years', 'yet',
+  'you', 'your',
+  'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october',
+  'november', 'december', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
+  'politics', 'q1', 'q2', 'q3', 'q4',
 ]);
 
 const ASSET_HINTS: Array<{ keywords: string[]; symbols: string[] }> = [
-  { keywords: ['ai', 'artificial intelligence', 'semiconductor', 'chip', 'chips', 'gpu', 'server', 'data center', 'cloud'], symbols: ['NVDA', 'AMD', 'AVGO', 'SMH', 'MSFT', 'AMZN', 'GOOGL'] },
-  { keywords: ['oil', 'crude', 'lng', 'natural gas', 'opec', 'refinery', 'brent', 'gas'], symbols: ['XLE', 'XOM', 'CVX', 'COP', 'SLB', 'UNG'] },
+  { keywords: ['semiconductor', 'chip', 'chips', 'gpu'], symbols: ['SMH', 'NVDA', 'AMD', 'AVGO'] },
+  { keywords: ['ai', 'artificial intelligence'], symbols: ['NVDA', 'MSFT', 'GOOGL', 'AMZN'] },
+  { keywords: ['data center', 'cloud'], symbols: ['MSFT', 'AMZN', 'GOOGL'] },
+  { keywords: ['oil', 'crude', 'opec', 'refinery', 'brent'], symbols: ['XLE', 'XOM', 'CVX', 'COP', 'SLB'] },
+  { keywords: ['lng', 'natural gas'], symbols: ['UNG'] },
   { keywords: ['shipping', 'freight', 'port', 'ports', 'canal', 'logistics', 'container', 'rerouting'], symbols: ['ZIM', 'MATX', 'KEX', 'UPS', 'FDX'] },
-  { keywords: ['defense', 'military', 'missile', 'missiles', 'drone', 'security', 'rearmament'], symbols: ['ITA', 'LMT', 'RTX', 'NOC', 'GD'] },
-  { keywords: ['inflation', 'fed', 'treasury', 'yield', 'yields', 'payrolls', 'cpi', 'pce', 'rate cuts', 'policy'], symbols: ['TLT', 'IEF', 'IWM', 'XLRE', 'XLF', 'KRE'] },
+  { keywords: ['defense', 'defense spending', 'military', 'missile', 'missiles', 'drone', 'national security', 'rearmament'], symbols: ['ITA', 'LMT', 'RTX', 'NOC', 'GD'] },
+  { keywords: ['inflation', 'fed', 'treasury', 'yield', 'yields', 'payrolls', 'cpi', 'pce', 'rate cuts', 'policy'], symbols: ['TLT', 'IEF'] },
   { keywords: ['gold', 'safe haven'], symbols: ['GLD'] },
-  { keywords: ['consumer', 'retail', 'tariff', 'tariffs'], symbols: ['XLY', 'XLP', 'WMT', 'COST'] },
+  { keywords: ['consumer', 'retail'], symbols: ['XLY', 'XLP', 'WMT', 'COST'] },
+  { keywords: ['tariff', 'tariffs'], symbols: ['XLY', 'XLP'] },
   { keywords: ['banks', 'banking', 'credit', 'regional bank'], symbols: ['XLF', 'KRE', 'JPM'] },
 ];
 
@@ -316,9 +339,16 @@ function upper(value: string): string {
 function normalizeText(text: string): string {
   return text
     .toLowerCase()
-    .replace(/[^a-z0-9\s/-]/g, ' ')
+    .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function includesTerm(text: string, term: string): boolean {
+  const normalizedText = normalizeText(text);
+  const normalizedTerm = normalizeText(term);
+  if (!normalizedText || !normalizedTerm) return false;
+  return ` ${normalizedText} `.includes(` ${normalizedTerm} `);
 }
 
 function toTitleCase(text: string): string {
@@ -329,7 +359,14 @@ function tokenize(text: string): string[] {
   return normalizeText(text)
     .split(' ')
     .map((token) => token.trim())
-    .filter((token) => token.length >= 3 && token.length <= 24 && !GENERIC_WORDS.has(token) && !/^\d+$/.test(token));
+    .filter(isInformativeToken);
+}
+
+function isInformativeToken(token: string): boolean {
+  return token.length >= 3 &&
+    token.length <= 24 &&
+    !GENERIC_WORDS.has(token) &&
+    !/^\d+$/.test(token);
 }
 
 function extractKeywords(...segments: Array<string | null | undefined>): string[] {
@@ -345,11 +382,11 @@ function extractPhrases(...segments: Array<string | null | undefined>): string[]
 
   for (const segment of segments) {
     if (!segment) continue;
-    const tokens = tokenize(segment);
+    const tokens = normalizeText(segment).split(' ').filter(Boolean);
 
     for (let index = 0; index < tokens.length - 1; index += 1) {
-      const phrase = `${tokens[index]} ${tokens[index + 1]}`;
-      if (!GENERIC_WORDS.has(tokens[index]) && !GENERIC_WORDS.has(tokens[index + 1])) {
+      if (isInformativeToken(tokens[index]) && isInformativeToken(tokens[index + 1])) {
+        const phrase = `${tokens[index]} ${tokens[index + 1]}`;
         phrases.push(phrase);
       }
     }
@@ -359,9 +396,8 @@ function extractPhrases(...segments: Array<string | null | undefined>): string[]
 }
 
 function inferAssetsFromText(text: string, explicitTickers: string[] = []): string[] {
-  const normalized = normalizeText(text);
   const inferred = ASSET_HINTS.flatMap((entry) =>
-    entry.keywords.some((keyword) => normalized.includes(keyword))
+    entry.keywords.some((keyword) => includesTerm(text, keyword))
       ? entry.symbols
       : []
   );
@@ -411,7 +447,21 @@ function buildPortfolioHoldings(portfolio: PortfolioPosition[], quoteMap: Map<st
 }
 
 function signalAgeHours(timestamp: number): number {
-  return Math.max(0, (Date.now() - timestamp) / 3_600_000);
+  return Math.abs(Date.now() - timestamp) / 3_600_000;
+}
+
+function closestSignalTimestamp(cluster: Cluster): number {
+  return cluster.signals.reduce((closest, signal) => (
+    Math.abs(Date.now() - signal.timestamp) < Math.abs(Date.now() - closest)
+      ? signal.timestamp
+      : closest
+  ), cluster.signals[0]?.timestamp ?? Date.now());
+}
+
+function evidenceScoreCap(sourceDiversity: number): number {
+  if (sourceDiversity <= 1) return 72;
+  if (sourceDiversity === 2) return 88;
+  return 96;
 }
 
 function intersectionCount(left: Iterable<string>, right: Iterable<string>): number {
@@ -428,6 +478,159 @@ function topKeys(counts: Map<string, number>, limit = 8): string[] {
     .sort((left, right) => right[1] - left[1])
     .slice(0, limit)
     .map(([key]) => key);
+}
+
+type ClusterQuality = {
+  eligible: boolean;
+  score: number;
+  repeatedKeywords: string[];
+  repeatedPhrases: string[];
+  properNameTokens: Set<string>;
+};
+
+const DISCOVERED_LABEL_ACTION_WORDS = new Set([
+  'adjust', 'adjusted', 'adjusting', 'adjusts',
+  'boost', 'boosted', 'boosting', 'boosts',
+  'change', 'changed', 'changes', 'changing',
+  'cut', 'cuts', 'cutting',
+  'downgrade', 'downgraded', 'downgrades', 'downgrading',
+  'expect', 'expected', 'expects',
+  'initiate', 'initiated', 'initiates', 'initiating',
+  'lift', 'lifted', 'lifting', 'lifts',
+  'lower', 'lowered', 'lowering', 'lowers',
+  'maintain', 'maintained', 'maintains', 'maintaining',
+  'raise', 'raised', 'raises', 'raising',
+  'reiterate', 'reiterated', 'reiterates', 'reiterating',
+  'revise', 'revised', 'revises', 'revising',
+  'rise', 'rises', 'rising',
+  'set', 'sets', 'setting',
+  'trim', 'trimmed', 'trimming', 'trims',
+  'upgrade', 'upgraded', 'upgrades', 'upgrading',
+]);
+
+const DISCOVERED_LABEL_ACTION_OBJECTS = new Set([
+  'estimate', 'estimates', 'forecast', 'forecasts', 'outlook', 'price', 'prices',
+  'rating', 'ratings', 'recommendation', 'recommendations', 'target', 'targets',
+]);
+
+const DISCOVERED_LABEL_LEADING_SCAFFOLD = new Set([
+  'avoid', 'buy', 'can', 'consider', 'could', 'expect', 'how', 'should', 'sell',
+  'watch', 'what', 'when', 'where', 'why', 'will', 'would',
+]);
+
+const DISCOVERED_LABEL_CADENCE_WORDS = new Set([
+  'annual', 'daily', 'earnings', 'latest', 'month', 'monthly', 'q1', 'q2', 'q3', 'q4',
+  'quarter', 'quarterly', 'report', 'reports', 'results', 'today', 'update', 'updates',
+  'week', 'weekly', 'year', 'yearly',
+]);
+
+function isCapitalizedNameWord(word: string): boolean {
+  return /^[A-Z][a-z]+(?:['-][A-Z]?[a-z]+)?$/.test(word);
+}
+
+function getProperNameTokens(cluster: Cluster): Set<string> {
+  const properNames = new Set<string>();
+  const nameLeadWords = new Set([
+    'candidate', 'ceo', 'chairman', 'could', 'did', 'does', 'dr', 'governor', 'mayor', 'minister',
+    'mr', 'mrs', 'ms', 'president', 'representative', 'senator', 'should', 'will', 'would',
+  ]);
+
+  for (const signal of cluster.signals) {
+    const words = signal.title.match(/[A-Za-z][A-Za-z'-]*/g) ?? [];
+    for (let index = 0; index < words.length - 1; index += 1) {
+      const left = normalizeText(words[index]);
+      const right = normalizeText(words[index + 1]);
+      const previous = normalizeText(words[index - 1] ?? '');
+      const hasNameContext = signal.type === 'prediction' || nameLeadWords.has(previous);
+      if (
+        hasNameContext &&
+        isCapitalizedNameWord(words[index]) &&
+        isCapitalizedNameWord(words[index + 1]) &&
+        isInformativeToken(left) &&
+        isInformativeToken(right)
+      ) {
+        properNames.add(left);
+        properNames.add(right);
+      }
+    }
+  }
+
+  return properNames;
+}
+
+function analyzeClusterQuality(cluster: Cluster): ClusterQuality {
+  const properNameTokens = getProperNameTokens(cluster);
+  const repeatedKeywords = [...cluster.keywordCounts.entries()]
+    .filter(([keyword, count]) => count >= 2 && isInformativeToken(keyword) && !properNameTokens.has(keyword))
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([keyword]) => keyword);
+  const repeatedPhrases = [...cluster.phraseCounts.entries()]
+    .filter(([phrase, count]) => {
+      if (count < 2) return false;
+      const tokens = phrase.split(' ').filter(Boolean);
+      return tokens.length === 2 &&
+        tokens.every(isInformativeToken) &&
+        !tokens.every((token) => properNameTokens.has(token));
+    })
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([phrase]) => phrase);
+  const uniqueEvidenceCount = new Set(
+    cluster.signals.map((signal) => signal.url?.trim().toLowerCase() || normalizeText(signal.title))
+  ).size;
+  const enoughEvidence = uniqueEvidenceCount >= 2 &&
+    (cluster.sourceCounts.size >= 2 || cluster.signals.length >= 3);
+  const semanticallyCoherent = repeatedPhrases.length > 0 || repeatedKeywords.length >= 2;
+  const score = repeatedPhrases.length * 5 +
+    Math.min(repeatedKeywords.length, 6) * 2 +
+    Math.min(cluster.sourceCounts.size, 4) * 2 +
+    Math.min(uniqueEvidenceCount, 6);
+
+  return {
+    eligible: enoughEvidence && semanticallyCoherent,
+    score,
+    repeatedKeywords,
+    repeatedPhrases,
+    properNameTokens,
+  };
+}
+
+function discoveredThemeLabelIsCoherent(label: string, cluster: Cluster, quality: ClusterQuality): boolean {
+  const normalizedLabel = normalizeText(label);
+  const rawTokens = normalizedLabel.split(' ').filter(Boolean);
+  if (rawTokens.length < 2 || rawTokens.length > 7) return false;
+  if (label.includes('?') || DISCOVERED_LABEL_LEADING_SCAFFOLD.has(rawTokens[0])) return false;
+  if (rawTokens.some((token) => DISCOVERED_LABEL_CADENCE_WORDS.has(token))) return false;
+  if (DISCOVERED_LABEL_ACTION_WORDS.has(rawTokens[0])) return false;
+
+  const labelTokens = tokenize(label).filter((token) => !quality.properNameTokens.has(token));
+  const actionTokenCount = labelTokens.filter((token) => DISCOVERED_LABEL_ACTION_WORDS.has(token)).length;
+  const subjectTokens = labelTokens.filter((token) =>
+    !DISCOVERED_LABEL_ACTION_WORDS.has(token) &&
+    !DISCOVERED_LABEL_ACTION_OBJECTS.has(token)
+  );
+
+  if (subjectTokens.length === 0) return false;
+  if (actionTokenCount > 0 && subjectTokens.length < 2) return false;
+
+  if (cluster.sourceCounts.size === 1) {
+    const repeatedAsPhrase = (cluster.phraseCounts.get(normalizedLabel) ?? 0) >= 3;
+    const stronglyRepeatedSubjects = subjectTokens.filter(
+      (token) => (cluster.keywordCounts.get(token) ?? 0) >= 3
+    );
+    if (!repeatedAsPhrase && stronglyRepeatedSubjects.length < 2) return false;
+  }
+
+  return true;
+}
+
+function proposedThemeLabelIsGrounded(label: string, cluster: Cluster, quality = analyzeClusterQuality(cluster)): boolean {
+  if (!discoveredThemeLabelIsCoherent(label, cluster, quality)) return false;
+
+  const labelTokens = tokenize(label).filter((token) => !quality.properNameTokens.has(token));
+  if (labelTokens.length < 2) return false;
+
+  const supportedTokens = labelTokens.filter((token) => (cluster.keywordCounts.get(token) ?? 0) >= 2);
+  return supportedTokens.length >= 2;
 }
 
 function createCluster(signal: DiscoveredSignal, index: number): Cluster {
@@ -473,8 +676,17 @@ function clusterSimilarity(signal: DiscoveredSignal, cluster: Cluster): number {
   const sharedPhrases = intersectionCount(signal.phrases, topKeys(cluster.phraseCounts, 10));
   const hoursGap = Math.abs(cluster.newestAt - signal.timestamp) / 3_600_000;
   const recencyBonus = hoursGap <= 8 ? 1.5 : hoursGap <= 24 ? 0.9 : hoursGap <= 72 ? 0.35 : 0;
+  const hasSemanticMatch = sharedPhrases > 0 ||
+    sharedKeywords >= 2 ||
+    (sharedCountries > 0 && sharedKeywords > 0);
 
-  return sharedAssets * 3.2 + sharedCountries * 2.2 + sharedPhrases * 2.4 + sharedKeywords * 1.25 + recencyBonus;
+  if (!hasSemanticMatch) return 0;
+
+  return Math.min(sharedAssets, 2) * 0.8 +
+    sharedCountries * 2.2 +
+    sharedPhrases * 2.8 +
+    sharedKeywords * 1.6 +
+    recencyBonus;
 }
 
 function clusterSignals(signals: DiscoveredSignal[]): Cluster[] {
@@ -503,34 +715,95 @@ function clusterSignals(signals: DiscoveredSignal[]): Cluster[] {
   return clusters;
 }
 
-function trimRepresentativeTitle(title: string): string {
-  return title.length <= 46 ? title : `${title.slice(0, 43).trim()}...`;
+function pickClusterLabel(cluster: Cluster, quality = analyzeClusterQuality(cluster)): string | null {
+  if (!quality.eligible) return null;
+
+  const phraseCandidate = quality.repeatedPhrases.find((phrase) =>
+    proposedThemeLabelIsGrounded(phrase, cluster, quality)
+  );
+  if (phraseCandidate) return toTitleCase(phraseCandidate);
+
+  const candidateKeywords = quality.repeatedKeywords.slice(0, 6);
+  for (let leftIndex = 0; leftIndex < candidateKeywords.length - 1; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < candidateKeywords.length; rightIndex += 1) {
+      const candidate = `${candidateKeywords[leftIndex]} ${candidateKeywords[rightIndex]}`;
+      if (proposedThemeLabelIsGrounded(candidate, cluster, quality)) {
+        return toTitleCase(candidate);
+      }
+    }
+  }
+
+  return null;
 }
 
-function pickClusterLabel(cluster: Cluster): string {
-  const topPhrases = topKeys(cluster.phraseCounts, 4);
-  if (topPhrases[0] && (cluster.phraseCounts.get(topPhrases[0]) ?? 0) >= 2) {
-    return toTitleCase(topPhrases[0]);
-  }
-
-  const topCountries = topKeys(cluster.countryCounts, 2);
-  const topKeywords = topKeys(cluster.keywordCounts, 4);
-
-  if (topCountries[0] && topKeywords[0]) {
-    return toTitleCase(`${topCountries[0]} ${topKeywords[0]}`);
-  }
-
-  if (topKeywords.length >= 2) {
-    return toTitleCase(`${topKeywords[0]} / ${topKeywords[1]}`);
-  }
-
-  return trimRepresentativeTitle(cluster.signals[0]?.title ?? 'Emerging Theme');
+function summarizeCluster(label: string, cluster: Cluster, sourceDiversity: number): string {
+  const leadSignal = [...cluster.signals]
+    .sort((left, right) => right.timestamp - left.timestamp)[0];
+  const evidenceLead = leadSignal?.title?.trim()
+    ? ` The newest supporting evidence is: ${leadSignal.title.trim()}.`
+    : '';
+  const breadth = sourceDiversity > 1
+    ? `${sourceDiversity} signal types`
+    : 'one signal type';
+  return `${label} is the common thread across ${cluster.signals.length} validated signals from ${breadth}.${evidenceLead}`;
 }
 
-function summarizeCluster(cluster: Cluster, sourceDiversity: number, topAssets: string[]): string {
-  const topSource = [...cluster.sourceCounts.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] ?? 'signals';
-  const assetText = topAssets.length > 0 ? ` Linked assets: ${topAssets.join(', ')}.` : '';
-  return `${cluster.signals.length} signals across ${sourceDiversity} source types, led by ${topSource}.${assetText}`;
+function summarizeWhyItMatters(
+  label: string,
+  cluster: Cluster,
+  sourceDiversity: number,
+  linkedAssets: DiscoveredThemeAsset[],
+  portfolioImpact: Pick<DiscoveredTheme['portfolioImpact'], 'holdings' | 'portfolioWeightPct' | 'watchlistOverlap'>,
+): string {
+  const confirmation = sourceDiversity > 1
+    ? `${sourceDiversity} signal types are reinforcing the same ${label.toLowerCase()} development rather than one isolated headline.`
+    : `${cluster.signals.length} signals point to the same development, but they come from one signal type, so confirmation is still limited.`;
+  const portfolioContext = portfolioImpact.holdings.length > 0
+    ? ` It already touches ${portfolioImpact.holdings.length} portfolio holding${portfolioImpact.holdings.length === 1 ? '' : 's'} (${portfolioImpact.portfolioWeightPct.toFixed(1)}% by value).`
+    : portfolioImpact.watchlistOverlap.length > 0
+      ? ` It already overlaps the watchlist through ${portfolioImpact.watchlistOverlap.slice(0, 3).join(', ')}.`
+      : linkedAssets.length > 0
+        ? ` Repeated evidence links it to ${linkedAssets.slice(0, 3).map((asset) => asset.symbol).join(', ')} for follow-up research.`
+        : '';
+  return `It matters because ${confirmation}${portfolioContext}`;
+}
+
+const INTERPRETATION_METADATA_PATTERNS = [
+  /\b(?:validated\s+)?signals?\b/i,
+  /\bsource\s+types?\b/i,
+  /\bcommon\s+thread\b/i,
+  /\btheme\s+(?:is|has|shows|matters)\b/i,
+  /\bfollow-?up\s+research\b/i,
+];
+
+const INTERPRETATION_RECOMMENDATION_PATTERNS = [
+  /\b(?:buy|sell|add|trim|reduce|increase|overweight|underweight)\b/i,
+  /\bshould\s+(?:buy|sell|add|trim|reduce|increase)\b/i,
+];
+
+function modelInterpretationIsGrounded(
+  candidate: string | undefined,
+  label: string,
+  signals: DiscoveredSignal[],
+  allowedAssets: Set<string>,
+  knownSymbols: Set<string>,
+  allowRecommendation: boolean,
+): candidate is string {
+  const text = candidate?.trim() ?? '';
+  if (!text || text.length > 420) return false;
+  if (INTERPRETATION_METADATA_PATTERNS.some((pattern) => pattern.test(text))) return false;
+  if (!allowRecommendation && INTERPRETATION_RECOMMENDATION_PATTERNS.some((pattern) => pattern.test(text))) return false;
+
+  const evidenceTerms = new Set(extractKeywords(
+    label,
+    ...signals.flatMap((signal) => [signal.title, signal.detail, signal.context]),
+  ));
+  const matchingTerms = unique(tokenize(text).filter((token) => evidenceTerms.has(token)));
+  if (matchingTerms.length < 2) return false;
+
+  const mentionedSymbols = Array.from(text.matchAll(/\b[A-Z]{2,5}\b/g), (match) => match[0])
+    .filter((symbol) => knownSymbols.has(symbol));
+  return mentionedSymbols.every((symbol) => allowedAssets.has(symbol));
 }
 
 function buildNewsSignals(newsItems: NewsItem[], sourceLabel: string): DiscoveredSignal[] {
@@ -546,6 +819,7 @@ function buildNewsSignals(newsItems: NewsItem[], sourceLabel: string): Discovere
       sourceLabel,
       title: item.title,
       detail: item.publisher || sourceLabel,
+      context: item.snippet?.trim().slice(0, 480),
       url: item.link,
       timestamp: item.publishedAt,
       intensity: 45 + Math.min((item.tickers?.length ?? 0) * 6, 12),
@@ -585,7 +859,10 @@ function buildCountrySignals(countryCounts: CountryNewsCount[]): DiscoveredSigna
     });
 }
 
-function buildPredictionSignals(predictions: PredictionForecast[]): DiscoveredSignal[] {
+function buildPredictionSignals(predictions: PredictionForecast[], updatedAt?: string): DiscoveredSignal[] {
+  const snapshotTimestamp = updatedAt ? new Date(updatedAt).getTime() : Date.now();
+  const timestamp = Number.isFinite(snapshotTimestamp) ? snapshotTimestamp : Date.now();
+
   return predictions.map((prediction) => {
     const text = [
       prediction.question,
@@ -604,7 +881,7 @@ function buildPredictionSignals(predictions: PredictionForecast[]): DiscoveredSi
       title: prediction.question,
       detail: `${prediction.theme}${prediction.leadingProbability != null ? ` · ${Math.round(prediction.leadingProbability)}% ${prediction.leadingOutcome.toLowerCase()}` : ''}`,
       url: prediction.url,
-      timestamp: prediction.endDate ? new Date(prediction.endDate).getTime() : Date.now(),
+      timestamp,
       intensity: 44 + Math.min(Math.round((prediction.volume24hr ?? 0) / 25_000), 20),
       keywords: extractKeywords(text),
       phrases: extractPhrases(text),
@@ -742,7 +1019,10 @@ function buildLinkedAssets(
   portfolioSymbols: Set<string>,
   watchlistSymbols: Set<string>
 ): DiscoveredThemeAsset[] {
+  const minimumSupport = Math.max(2, Math.ceil(cluster.signals.length * 0.25));
+
   return [...cluster.assetCounts.entries()]
+    .filter(([, mentionCount]) => mentionCount >= minimumSupport)
     .sort((left, right) => right[1] - left[1])
     .slice(0, 6)
     .map(([symbol, mentionCount]) => {
@@ -776,6 +1056,7 @@ function buildEvidence(cluster: Cluster): DiscoveredThemeEvidence[] {
       type: signal.type,
       title: signal.title,
       detail: signal.detail,
+      context: signal.context,
       sourceLabel: signal.sourceLabel,
       url: signal.url,
       timestamp: signal.timestamp,
@@ -851,9 +1132,12 @@ function buildDisplayAssets(
 ): DiscoveredThemeAsset[] {
   const rankedFromCluster = buildLinkedAssets(cluster, quoteMap, portfolioSymbols, watchlistSymbols);
   const merged = new Map(rankedFromCluster.map((asset) => [asset.symbol, asset]));
+  const minimumSupport = Math.max(2, Math.ceil(cluster.signals.length * 0.25));
 
   for (const symbol of symbols.map(upper)) {
     if (merged.has(symbol)) continue;
+    const mentionCount = cluster.assetCounts.get(symbol) ?? 0;
+    if (mentionCount < minimumSupport) continue;
 
     const quote = quoteMap.get(symbol);
     const overlap: DiscoveryAssetOverlap = portfolioSymbols.has(symbol)
@@ -866,7 +1150,7 @@ function buildDisplayAssets(
       symbol,
       label: quote?.shortName ?? symbol,
       overlap,
-      mentionCount: cluster.assetCounts.get(symbol) ?? 1,
+      mentionCount,
       price: quote?.regularMarketPrice ?? null,
       changePct: quote?.regularMarketChangePercent ?? null,
     });
@@ -1005,14 +1289,29 @@ function buildActionItems(
   return actions.slice(0, 4);
 }
 
+function dedupeSignalsByEvidence(signals: DiscoveredSignal[]): DiscoveredSignal[] {
+  const seen = new Set<string>();
+  return signals.filter((signal) => {
+    const evidenceKey = signal.url?.trim().toLowerCase() || normalizeText(signal.title);
+    if (!evidenceKey || seen.has(evidenceKey)) return false;
+    seen.add(evidenceKey);
+    return true;
+  });
+}
+
 function buildRawSignals(input: DiscoveryInput): DiscoveredSignal[] {
-  return [
+  const newsSignals = dedupeSignalsByEvidence([
     ...buildNewsSignals(input.marketNews, 'Markets'),
     ...buildNewsSignals(input.techNews, 'Technology'),
     ...buildNewsSignals(input.economyNews, 'Economy'),
     ...buildNewsSignals(input.energyNews, 'Energy'),
+    ...buildNewsSignals(input.geopoliticsNews, 'Geopolitics News'),
+  ]);
+
+  return [
+    ...newsSignals,
     ...buildCountrySignals(input.countryCounts),
-    ...buildPredictionSignals(input.predictions),
+    ...buildPredictionSignals(input.predictions, input.predictionsUpdatedAt),
     ...buildMacroSignals(input.calendarEvents),
     ...buildSentimentSignals(input.sentiment),
   ].filter((signal) => signal.keywords.length >= 2 || signal.assets.length > 0 || signal.countries.length > 0);
@@ -1025,6 +1324,8 @@ function toThemeSignalPayload(signal: DiscoveredSignal): ThemeDiscoverySignalPay
     sourceLabel: signal.sourceLabel,
     title: signal.title,
     detail: signal.detail,
+    context: signal.context,
+    url: signal.url,
     timestamp: signal.timestamp,
     assets: signal.assets,
     countries: signal.countries,
@@ -1103,15 +1404,17 @@ function prepareKeywordTopics(topics: string[]): KeywordTopic[] {
 }
 
 function scoreSignalForTopic(signal: DiscoveredSignal, topic: KeywordTopic): number {
-  const haystack = normalizeText(`${signal.title} ${signal.detail}`);
+  const haystack = `${signal.title} ${signal.detail} ${signal.context ?? ''}`;
   const sharedKeywords = intersectionCount(signal.keywords, topic.keywords);
   const sharedAssets = intersectionCount(signal.assets, topic.assets);
-  const exactPhrase = haystack.includes(topic.normalized) ? 1 : 0;
+  const exactPhrase = includesTerm(haystack, topic.normalized) ? 1 : 0;
   const keywordCoverage = topic.keywords.length > 1
-    ? topic.keywords.filter((keyword) => haystack.includes(keyword)).length / topic.keywords.length
+    ? topic.keywords.filter((keyword) => includesTerm(haystack, keyword)).length / topic.keywords.length
     : sharedKeywords > 0
       ? 1
       : 0;
+
+  if (exactPhrase === 0 && keywordCoverage === 0) return 0;
 
   return sharedKeywords * 2.4 +
     sharedAssets * 3.2 +
@@ -1142,7 +1445,7 @@ export function buildKeywordThemeDashboard(
     const topicSignals = buildNewsSignals(topicNewsByTopic[topic.raw] ?? [], `Topic Search · ${topic.label}`);
     const matches = dedupeSignals([...topicSignals, ...baseSignals])
       .map((signal) => ({ signal, score: scoreSignalForTopic(signal, topic) }))
-      .filter(({ signal, score }) => score >= 3.5 || intersectionCount(signal.assets, topic.assets) > 0 || intersectionCount(signal.keywords, topic.keywords) >= 2)
+      .filter(({ signal, score }) => score >= 3.5 || intersectionCount(signal.keywords, topic.keywords) >= 2)
       .sort((left, right) => {
         if (right.score !== left.score) return right.score - left.score;
         if (right.signal.timestamp !== left.signal.timestamp) return right.signal.timestamp - left.signal.timestamp;
@@ -1150,7 +1453,8 @@ export function buildKeywordThemeDashboard(
       })
       .slice(0, 14);
 
-    if (matches.length === 0) return [];
+    const strongMatches = matches.filter((match) => match.score >= 5.5);
+    if (matches.length < 2 || strongMatches.length === 0) return [];
 
     const cluster = buildClusterFromSignals(matches.map(({ signal }) => signal), `keyword-${index}-${slugifyTopic(topic.raw)}`);
     const linkedAssets = buildDisplayAssets(
@@ -1163,14 +1467,15 @@ export function buildKeywordThemeDashboard(
     const portfolioImpact = buildPortfolioImpact(linkedAssets.map((asset) => asset.symbol), holdings, watchlistSymbols);
     const signalCount = cluster.signals.length;
     const sourceDiversity = cluster.sourceCounts.size;
+    const scoreCap = evidenceScoreCap(sourceDiversity);
     const freshSignals = cluster.signals.filter((signal) => signalAgeHours(signal.timestamp) <= 24).length;
     const newestAgePenalty = clamp(24 - signalAgeHours(cluster.newestAt), 0, 24);
     const avgMatchScore = matches.reduce((sum, match) => sum + match.score, 0) / Math.max(matches.length, 1);
     const matchStrength = Math.round(clamp(avgMatchScore * 11 + matches.filter((match) => match.score >= 7).length * 4, 18, 100));
-    const emergenceScore = Math.round(clamp(signalCount * 8 + freshSignals * 11 + newestAgePenalty * 1.2 + cluster.totalIntensity * 0.06 + matchStrength * 0.18, 18, 100));
-    const breadthScore = Math.round(clamp(sourceDiversity * 18 + topKeys(cluster.keywordCounts, 10).length * 2 + linkedAssets.length * 5 + Math.min(signalCount, 6) * 4, 18, 100));
-    const urgencyScore = Math.round(clamp(34 + freshSignals * 10 + buildCatalysts(cluster).length * 10 + newestAgePenalty * 1.6 + Math.min(avgMatchScore * 4, 12), 20, 100));
-    const confidenceScore = Math.round(clamp(matchStrength * 0.45 + sourceDiversity * 12 + signalCount * 4 + cluster.totalIntensity * 0.04, 22, 100));
+    const emergenceScore = Math.round(clamp(signalCount * 8 + freshSignals * 11 + newestAgePenalty * 1.2 + cluster.totalIntensity * 0.06 + matchStrength * 0.18, 18, scoreCap));
+    const breadthScore = Math.round(clamp(sourceDiversity * 18 + topKeys(cluster.keywordCounts, 10).length * 2 + linkedAssets.length * 5 + Math.min(signalCount, 6) * 4, 18, scoreCap));
+    const urgencyScore = Math.round(clamp(34 + freshSignals * 10 + buildCatalysts(cluster).length * 10 + newestAgePenalty * 1.6 + Math.min(avgMatchScore * 4, 12), 20, scoreCap));
+    const confidenceScore = Math.round(clamp(matchStrength * 0.45 + sourceDiversity * 12 + signalCount * 4 + cluster.totalIntensity * 0.04, 22, scoreCap));
     const score = Math.round(
       emergenceScore * 0.24 +
         breadthScore * 0.18 +
@@ -1187,8 +1492,12 @@ export function buildKeywordThemeDashboard(
     const implications = buildImplications(cluster, sourceDiversity, linkedAssets, portfolioImpact);
     const actionItems = buildActionItems(cluster, linkedAssets, portfolioImpact);
     const summary = summarizeKeywordTheme(topic, cluster, sourceDiversity, linkedAssets);
-    const thesis = `The user-defined topic ${topic.label} is showing up through ${signalCount} matching signals across ${sourceDiversity} source types, which means it is broad enough to monitor as a live market theme rather than a single isolated headline.`;
-    const whyItMatters = implications[1] ?? `This topic now has enough cross-source confirmation to justify focused follow-up research in ${linkedAssets.slice(0, 3).map((asset) => asset.symbol).join(', ') || 'the linked asset set'}.`;
+    const thesis = sourceDiversity > 1
+      ? `${topic.label} is supported by ${signalCount} matching signals across ${sourceDiversity} source types, making it a cross-source research lead rather than an isolated headline.`
+      : `${topic.label} is supported by ${signalCount} matching signals from one source type. Treat it as an early research lead until another source confirms it.`;
+    const whyItMatters = implications[1] ?? (sourceDiversity > 1
+      ? `The evidence is broad enough to justify focused follow-up research in ${linkedAssets.slice(0, 3).map((asset) => asset.symbol).join(', ') || 'the linked asset set'}.`
+      : 'The topic is active, but the narrow source mix means conviction should remain limited.');
     const actionSummary = actionItems.slice(0, 2).map((item) => item.detail).join(' ');
     const playbook = actionItems.map((item) => item.detail).slice(0, 4);
     const primaryRecommendation = playbook[0] ?? portfolioImpact.portfolioRecommendation;
@@ -1210,7 +1519,7 @@ export function buildKeywordThemeDashboard(
       confidenceScore,
       signalCount,
       sourceDiversity,
-      freshestAt: cluster.newestAt,
+      freshestAt: closestSignalTimestamp(cluster),
       keywords: unique([...topic.keywords, ...topKeys(cluster.keywordCounts, 6)]).map((keyword) => toTitleCase(keyword)).slice(0, 6),
       sourceMix,
       linkedAssets,
@@ -1323,7 +1632,9 @@ export function buildTopicThemeGuidancePayload(dashboard: KeywordThemeDashboard)
         type: item.type,
         title: item.title,
         detail: item.detail,
+        context: item.context,
         sourceLabel: item.sourceLabel,
+        url: item.url,
         timestamp: item.timestamp,
       })),
       portfolioImpact: {
@@ -1388,20 +1699,28 @@ function buildDiscoveredThemes(input: DiscoveryInput): DiscoveredTheme[] {
   const rawSignals = buildRawSignals(input);
 
   const clusters = clusterSignals(rawSignals)
-    .filter((cluster) => cluster.signals.length >= 2 || cluster.sourceCounts.size >= 2)
-    .sort((left, right) => right.totalIntensity - left.totalIntensity);
+    .flatMap((cluster) => {
+      const quality = analyzeClusterQuality(cluster);
+      const label = pickClusterLabel(cluster, quality);
+      return quality.eligible && label ? [{ cluster, quality, label }] : [];
+    })
+    .sort((left, right) => {
+      if (right.quality.score !== left.quality.score) return right.quality.score - left.quality.score;
+      return right.cluster.totalIntensity - left.cluster.totalIntensity;
+    });
 
-    return clusters.slice(0, 8).map((cluster) => {
+  return clusters.slice(0, 8).map(({ cluster, quality, label }) => {
     const linkedAssets = buildLinkedAssets(cluster, quoteMap, portfolioSymbols, watchlistSymbols);
     const portfolioImpact = buildPortfolioImpact(linkedAssets.map((asset) => asset.symbol), holdings, watchlistSymbols);
     const signalCount = cluster.signals.length;
     const sourceDiversity = cluster.sourceCounts.size;
+    const scoreCap = evidenceScoreCap(sourceDiversity);
     const freshSignals = cluster.signals.filter((signal) => signalAgeHours(signal.timestamp) <= 24).length;
     const newestAgePenalty = clamp(24 - signalAgeHours(cluster.newestAt), 0, 24);
-    const emergenceScore = Math.round(clamp(signalCount * 9 + freshSignals * 12 + newestAgePenalty * 1.3 + cluster.totalIntensity * 0.08, 18, 100));
-    const breadthScore = Math.round(clamp(sourceDiversity * 18 + topKeys(cluster.keywordCounts, 10).length * 2 + linkedAssets.length * 5 + topKeys(cluster.countryCounts, 6).length * 6, 18, 100));
-    const urgencyScore = Math.round(clamp(36 + freshSignals * 11 + buildCatalysts(cluster).length * 10 + newestAgePenalty * 1.8, 20, 100));
-    const confidenceScore = Math.round(clamp(sourceDiversity * 14 + signalCount * 5 + topKeys(cluster.keywordCounts, 8).length * 2 + cluster.totalIntensity * 0.06, 22, 100));
+    const emergenceScore = Math.round(clamp(signalCount * 9 + freshSignals * 12 + newestAgePenalty * 1.3 + cluster.totalIntensity * 0.08, 18, scoreCap));
+    const breadthScore = Math.round(clamp(sourceDiversity * 18 + topKeys(cluster.keywordCounts, 10).length * 2 + linkedAssets.length * 5 + topKeys(cluster.countryCounts, 6).length * 6, 18, scoreCap));
+    const urgencyScore = Math.round(clamp(36 + freshSignals * 11 + buildCatalysts(cluster).length * 10 + newestAgePenalty * 1.8, 20, scoreCap));
+    const confidenceScore = Math.round(clamp(sourceDiversity * 14 + signalCount * 5 + topKeys(cluster.keywordCounts, 8).length * 2 + cluster.totalIntensity * 0.06, 22, scoreCap));
     const score = Math.round(
       emergenceScore * 0.27 +
         breadthScore * 0.2 +
@@ -1412,13 +1731,13 @@ function buildDiscoveredThemes(input: DiscoveryInput): DiscoveredTheme[] {
     const sourceMix = [...cluster.sourceCounts.entries()]
       .sort((left, right) => right[1] - left[1])
       .map(([source, count]) => ({ source, count }));
-    const label = pickClusterLabel(cluster);
     const watchItems = buildWatchItems(cluster, linkedAssets);
     const invalidationSignals = buildInvalidationSignals(cluster, linkedAssets);
     const implications = buildImplications(cluster, sourceDiversity, linkedAssets, portfolioImpact);
     const actionItems = buildActionItems(cluster, linkedAssets, portfolioImpact);
-    const thesis = implications[0] ?? summarizeCluster(cluster, sourceDiversity, linkedAssets.slice(0, 3).map((asset) => asset.symbol));
-    const whyItMatters = implications[1] ?? `This theme is building through ${signalCount} signals across ${sourceDiversity} source types.`;
+    const summary = summarizeCluster(label, cluster, sourceDiversity);
+    const thesis = implications[0] ?? summary;
+    const whyItMatters = summarizeWhyItMatters(label, cluster, sourceDiversity, linkedAssets, portfolioImpact);
     const actionSummary = actionItems.slice(0, 2).map((item) => item.detail).join(' ');
     const playbook = actionItems.map((item) => item.detail).slice(0, 4);
     const primaryRecommendation = playbook[0] ?? portfolioImpact.portfolioRecommendation;
@@ -1426,7 +1745,7 @@ function buildDiscoveredThemes(input: DiscoveryInput): DiscoveredTheme[] {
     return {
       id: cluster.id,
       label,
-      summary: summarizeCluster(cluster, sourceDiversity, linkedAssets.slice(0, 3).map((asset) => asset.symbol)),
+      summary,
       thesis,
       whyItMatters,
       actionSummary,
@@ -1440,8 +1759,8 @@ function buildDiscoveredThemes(input: DiscoveryInput): DiscoveredTheme[] {
       confidenceScore,
       signalCount,
       sourceDiversity,
-      freshestAt: cluster.newestAt,
-      keywords: topKeys(cluster.keywordCounts, 6).map((keyword) => toTitleCase(keyword)),
+      freshestAt: closestSignalTimestamp(cluster),
+      keywords: quality.repeatedKeywords.slice(0, 6).map((keyword) => toTitleCase(keyword)),
       sourceMix,
       linkedAssets,
       catalysts: buildCatalysts(cluster),
@@ -1478,6 +1797,11 @@ export function buildAIDiscoveryDashboard(input: DiscoveryInput, aiResult: AIThe
   const holdings = buildPortfolioHoldings(input.portfolio, quoteMap);
   const portfolioSymbols = new Set(holdings.map((holding) => holding.symbol));
   const watchlistSymbols = new Set(input.watchlist.map(upper));
+  const knownSymbols = new Set([
+    ...input.quotes.map((quote) => upper(quote.symbol)),
+    ...portfolioSymbols,
+    ...watchlistSymbols,
+  ]);
 
   const themes = aiResult.themes
     .flatMap((theme, index) => {
@@ -1485,26 +1809,38 @@ export function buildAIDiscoveryDashboard(input: DiscoveryInput, aiResult: AIThe
         .map((signalId) => signalMap.get(signalId))
         .filter((signal): signal is DiscoveredSignal => Boolean(signal));
 
-      if (resolvedSignals.length === 0) return [];
+      if (resolvedSignals.length < 2) return [];
 
       const cluster = buildClusterFromSignals(resolvedSignals, theme.id || `ai-theme-${index}`);
+      const quality = analyzeClusterQuality(cluster);
+      const groundedFallbackLabel = pickClusterLabel(cluster, quality);
+      if (!quality.eligible || !groundedFallbackLabel) return [];
+      const label = proposedThemeLabelIsGrounded(theme.label, cluster, quality)
+        ? theme.label.trim()
+        : groundedFallbackLabel;
+      const supportedAssets = new Set(resolvedSignals.flatMap((signal) => signal.assets));
+      const modelAssets = theme.linkedAssets.filter((symbol) => supportedAssets.has(upper(symbol)));
       const linkedAssets = buildDisplayAssets(
-        theme.linkedAssets.length > 0 ? theme.linkedAssets : topKeys(cluster.assetCounts, 6),
+        modelAssets.length > 0 ? modelAssets : topKeys(cluster.assetCounts, 6),
         cluster,
         quoteMap,
         portfolioSymbols,
         watchlistSymbols
       );
       const portfolioImpact = buildPortfolioImpact(linkedAssets.map((asset) => asset.symbol), holdings, watchlistSymbols);
+      const supportedInterpretationAssets = new Set([
+        ...resolvedSignals.flatMap((signal) => signal.assets.map(upper)),
+      ]);
       const signalCount = cluster.signals.length;
       const sourceDiversity = cluster.sourceCounts.size;
+      const scoreCap = evidenceScoreCap(sourceDiversity);
       const freshSignals = cluster.signals.filter((signal) => signalAgeHours(signal.timestamp) <= 24).length;
       const newestAgePenalty = clamp(24 - signalAgeHours(cluster.newestAt), 0, 24);
-      const emergenceScore = Math.round(clamp(signalCount * 9 + freshSignals * 12 + newestAgePenalty * 1.3 + cluster.totalIntensity * 0.08, 18, 100));
-      const breadthScore = Math.round(clamp(sourceDiversity * 18 + topKeys(cluster.keywordCounts, 10).length * 2 + linkedAssets.length * 5 + topKeys(cluster.countryCounts, 6).length * 6, 18, 100));
-      const urgencyScore = Math.round(clamp(36 + freshSignals * 11 + theme.catalysts.length * 10 + newestAgePenalty * 1.8, 20, 100));
-      const localConfidence = clamp(sourceDiversity * 14 + signalCount * 5 + topKeys(cluster.keywordCounts, 8).length * 2 + cluster.totalIntensity * 0.06, 22, 100);
-      const confidenceScore = Math.round(clamp(localConfidence * 0.55 + theme.confidence * 0.45, 22, 100));
+      const emergenceScore = Math.round(clamp(signalCount * 9 + freshSignals * 12 + newestAgePenalty * 1.3 + cluster.totalIntensity * 0.08, 18, scoreCap));
+      const breadthScore = Math.round(clamp(sourceDiversity * 18 + topKeys(cluster.keywordCounts, 10).length * 2 + linkedAssets.length * 5 + topKeys(cluster.countryCounts, 6).length * 6, 18, scoreCap));
+      const urgencyScore = Math.round(clamp(36 + freshSignals * 11 + theme.catalysts.length * 10 + newestAgePenalty * 1.8, 20, scoreCap));
+      const localConfidence = clamp(sourceDiversity * 14 + signalCount * 5 + topKeys(cluster.keywordCounts, 8).length * 2 + cluster.totalIntensity * 0.06, 22, scoreCap);
+      const confidenceScore = Math.round(clamp(localConfidence * 0.55 + theme.confidence * 0.45, 22, scoreCap));
       const score = Math.round(
         emergenceScore * 0.2 +
           breadthScore * 0.16 +
@@ -1520,8 +1856,33 @@ export function buildAIDiscoveryDashboard(input: DiscoveryInput, aiResult: AIThe
         { label: 'Primary', detail: theme.primaryRecommendation },
         ...theme.playbook.slice(0, 3).map((detail, itemIndex) => ({ label: `Step ${itemIndex + 1}`, detail })),
       ].filter((item) => item.detail);
-      const implications = [
+      const deterministicSummary = summarizeCluster(label, cluster, sourceDiversity);
+      const deterministicWhyItMatters = summarizeWhyItMatters(label, cluster, sourceDiversity, linkedAssets, portfolioImpact);
+      const supportedWhyItMattersSignals = unique(theme.whyItMattersSignalIds ?? [])
+        .map((signalId) => signalMap.get(signalId))
+        .filter((signal): signal is DiscoveredSignal => Boolean(signal));
+      const summary = modelInterpretationIsGrounded(
         theme.summary,
+        label,
+        resolvedSignals,
+        supportedInterpretationAssets,
+        knownSymbols,
+        false,
+      )
+        ? theme.summary.trim()
+        : deterministicSummary;
+      const whyItMatters = supportedWhyItMattersSignals.length > 0 && modelInterpretationIsGrounded(
+        theme.whyItMatters,
+        label,
+        supportedWhyItMattersSignals,
+        supportedInterpretationAssets,
+        knownSymbols,
+        false,
+      )
+        ? theme.whyItMatters.trim()
+        : deterministicWhyItMatters;
+      const implications = [
+        summary,
         theme.thesis,
         portfolioImpact.holdings.length > 0
           ? `This theme already affects ${portfolioImpact.holdings.length} portfolio holding${portfolioImpact.holdings.length === 1 ? '' : 's'} with ${portfolioImpact.portfolioWeightPct.toFixed(1)}% total weight.`
@@ -1532,10 +1893,10 @@ export function buildAIDiscoveryDashboard(input: DiscoveryInput, aiResult: AIThe
 
       return [{
         id: theme.id || `ai-theme-${index}`,
-        label: theme.label,
-        summary: theme.summary,
+        label,
+        summary,
         thesis: theme.thesis,
-        whyItMatters: theme.whyItMatters,
+        whyItMatters,
         actionSummary: theme.actionSummary,
         primaryRecommendation: theme.primaryRecommendation,
         playbook: theme.playbook.slice(0, 4),
@@ -1547,8 +1908,8 @@ export function buildAIDiscoveryDashboard(input: DiscoveryInput, aiResult: AIThe
         confidenceScore,
         signalCount,
         sourceDiversity,
-        freshestAt: cluster.newestAt,
-        keywords: topKeys(cluster.keywordCounts, 6).map((keyword) => toTitleCase(keyword)),
+        freshestAt: closestSignalTimestamp(cluster),
+        keywords: quality.repeatedKeywords.slice(0, 6).map((keyword) => toTitleCase(keyword)),
         sourceMix,
         linkedAssets,
         catalysts: theme.catalysts.length > 0 ? theme.catalysts.slice(0, 4) : buildCatalysts(cluster),
@@ -1632,10 +1993,10 @@ export function buildDiscoveryDashboard(input: DiscoveryInput): DiscoveryDashboa
     themes,
     brief: {
       headline: themes[0]
-        ? `${themes[0].label} is the strongest discovered cluster right now`
+        ? `${themes[0].label} has the strongest current signal overlap`
         : 'No high-conviction discovered clusters yet',
       summary: themes[0]
-        ? `This panel is clustering raw signals directly, and the strongest cluster right now is ${themes[0].label.toLowerCase()}. ${portfolioRelevantCount} of the top clusters already touch your portfolio or watchlist.`
+        ? `${themes.length} evidence clusters cleared the minimum overlap threshold; ${portfolioRelevantCount} touch your portfolio or watchlist. Scores rank this snapshot and are not probabilities or forecasts.`
         : 'The discovery engine did not find enough overlapping signals to surface strong clusters.',
       sourceCount,
       signalCount: allSignals,
