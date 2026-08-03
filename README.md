@@ -56,6 +56,7 @@ npm run desktop:dev
 - Caldara-Iacoviello GPR dataset: geopolitical risk time series and charting.
 - Local policy calendar registry: bundled policy-event schedule data.
 - OpenAI Responses API: optional overview summaries, general chat and live web research, workspace-aware companion analysis, geopolitics extraction, and opportunities theme discovery.
+- SEC EDGAR: verified ticker/CIK resolution, official filing links, and selected XBRL reported metrics in Equity research; configured through the local proxy and no credentials required.
 
 ## Provider Connections
 
@@ -66,3 +67,5 @@ Charlie works with public/no-key sources out of the box. Optional provider crede
 - Finnhub: earnings calendar support
 
 On macOS, these credentials are stored in Keychain. On Windows and Linux, they are stored in a local `connections.json` file in the user's Charlie data directory. No private provider keys should be committed to the repository.
+
+SEC EDGAR User-Agent configuration and cache/rate-limit behavior are documented in [docs/sec-edgar.md](docs/sec-edgar.md). Set `SEC_USER_AGENT` only in the local/server environment when a monitored contact should be included; no personal contact data is committed to the repository.

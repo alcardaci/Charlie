@@ -5,6 +5,7 @@ import {
 } from '../../src/utils/themeDiscoveryEngine.ts';
 import { isCachedDiscoverySnapshot } from '../../src/utils/discoveryCache.ts';
 import { sanitizePersistedCountryCounts } from '../../src/utils/geopoliticalCache.ts';
+import { attachSecEvidenceToExistingThemes, selectSecOpportunityEvidence } from '../../src/utils/secOpportunityEvidence.ts';
 
 const now = Date.now();
 
@@ -429,6 +430,33 @@ assert(
   safeCachedCountryDashboard.stats.clusterCount === 0,
   'A malformed geopolitical cache must degrade to empty evidence instead of breaking discovery',
 );
+
+const recentDate = new Date(now).toISOString().slice(0, 10);
+const secFixtureData = {
+  status: 'ready',
+  ticker: 'AAPL',
+  identity: { ticker: 'AAPL', title: 'Apple Inc.', cik: '0000320193', verified: true, sourceUrl: 'https://www.sec.gov/files/company_tickers.json' },
+  filings: [{
+    accessionNumber: '0000320193-26-000001', form: '10-Q', filedDate: recentDate, reportPeriod: recentDate,
+    primaryDocument: 'q.htm', filingUrl: 'https://www.sec.gov/Archives/edgar/data/320193/000032019326000001/q.htm', isAmendment: false,
+  }],
+  metrics: {
+    revenue: { metric: 'revenue', label: 'Revenue', value: 100, availability: 'reported', unit: 'USD', periodType: 'quarterly', reportPeriodStart: null, reportPeriodEnd: recentDate, filedDate: recentDate, form: '10-Q', accessionNumber: '0000320193-26-000001', taxonomy: 'us-gaap', concept: 'Revenue', frame: null, measurement: 'reported', sourceUrl: 'https://www.sec.gov' },
+    operatingIncome: null, netIncome: null, cash: null, debt: null,
+  },
+} as any;
+const selectedSecEvidence = selectSecOpportunityEvidence(['aapl', 'UNSUPPORTED'], {
+  AAPL: secFixtureData,
+  UNSUPPORTED: { status: 'unsupported', identity: null, filings: [], metrics: {} } as any,
+});
+assert(selectedSecEvidence.length === 1 && selectedSecEvidence[0].symbol === 'AAPL', 'Supported SEC evidence should be selected while unsupported symbols are excluded');
+assert(selectedSecEvidence[0].metrics[0].value === 100 && selectedSecEvidence[0].url.includes('/Archives/'), 'SEC evidence should retain compact metrics and official provenance');
+assert(selectSecOpportunityEvidence(['MSFT'], { AAPL: secFixtureData }).length === 0, 'Irrelevant SEC data must not enter the Opportunities evidence payload');
+assert(selectSecOpportunityEvidence(['AAPL'], {}).length === 0, 'Unavailable SEC data must leave Opportunities evidence empty');
+const existingTheme = { linkedAssets: [{ symbol: 'AAPL' }] } as any;
+const attachedThemes = attachSecEvidenceToExistingThemes([existingTheme], selectedSecEvidence);
+assert(attachedThemes.length === 1 && attachedThemes[0].filingEvidence?.length === 1, 'SEC evidence should annotate an existing matching theme');
+assert(attachSecEvidenceToExistingThemes([], selectedSecEvidence).length === 0, 'SEC-only evidence must never create a new theme');
 
 console.log(JSON.stringify({
   suppressedLabels: ['MONTHLY HIT', 'SECOND QUARTER', 'WILL / THE', 'David Lisnard'],

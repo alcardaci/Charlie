@@ -49,6 +49,7 @@ import {
   RegionalNewsCount,
   Quote,
   SearchResult,
+  SecCompanyData,
 } from '../types';
 import {
   FRED_SERIES_REGISTRY,
@@ -70,6 +71,7 @@ const GPR = '/api/gpr';
 const POLYMARKET = '/api/polymarket';
 const GDELT = '/api/gdelt';
 const CONNECTIONS = '/api/connections';
+const SEC = '/api/sec';
 const FRED_MAX_CONCURRENT_REQUESTS = 4;
 const FRED_MAX_RETRIES = 3;
 const FRED_BASE_RETRY_DELAY_MS = 400;
@@ -1357,6 +1359,13 @@ export async function fetchQuotes(symbols: string[]): Promise<Quote[]> {
 export async function fetchQuote(symbol: string): Promise<Quote | null> {
   const results = await fetchQuotes([symbol]);
   return results[0] ?? null;
+}
+
+export async function fetchSecCompanyData(symbol: string, signal?: AbortSignal): Promise<SecCompanyData> {
+  const res = await fetch(`${SEC}/company/${encodeURIComponent(symbol.trim().toUpperCase())}`, { signal });
+  const data = await res.json() as SecCompanyData | { error?: string };
+  if (!res.ok && !('status' in data)) throw new Error(('error' in data && data.error) || `SEC data fetch failed: ${res.status}`);
+  return data as SecCompanyData;
 }
 
 export async function fetchForexPairs(

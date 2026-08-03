@@ -17,6 +17,20 @@ import {
   DEFAULT_TOPIC_THEME_GUIDANCE_SYSTEM_PROMPT,
   getCompanionModelReasoningEffort,
 } from './src/utils/openaiConfig'
+import {
+  SEC_CACHE_POLICY,
+  SEC_IDENTITY_URL,
+  SEC_REQUEST_POLICY,
+  buildSecCompanyData,
+  buildSecCacheKey,
+  buildSecFactsUrl,
+  buildSecSubmissionUrl,
+  createSecSourceEnvelope,
+  isSecRetryableStatus,
+  resolveCikFromTicker,
+} from './src/data/sec'
+import type { SecCompanyData } from './src/types'
+import type { SecTickerMapping } from './src/data/sec'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let yf: any = null
@@ -459,6 +473,188 @@ function sendJSON(res: any, data: unknown, status = 200) {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function sendError(res: any, msg: string, status = 500) {
   sendJSON(res, { error: msg }, status)
+}
+
+const SEC_DEFAULT_USER_AGENT = 'Charlie/1.0 (SEC EDGAR data client)'
+const SEC_USER_AGENT = process.env.SEC_USER_AGENT?.trim() || SEC_DEFAULT_USER_AGENT
+
+class SecHttpError extends Error {
+  status: number
+  retryAfterMs?: number
+
+  constructor(status: number, message: string, retryAfterMs?: number) {
+    super(message)
+    this.name = 'SecHttpError'
+    this.status = status
+    this.retryAfterMs = retryAfterMs
+  }
+}
+
+let secActiveRequests = 0
+let secLastRequestAt = 0
+const secPendingRequests: Array<{
+  signal?: AbortSignal
+  resolve: () => void
+  reject: (error: Error) => void
+}> = []
+
+function secSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function throwIfSecAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new DOMException('SEC request cancelled', 'AbortError')
+}
+
+async function acquireSecRequestSlot(signal?: AbortSignal): Promise<void> {
+  throwIfSecAborted(signal)
+  if (secActiveRequests < SEC_REQUEST_POLICY.maxConcurrentRequests) {
+    secActiveRequests += 1
+    return
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const pending = { signal, resolve: () => { secActiveRequests += 1; resolve() }, reject }
+    secPendingRequests.push(pending)
+    signal?.addEventListener('abort', () => {
+      const index = secPendingRequests.indexOf(pending)
+      if (index >= 0) secPendingRequests.splice(index, 1)
+      reject(new DOMException('SEC request cancelled', 'AbortError'))
+    }, { once: true })
+  })
+}
+
+function releaseSecRequestSlot(): void {
+  secActiveRequests = Math.max(0, secActiveRequests - 1)
+  const next = secPendingRequests.shift()
+  if (next) {
+    if (next.signal?.aborted) {
+      next.reject(new DOMException('SEC request cancelled', 'AbortError'))
+      releaseSecRequestSlot()
+      return
+    }
+    next.resolve()
+  }
+}
+
+async function withSecRequestSlot<T>(task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  await acquireSecRequestSlot(signal)
+  try {
+    const elapsed = Date.now() - secLastRequestAt
+    if (elapsed < SEC_REQUEST_POLICY.minIntervalMs) await secSleep(SEC_REQUEST_POLICY.minIntervalMs - elapsed)
+    throwIfSecAborted(signal)
+    secLastRequestAt = Date.now()
+    return await task()
+  } finally {
+    releaseSecRequestSlot()
+  }
+}
+
+function secRetryDelayMs(attempt: number, retryAfterMs?: number): number {
+  return Math.min(retryAfterMs ?? 350 * 2 ** attempt, 3000)
+}
+
+async function fetchSecJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+  let lastError: unknown = null
+  for (let attempt = 0; attempt < SEC_REQUEST_POLICY.maxRetries; attempt += 1) {
+    throwIfSecAborted(signal)
+    const controller = new AbortController()
+    const abort = () => controller.abort()
+    const timeoutId = setTimeout(() => controller.abort(), SEC_REQUEST_POLICY.timeoutMs)
+    signal?.addEventListener('abort', abort, { once: true })
+    try {
+      const response = await withSecRequestSlot(
+        () => fetch(url, {
+          headers: {
+            Accept: 'application/json',
+            'User-Agent': SEC_USER_AGENT,
+          },
+          signal: controller.signal,
+        }),
+        signal
+      )
+      if (!response.ok) {
+        const retryAfter = Number(response.headers.get('retry-after') ?? '')
+        throw new SecHttpError(
+          response.status,
+          `SEC EDGAR request failed: ${response.status}`,
+          Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : undefined
+        )
+      }
+      return await response.json() as T
+    } catch (error) {
+      lastError = error
+      if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error
+      const status = error instanceof SecHttpError ? error.status : 0
+      if (!isSecRetryableStatus(status) || attempt >= SEC_REQUEST_POLICY.maxRetries - 1) throw error
+      await secSleep(secRetryDelayMs(attempt, error instanceof SecHttpError ? error.retryAfterMs : undefined))
+    } finally {
+      clearTimeout(timeoutId)
+      signal?.removeEventListener('abort', abort)
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError))
+}
+
+type SecCacheEntry<T> = { value: T; expiresAt: number; staleUntil: number }
+type SecCacheState = 'fresh' | 'stale' | 'unavailable'
+
+async function readSecCache<T>(args: {
+  key: string
+  cache: Map<string, SecCacheEntry<T>>
+  inFlight: Map<string, Promise<T>>
+  ttlMs: number
+  staleMs: number
+  loader: (signal?: AbortSignal) => Promise<T>
+  signal?: AbortSignal
+}): Promise<{ value: T; state: Exclude<SecCacheState, 'unavailable'> }> {
+  const now = Date.now()
+  const cached = args.cache.get(args.key)
+  if (cached && cached.expiresAt > now) return { value: cached.value, state: 'fresh' }
+
+  const refresh = async (signal?: AbortSignal): Promise<T> => {
+    const existing = args.inFlight.get(args.key)
+    if (existing) return existing
+    const promise = args.loader(signal).then((value) => {
+      const storedAt = Date.now()
+      args.cache.set(args.key, { value, expiresAt: storedAt + args.ttlMs, staleUntil: storedAt + args.ttlMs + args.staleMs })
+      return value
+    }).finally(() => args.inFlight.delete(args.key))
+    args.inFlight.set(args.key, promise)
+    return promise
+  }
+
+  if (cached && cached.staleUntil > now) {
+    void refresh().catch((error) => console.warn(`[vite-sec] stale refresh failed for ${args.key}`, error))
+    return { value: cached.value, state: 'stale' }
+  }
+
+  throwIfSecAborted(args.signal)
+  return { value: await refresh(args.signal), state: 'fresh' }
+}
+
+function emptySecCompanyData(ticker: string, status: SecCompanyData['status'], error?: string, warnings: string[] = []): SecCompanyData {
+  const now = new Date().toISOString()
+  return {
+    status,
+    ticker: ticker.toUpperCase(),
+    identity: null,
+    filings: [],
+    observations: [],
+    metrics: { revenue: null, operatingIncome: null, netIncome: null, cash: null, debt: null },
+    source: {
+      provider: 'SEC EDGAR',
+      source: 'sec-edgar',
+      accessedAt: now,
+      identityUrl: SEC_IDENTITY_URL,
+      submissionsUrl: '',
+      factsUrl: '',
+      schemaVersion: 1,
+    },
+    cache: { identity: 'unavailable', submissions: 'unavailable', facts: 'unavailable' },
+    warnings,
+    ...(error ? { error } : {}),
+  }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -3585,9 +3781,116 @@ function formatCompanionInput(args: {
 function marketDataMiddleware(): Plugin {
   const yahooQuoteCache = new Map<string, { expiresAt: number; staleUntil: number; payload: unknown[] }>()
   const polymarketForecastCache = new Map<string, { expiresAt: number; payload: unknown }>()
+  const secIdentityCache = new Map<string, SecCacheEntry<unknown>>()
+  const secSubmissionsCache = new Map<string, SecCacheEntry<unknown>>()
+  const secFactsCache = new Map<string, SecCacheEntry<unknown>>()
+  const secIdentityInFlight = new Map<string, Promise<unknown>>()
+  const secSubmissionsInFlight = new Map<string, Promise<unknown>>()
+  const secFactsInFlight = new Map<string, Promise<unknown>>()
 
   const registerMarketDataMiddlewares = (server: ViteDevServer | PreviewServer) => {
     registerLocalStateMiddleware(server)
+
+      server.middlewares.use(async (req, res, next) => {
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const path = url.pathname
+        if (!path.startsWith('/api/sec/')) return next()
+        if (req.method !== 'GET') return sendError(res, 'method not allowed', 405)
+
+        const route = path.replace('/api/sec/', '')
+        const match = route.match(/^company\/([^/]+)$/)
+        if (!match) return sendError(res, `Unknown SEC route: ${route}`, 404)
+
+        const ticker = decodeURIComponent(match[1]).trim().toUpperCase()
+        if (!/^[A-Z0-9][A-Z0-9.-]{0,9}$/.test(ticker)) {
+          return sendJSON(res, emptySecCompanyData(ticker, 'unsupported', 'Unsupported ticker format.'))
+        }
+
+        const requestController = new AbortController()
+        const onDisconnect = () => requestController.abort()
+        const cleanup = () => {
+          req.removeListener('aborted', onDisconnect)
+          res.removeListener('close', onDisconnect)
+        }
+        req.once('aborted', onDisconnect)
+        res.once('close', onDisconnect)
+
+        try {
+          const identityKey = buildSecCacheKey('identity-map')
+          const identityResult = await readSecCache({
+            key: identityKey,
+            cache: secIdentityCache,
+            inFlight: secIdentityInFlight,
+            ttlMs: SEC_CACHE_POLICY.identityTtlMs,
+            staleMs: SEC_CACHE_POLICY.identityStaleMs,
+            loader: (signal) => fetchSecJson(SEC_IDENTITY_URL, signal),
+            signal: requestController.signal,
+          })
+          const identity = resolveCikFromTicker(ticker, identityResult.value as SecTickerMapping)
+          if (!identity) {
+            return sendJSON(res, emptySecCompanyData(ticker, 'unsupported', 'SEC does not list this ticker.', [
+              'SEC EDGAR support is limited to instruments present in the verified SEC ticker mapping.',
+            ]))
+          }
+
+          const submissionsKey = buildSecCacheKey('submissions', identity.cik)
+          const factsKey = buildSecCacheKey('facts', identity.cik)
+          const [submissionsResult, factsResult] = await Promise.allSettled([
+            readSecCache({
+              key: submissionsKey,
+              cache: secSubmissionsCache,
+              inFlight: secSubmissionsInFlight,
+              ttlMs: SEC_CACHE_POLICY.submissionsTtlMs,
+              staleMs: SEC_CACHE_POLICY.submissionsStaleMs,
+              loader: (signal) => fetchSecJson(buildSecSubmissionUrl(identity.cik), signal),
+              signal: requestController.signal,
+            }),
+            readSecCache({
+              key: factsKey,
+              cache: secFactsCache,
+              inFlight: secFactsInFlight,
+              ttlMs: SEC_CACHE_POLICY.factsTtlMs,
+              staleMs: SEC_CACHE_POLICY.factsStaleMs,
+              loader: (signal) => fetchSecJson(buildSecFactsUrl(identity.cik), signal),
+              signal: requestController.signal,
+            }),
+          ])
+
+          const submissions = submissionsResult.status === 'fulfilled' ? submissionsResult.value : null
+          const facts = factsResult.status === 'fulfilled' ? factsResult.value : null
+          const failures = [submissionsResult, factsResult]
+            .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+          const rateLimited = failures.some((result) => result.reason instanceof SecHttpError && result.reason.status === 429)
+          const warnings = failures.map((result) => result.reason instanceof Error ? result.reason.message : String(result.reason))
+          const partial = failures.length > 0
+          const cache = {
+            identity: identityResult.state,
+            submissions: submissions?.state ?? 'unavailable',
+            facts: facts?.state ?? 'unavailable',
+          } as SecCompanyData['cache']
+          const source = createSecSourceEnvelope(identity)
+          const data = buildSecCompanyData({
+            ticker,
+            identity,
+            submissions: submissions?.value ?? {},
+            facts: facts?.value ?? {},
+            source,
+            status: rateLimited ? 'rate-limit' : partial ? 'partial' : Object.values(cache).includes('stale') ? 'stale' : 'ready',
+            cache,
+            warnings,
+            error: warnings[0],
+          })
+          return sendJSON(res, data)
+        } catch (error) {
+          const status = error instanceof SecHttpError && error.status === 429 ? 'rate-limit' : 'error'
+          const message = error instanceof Error ? error.message : String(error)
+          if (error instanceof DOMException && error.name === 'AbortError') return
+          console.error('[vite-sec]', message)
+          return sendJSON(res, emptySecCompanyData(ticker, status, message), 200)
+        } finally {
+          cleanup()
+        }
+      })
 
       server.middlewares.use(async (req, res, next) => {
         const url = new URL(req.url ?? '/', 'http://localhost')
@@ -4692,12 +4995,14 @@ function marketDataMiddleware(): Plugin {
               '- linkedAssets should be liquid symbols that best express the theme.',
               '- confidence and importance must be integers from 0 to 100.',
               '- Exclude weak, duplicate, or purely descriptive clusters that are not useful for an investor.',
+              '- secEvidence is compact corroboration only. It may qualify an already-supported theme or linked company, but SEC evidence alone must never create, name, or rank a theme.',
               '',
               JSON.stringify({
                 generatedAt: (snapshot as any).generatedAt ?? new Date().toISOString(),
                 signals: rawSignals,
                 portfolio,
                 watchlist,
+                secEvidence: Array.isArray((snapshot as any).secEvidence) ? (snapshot as any).secEvidence.slice(0, 24) : [],
               }, null, 2),
             ].join('\n')
 

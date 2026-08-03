@@ -710,6 +710,22 @@ export interface CompanyFiling {
   title: string;
   url: string;
   exhibitCount: number;
+  reportPeriod?: string | null;
+  accessionNumber?: string | null;
+  primaryDocument?: string | null;
+  isAmendment?: boolean;
+}
+
+export interface UnifiedCompanyFiling {
+  date: string;
+  form: string;
+  title: string | null;
+  url: string;
+  exhibitCount: number;
+  reportPeriod: string | null;
+  accessionNumber: string | null;
+  primaryDocument: string | null;
+  isAmendment: boolean;
 }
 
 export interface FundReturnSnapshot {
@@ -901,6 +917,96 @@ export interface CompanyFinancials {
   periods: FinancialPeriod[];
   cards: FinancialSummaryCard[];
   sections: FinancialStatementSection[];
+}
+
+export const SEC_SCHEMA_VERSION = 1 as const;
+
+export type SecStatus = 'ready' | 'stale' | 'partial' | 'unsupported' | 'rate-limit' | 'error';
+export type SecPeriodType = 'annual' | 'quarterly' | 'ttm' | 'instant' | 'unknown';
+export type SecMetricKey = 'revenue' | 'operatingIncome' | 'netIncome' | 'cash' | 'debt';
+
+export interface SecSourceEnvelope {
+  provider: 'SEC EDGAR';
+  source: 'sec-edgar';
+  accessedAt: string;
+  identityUrl: string;
+  submissionsUrl: string;
+  factsUrl: string;
+  schemaVersion: typeof SEC_SCHEMA_VERSION;
+}
+
+export interface SecIdentity {
+  ticker: string;
+  title: string;
+  cik: string;
+  verified: true;
+  sourceUrl: string;
+}
+
+export interface SecFiling {
+  accessionNumber: string;
+  form: string;
+  filedDate: string;
+  reportPeriod: string | null;
+  primaryDocument: string | null;
+  filingUrl: string;
+  isAmendment: boolean;
+}
+
+export interface SecMetricObservation {
+  metric: SecMetricKey;
+  label: string;
+  value: number | null;
+  availability: 'reported' | 'missing';
+  unit: string | null;
+  periodType: SecPeriodType;
+  reportPeriodStart: string | null;
+  reportPeriodEnd: string | null;
+  filedDate: string | null;
+  form: string | null;
+  accessionNumber: string | null;
+  taxonomy: string | null;
+  concept: string | null;
+  frame: string | null;
+  measurement: 'reported' | 'derived';
+  sourceUrl: string | null;
+  sourceAccessionNumbers?: string[];
+  sourceConcepts?: string[];
+}
+
+export interface SecCompanyData {
+  status: SecStatus;
+  ticker: string;
+  identity: SecIdentity | null;
+  filings: SecFiling[];
+  observations: SecMetricObservation[];
+  metrics: Record<SecMetricKey, SecMetricObservation | null>;
+  source: SecSourceEnvelope;
+  cache: {
+    identity: 'fresh' | 'stale' | 'unavailable';
+    submissions: 'fresh' | 'stale' | 'unavailable';
+    facts: 'fresh' | 'stale' | 'unavailable';
+  };
+  warnings: string[];
+  error?: string;
+}
+
+export interface SecOpportunityEvidence {
+  id: string;
+  symbol: string;
+  form: string;
+  filedDate: string;
+  reportPeriod: string | null;
+  accessionNumber: string;
+  url: string;
+  metrics: Array<{
+    key: SecMetricKey;
+    label: string;
+    value: number;
+    unit: string;
+    periodType: SecPeriodType;
+    reportPeriod: string | null;
+  }>;
 }
 
 export type MacroCountryCode = 'US' | 'EA' | 'GB' | 'CA' | 'JP' | 'CH' | 'SE' | 'NO' | 'AU' | 'NZ';
