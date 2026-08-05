@@ -4,6 +4,9 @@ import {
   Area,
   AreaChart,
   CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -13,7 +16,7 @@ import { fetchMacroDashboard } from '../api/finance';
 import { EventsCalendar } from '../components/EventsCalendar';
 import { MACRO_COUNTRIES, MACRO_METRICS } from '../data/macroRegistry';
 import { useTerminalStore } from '../store/useTerminalStore';
-import { MacroCountryCode, MacroMetricKey, MacroMetricSnapshot } from '../types';
+import { BlsIndicator, EurostatIndicator, MacroCountryCode, MacroDashboardData, MacroMetricKey, MacroMetricSnapshot, OecdComparableIndicator } from '../types';
 import { fmt } from '../utils/formatters';
 import { getThemePalette, useTheme } from '../utils/theme';
 import { YieldPanel } from './YieldPanel';
@@ -147,41 +150,23 @@ export function MacroPanel() {
                   {METRIC_KEYS.map((metricKey) => (
                     <MetricCard
                       key={metricKey}
-                      title={MACRO_METRICS[metricKey].label}
+                      title={selectedCountry.values[metricKey]?.label ?? MACRO_METRICS[metricKey].label}
                       snapshot={selectedCountry.values[metricKey]}
                       palette={themePalette}
                     />
                   ))}
                 </div>
 
-                <div className="bg-terminal-panel border border-terminal-border rounded p-4">
-                  <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">
-                    CROSS-MARKET SNAPSHOT
-                  </div>
-                  <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
-                    {METRIC_KEYS.map((metricKey) => {
-                      const snapshot = selectedCountry.values[metricKey];
-                      return (
-                        <div key={metricKey} className="bg-terminal-elevated border border-terminal-border rounded p-3">
-                          <div className="text-terminal-faint text-xs mb-1">{MACRO_METRICS[metricKey].shortLabel}</div>
-                          <div className="text-terminal-text font-bold text-lg tabular-nums">
-                            {formatMacroValue(snapshot)}
-                          </div>
-                          <div className="text-terminal-muted text-xs mt-1">
-                            {snapshot?.date ? new Date(`${snapshot.date}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Latest value unavailable'}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
+                <OecdComparableTrends data={dashboardData.oecdCountry} palette={themePalette} />
+                {country === 'US' && <BlsLaborTrends data={dashboardData.bls} palette={themePalette} />}
+                {country === 'EA' && <EurostatLocalDetail data={dashboardData.eurostat} palette={themePalette} />}
               </>
             )}
           </div>
         )}
 
         {view === 'compare' && (
-          <div className="h-full overflow-y-auto p-4">
+          <div className="h-full overflow-y-auto p-4 space-y-4">
             {compareData?.error && (
               <div className="mb-4">
                 <MacroAlert text={compareData.error} />
@@ -192,30 +177,33 @@ export function MacroPanel() {
             ) : compareError || !compareData ? (
               <PanelMessage text="Could not load cross-country comparison" />
             ) : (
-              <div className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
-                <table className="data-table w-full">
-                  <thead>
-                    <tr>
-                      <th className="text-left">COUNTRY</th>
-                      {METRIC_KEYS.map((metricKey) => (
-                        <th key={metricKey}>{MACRO_METRICS[metricKey].shortLabel}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {compareData.countries.map((item) => (
-                      <tr key={item.country}>
-                        <td className="text-terminal-accent font-bold">{item.label}</td>
+              <>
+                <div className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+                  <table className="data-table w-full">
+                    <thead>
+                      <tr>
+                        <th className="text-left">COUNTRY</th>
                         {METRIC_KEYS.map((metricKey) => (
-                          <td key={metricKey} className="tabular-nums">
-                            {formatMacroValue(item.values[metricKey])}
-                          </td>
+                          <th key={metricKey}>{MACRO_METRICS[metricKey].shortLabel}</th>
                         ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {compareData.countries.map((item) => (
+                        <tr key={item.country}>
+                          <td className="text-terminal-accent font-bold">{item.label}</td>
+                          {METRIC_KEYS.map((metricKey) => (
+                            <td key={metricKey} className="tabular-nums">
+                              {formatMacroValue(item.values[metricKey])}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <OecdComparisonChart data={compareData.oecd} palette={themePalette} />
+              </>
             )}
           </div>
         )}
@@ -260,7 +248,10 @@ function MetricCard({
           <div className="text-terminal-muted text-xs mt-1">
             {snapshot.change == null
               ? 'No prior print'
-              : `Delta ${snapshot.change >= 0 ? '+' : ''}${snapshot.change.toFixed(2)} ${snapshot.unit}`}
+              : `Delta ${formatSignedValue(snapshot.change, 2)} ${snapshot.unit}`}
+          </div>
+          <div className="text-terminal-faint text-[10px] mt-1">
+            {[snapshot.frequency, snapshot.areaScope, snapshot.date].filter(Boolean).join(' · ')}
           </div>
           <div className="h-24 mt-3">
             <ResponsiveContainer width="100%" height="100%">
@@ -312,7 +303,236 @@ function MetricCard({
 
 function formatMacroValue(snapshot: MacroMetricSnapshot | null): string {
   if (!snapshot || snapshot.value == null) return '--';
-  return `${fmt.number(snapshot.value, snapshot.key === 'yield10y' || snapshot.key === 'policyRate' ? 2 : 1)}${snapshot.unit}`;
+  const decimals = snapshot.key === 'yield10y' || snapshot.key === 'policyRate' ? 2 : 1;
+  return `${fmt.number(normalizeRoundedZero(snapshot.value, decimals), decimals)}${snapshot.unit}`;
+}
+
+function normalizeRoundedZero(value: number, decimals: number): number {
+  return Math.abs(value) < 0.5 * (10 ** -decimals) ? 0 : value;
+}
+
+function formatSignedValue(value: number, decimals: number): string {
+  const normalized = normalizeRoundedZero(value, decimals);
+  return `${normalized >= 0 ? '+' : ''}${normalized.toFixed(decimals)}`;
+}
+
+function OecdComparableTrends({ data, palette }: {
+  data: NonNullable<MacroDashboardData['oecdCountry']> | undefined;
+  palette: ReturnType<typeof getThemePalette>;
+}) {
+  if (!data) {
+    return (
+      <section className="bg-terminal-panel border border-terminal-border rounded px-4 py-3 text-terminal-faint text-xs">
+        Comparable activity and labour indicators are unavailable right now; the core Macro charts remain usable.
+      </section>
+    );
+  }
+  return (
+    <section className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+      <div className="px-4 py-2 panel-border-b flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-terminal-muted text-xs font-bold tracking-wider">COMPARABLE ACTIVITY & LABOUR</div>
+          <div className="text-terminal-faint text-[10px] mt-1">Common OECD KEI contracts · {data.status.toUpperCase()}</div>
+        </div>
+        <a href="https://data-explorer.oecd.org/" target="_blank" rel="noreferrer" className="text-terminal-faint text-[10px] hover:text-terminal-text">OECD SOURCE ↗</a>
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 p-3">
+        {data.indicators.map((indicator) => <OecdComparableCard key={indicator.key} indicator={indicator} palette={palette} />)}
+      </div>
+      {data.warning && <div className="px-4 py-2 panel-border-t text-terminal-faint text-[10px]">{data.warning}</div>}
+    </section>
+  );
+}
+
+function OecdComparableCard({ indicator, palette }: { indicator: OecdComparableIndicator; palette: ReturnType<typeof getThemePalette> }) {
+  if (indicator.status === 'unavailable') {
+    return (
+      <div className="bg-terminal-elevated border border-terminal-border rounded p-3 min-h-[10rem] flex flex-col">
+        <div className="text-terminal-muted text-xs font-bold tracking-wider">{indicator.label}</div>
+        <div className="text-terminal-faint text-xs mt-4">Coverage unavailable</div>
+        <div className="text-terminal-faint text-[10px] mt-2 leading-relaxed">{indicator.coverageNote}</div>
+        <div className="text-terminal-faint text-[10px] mt-auto pt-3">{indicator.frequency} · {indicator.unitLabel}</div>
+      </div>
+    );
+  }
+  const value = indicator.value == null ? '--' : indicator.unit === '%'
+    ? `${indicator.value.toFixed(2)}%`
+    : indicator.value.toFixed(1);
+  const change = indicator.change == null ? 'No prior print' : `Delta ${formatSignedValue(indicator.change, 2)}`;
+  return <SupplementalTrendCard
+    title={indicator.label}
+    value={value}
+    detail={`${change} · ${indicator.date ?? 'Latest unavailable'} · ${indicator.frequency} · ${indicator.unitLabel}`}
+    series={indicator.series}
+    unit={indicator.unitLabel}
+    sourceUrl={indicator.sourceUrl}
+    color={indicator.key === 'employmentGrowth' ? palette.accent : palette.blue}
+    palette={palette}
+  />;
+}
+
+function BlsLaborTrends({
+  data,
+  palette,
+}: {
+  data: NonNullable<MacroDashboardData['bls']> | undefined;
+  palette: ReturnType<typeof getThemePalette>;
+}) {
+  if (!data || data.indicators.length === 0) {
+    return (
+      <div className="bg-terminal-panel border border-terminal-border rounded px-4 py-3 text-terminal-faint text-xs">
+        BLS payroll and earnings trends are unavailable right now; the core Macro charts remain usable.
+      </div>
+    );
+  }
+
+  return (
+    <section className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+      <div className="px-4 py-2 panel-border-b flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-terminal-muted text-xs font-bold tracking-wider">US LOCAL DETAIL</div>
+          <div className="text-terminal-faint text-[10px] mt-1">Monthly payroll level and average hourly earnings · {data.status.toUpperCase()}</div>
+        </div>
+        <a href="https://www.bls.gov/developers/" target="_blank" rel="noreferrer" className="text-terminal-faint text-[10px] hover:text-terminal-text">
+          BLS SOURCE ↗
+        </a>
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 p-3">
+        {data.indicators.map((indicator) => <BlsIndicatorChart key={indicator.id} indicator={indicator} palette={palette} />)}
+      </div>
+      {data.warning && <div className="px-4 py-2 panel-border-t text-terminal-faint text-[10px]">{data.warning}</div>}
+    </section>
+  );
+}
+
+function BlsIndicatorChart({ indicator, palette }: { indicator: BlsIndicator; palette: ReturnType<typeof getThemePalette> }) {
+  const value = indicator.value == null ? '--' : indicator.unit === '%' || indicator.unit === 'USD/hour'
+    ? `${indicator.value.toFixed(2)} ${indicator.unit}`
+    : `${fmt.number(indicator.value, 0)} ${indicator.unit}`;
+  const change = indicator.change == null ? 'No prior print' : `Δ ${formatSignedValue(indicator.change, 2)}`;
+  return <SupplementalTrendCard
+    title={indicator.label}
+    value={value}
+    detail={`${change} · ${indicator.date ?? 'Latest unavailable'} · ${indicator.seasonalAdjustment}`}
+    series={indicator.series}
+    unit={indicator.unit}
+    sourceUrl={indicator.sourceUrl}
+    color={palette.accent}
+    palette={palette}
+  />;
+}
+
+function OecdComparisonChart({ data, palette }: { data: NonNullable<MacroDashboardData['oecd']> | undefined; palette: ReturnType<typeof getThemePalette> }) {
+  if (!data || data.indicators.length === 0) return null;
+  const dates = Array.from(new Set(data.indicators.flatMap((indicator) => indicator.series.map((point) => point.date)))).sort();
+  const chartData = dates.map((date) => Object.fromEntries([
+    ['date', date],
+    ...data.indicators.map((indicator) => [indicator.countryCode, indicator.series.find((point) => point.date === date)?.value]),
+  ]));
+  const colors = [palette.accent, palette.blue, palette.purple, palette.positive, palette.negative];
+  return (
+    <section className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+      <div className="px-4 py-2 panel-border-b flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-terminal-muted text-xs font-bold tracking-wider">OECD LEADING INDICATOR COMPARISON</div>
+          <div className="text-terminal-faint text-[10px] mt-1">Direction-focused cross-country trend · index · {data.status.toUpperCase()}</div>
+        </div>
+        <a href="https://www.oecd.org/en/data/insights/data-explainers/2024/09/api.html" target="_blank" rel="noreferrer" className="text-terminal-faint text-[10px] hover:text-terminal-text">OECD SOURCE ↗</a>
+      </div>
+      <div className="h-56 p-3">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={chartData}>
+            <CartesianGrid stroke={palette.chartGrid} strokeDasharray="3 3" />
+            <XAxis dataKey="date" tick={{ fill: palette.muted, fontSize: 10 }} tickFormatter={(value: string) => value.slice(2, 7)} axisLine={{ stroke: palette.border }} tickLine={false} />
+            <YAxis domain={['auto', 'auto']} tick={{ fill: palette.muted, fontSize: 10 }} axisLine={{ stroke: palette.border }} tickLine={false} tickFormatter={(value: number) => value.toFixed(1)} />
+            <Tooltip contentStyle={{ background: palette.elevated, border: `1px solid ${palette.border}`, borderRadius: '4px', fontSize: '11px' }} labelStyle={{ color: palette.text }} />
+            <Legend wrapperStyle={{ color: palette.muted, fontSize: '10px', paddingTop: '8px' }} />
+            {data.indicators.map((indicator, index) => (
+              <Line key={indicator.countryCode} type="monotone" dataKey={indicator.countryCode} name={indicator.countryLabel} stroke={colors[index % colors.length]} strokeWidth={2} dot={false} connectNulls />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+      {data.warning && <div className="px-4 py-2 panel-border-t text-terminal-faint text-[10px]">{data.warning}</div>}
+    </section>
+  );
+}
+
+function EurostatLocalDetail({ data, palette }: { data: NonNullable<MacroDashboardData['eurostat']> | undefined; palette: ReturnType<typeof getThemePalette> }) {
+  const indicators = data?.indicators.filter((indicator) => indicator.placement === 'detail') ?? [];
+  if (!data || indicators.length === 0) return null;
+  return (
+    <section className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+      <div className="px-4 py-2 panel-border-b flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-terminal-muted text-xs font-bold tracking-wider">EURO AREA LOCAL DETAIL</div>
+          <div className="text-terminal-faint text-[10px] mt-1">Retail sales volume · Euro Area 21 · {data.status.toUpperCase()}</div>
+        </div>
+        <a href="https://ec.europa.eu/eurostat/web/user-guides/data-browser/api-data-access/api-getting-started/api" target="_blank" rel="noreferrer" className="text-terminal-faint text-[10px] hover:text-terminal-text">EUROSTAT SOURCE ↗</a>
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 p-3">
+        {indicators.map((indicator) => <EurostatIndicatorChart key={indicator.id} indicator={indicator} palette={palette} />)}
+      </div>
+      {data.warning && <div className="px-4 py-2 panel-border-t text-terminal-faint text-[10px]">{data.warning}</div>}
+    </section>
+  );
+}
+
+function EurostatIndicatorChart({ indicator, palette }: { indicator: EurostatIndicator; palette: ReturnType<typeof getThemePalette> }) {
+  const value = indicator.value == null ? '--' : `${indicator.value.toFixed(1)}${indicator.unit === '%' ? '%' : ''}`;
+  const change = indicator.change == null ? 'No prior print' : `Delta ${formatSignedValue(indicator.change, 1)}`;
+  return <SupplementalTrendCard
+    title={indicator.label}
+    value={value}
+    detail={`${change} · ${indicator.date ?? 'Latest unavailable'} · ${indicator.unit === 'index' ? 'Index 2021=100' : indicator.unit}`}
+    series={indicator.series}
+    unit={indicator.unit}
+    sourceUrl={indicator.sourceUrl}
+    color={palette.blue}
+    palette={palette}
+  />;
+}
+
+function SupplementalTrendCard({ title, value, detail, series, unit, sourceUrl, color, palette }: {
+  title: string;
+  value: string;
+  detail: string;
+  series: Array<{ date: string; value: number }>;
+  unit: string;
+  sourceUrl: string;
+  color: string;
+  palette: ReturnType<typeof getThemePalette>;
+}) {
+  const gradientId = `supplemental-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+  return (
+    <a href={sourceUrl} target="_blank" rel="noreferrer" className="block bg-terminal-elevated border border-terminal-border rounded p-3 hover:bg-terminal-hover transition-colors">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <div className="text-terminal-muted text-xs font-bold tracking-wider">{title}</div>
+          <div className="text-terminal-text font-bold text-lg tabular-nums mt-1">{value}</div>
+        </div>
+        <span className="text-terminal-faint text-[10px]">SOURCE ↗</span>
+      </div>
+      <div className="text-terminal-faint text-[10px] mt-1">{detail}</div>
+      <div className="h-28 mt-2">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={series}>
+            <defs>
+              <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor={color} stopOpacity={0.3} />
+                <stop offset="95%" stopColor={color} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid stroke={palette.chartGrid} strokeDasharray="3 3" />
+            <XAxis dataKey="date" tick={{ fill: palette.muted, fontSize: 10 }} tickFormatter={(date: string) => date.slice(2, 7)} axisLine={{ stroke: palette.border }} tickLine={false} />
+            <YAxis domain={['auto', 'auto']} tick={{ fill: palette.muted, fontSize: 10 }} axisLine={{ stroke: palette.border }} tickLine={false} tickFormatter={(point: number) => point.toFixed(1)} />
+            <Tooltip contentStyle={{ background: palette.elevated, border: `1px solid ${palette.border}`, borderRadius: '4px', fontSize: '11px' }} labelStyle={{ color: palette.text }} formatter={(point: number) => [`${point.toFixed(2)} ${unit}`, title]} />
+            <Area type="monotone" dataKey="value" stroke={color} fill={`url(#${gradientId})`} strokeWidth={2} />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+    </a>
+  );
 }
 
 function PanelMessage({ text }: { text: string }) {

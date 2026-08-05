@@ -1027,6 +1027,9 @@ export interface MacroMetricSnapshot {
   change: number | null;
   date?: string;
   source?: string;
+  sourceUrl?: string;
+  areaScope?: string;
+  frequency?: 'daily' | 'monthly' | 'quarterly' | 'annual';
   seriesId?: string;
   series: MacroSeriesPoint[];
 }
@@ -1042,6 +1045,124 @@ export interface MacroDashboardData {
   error?: string;
   asOf: string;
   countries: MacroCountrySnapshot[];
+  bls?: BlsMacroData;
+  oecd?: OecdMacroData;
+  oecdCountry?: OecdCountryMacroData;
+  eurostat?: EurostatMacroData;
+}
+
+export type BlsStatus = 'ready' | 'stale' | 'partial' | 'unavailable' | 'rate-limit' | 'error';
+
+export interface BlsSeriesPoint {
+  period: string;
+  date: string;
+  value: number;
+  preliminary: boolean;
+}
+
+export interface BlsIndicator {
+  id: string;
+  label: string;
+  shortLabel: string;
+  unit: string;
+  seasonalAdjustment: 'seasonally adjusted' | 'not seasonally adjusted' | 'unknown';
+  value: number | null;
+  previous: number | null;
+  change: number | null;
+  date?: string;
+  series: BlsSeriesPoint[];
+  sourceUrl: string;
+}
+
+export interface BlsMacroData {
+  status: BlsStatus;
+  source: 'BLS Public Data API';
+  accessedAt: string;
+  indicators: BlsIndicator[];
+  warning?: string;
+  cache?: 'fresh' | 'stale' | 'unavailable';
+}
+
+export type OecdStatus = 'ready' | 'stale' | 'partial' | 'unavailable' | 'rate-limit' | 'error';
+
+export interface OecdIndicator {
+  countryCode: string;
+  countryLabel: string;
+  value: number | null;
+  previous: number | null;
+  change: number | null;
+  date?: string;
+  series: Array<{ date: string; value: number }>;
+  unit: 'index';
+  sourceUrl: string;
+}
+
+export interface OecdMacroData {
+  status: OecdStatus;
+  source: 'OECD Composite Leading Indicator';
+  accessedAt: string;
+  indicators: OecdIndicator[];
+  warning?: string;
+  cache?: 'fresh' | 'stale' | 'unavailable';
+}
+
+export interface OecdComparableIndicator {
+  key: 'employmentGrowth' | 'industrialProduction';
+  label: string;
+  shortLabel: string;
+  status: 'ready' | 'unavailable';
+  value: number | null;
+  previous: number | null;
+  change: number | null;
+  date?: string;
+  unit: '%' | 'index';
+  unitLabel: string;
+  frequency: 'monthly' | 'quarterly';
+  transformation: 'level' | 'derived-qoq-percent';
+  areaScope: string;
+  seriesId: string;
+  series: Array<{ date: string; value: number }>;
+  sourceUrl: string;
+  coverageNote?: string;
+}
+
+export interface OecdCountryMacroData {
+  status: OecdStatus;
+  source: 'OECD Key Economic Indicators';
+  accessedAt: string;
+  country: MacroCountryCode;
+  oecdCountryCode: string;
+  indicators: OecdComparableIndicator[];
+  warning?: string;
+  cache?: 'fresh' | 'stale' | 'unavailable';
+}
+
+export type EurostatStatus = 'ready' | 'stale' | 'partial' | 'unavailable' | 'rate-limit' | 'error';
+
+export interface EurostatIndicator {
+  id: string;
+  label: string;
+  value: number | null;
+  previous: number | null;
+  change: number | null;
+  date?: string;
+  unit: 'index' | '%';
+  frequency: 'monthly' | 'quarterly';
+  placement: 'core' | 'detail';
+  metricKey?: MacroMetricKey;
+  areaScope: string;
+  series: Array<{ date: string; value: number }>;
+  sourceUrl: string;
+}
+
+export interface EurostatMacroData {
+  status: EurostatStatus;
+  source: 'Eurostat';
+  accessedAt: string;
+  geo: 'EA21';
+  indicators: EurostatIndicator[];
+  warning?: string;
+  cache?: 'fresh' | 'stale' | 'unavailable';
 }
 
 export interface MacroCalendarData {

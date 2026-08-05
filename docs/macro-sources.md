@@ -1,0 +1,12 @@
+# Public macro sources
+
+Charlie keeps these sources behind the local server boundary and uses them only for compact additions to the existing Macro view.
+
+- **BLS:** public API v1 by default; nonfarm payroll employment and average hourly earnings appear as compact US local detail. An optional `BLS_API_KEY` selects API v2 for registered higher limits. Basic operation needs no key.
+- **OECD country panels:** Key Economic Indicators (`DSD_KEI@DF_KEI` version 4.0) provide the same two primary supplemental slots in every country tab. Employment growth is derived as quarter-over-quarter percent change from seasonally adjusted total-employment levels and covers all ten supported areas. Industrial production is a monthly, calendar- and seasonally-adjusted index with 2015=100; OECD has comparable coverage for US, EA20, UK, Canada, Japan, Switzerland, Sweden, and Norway, while Australia and New Zealand show an explicit coverage-unavailable state.
+- **OECD Compare:** the Composite Leading Indicator (`DSD_STES@DF_CLI` version 4.1) remains in Compare only because its current official coverage is narrower and its signal is directional rather than a quantitative growth forecast.
+- **Eurostat:** JSON-stat API, restricted to Euro Area 21. Official unemployment and quarterly real-GDP growth replace older Euro Area fallback prints in the EA tab; retail-volume is retained as non-duplicative local detail. Eurostat industrial production is not shown because the homogeneous OECD layer already supplies that metric. Eurostat is not requested for other country tabs.
+
+All country/metric charts use an explicit registry binding country, metric, source series, display label, unit, frequency, transformation, area scope, and magnitude limit. Missing OECD coverage is represented directly and never filled with an unrelated series. Invalid magnitudes are discarded instead of rendered. All three integrations use bounded requests, short upstream timeouts, retry only for transient statuses, in-memory fresh/stale caches, and source links on the displayed charts. If a supplemental source is unavailable, existing core charts remain usable.
+
+Official documentation: [BLS API](https://www.bls.gov/developers/home.htm), [OECD API](https://www.oecd.org/en/data/insights/data-explainers/2024/09/api.html), and [Eurostat Statistics API](https://ec.europa.eu/eurostat/web/user-guides/data-browser/api-data-access/api-getting-started/api).

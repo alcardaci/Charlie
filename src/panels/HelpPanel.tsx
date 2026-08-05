@@ -43,6 +43,21 @@ const DATA_SOURCES = [
     note: 'Public web parsing',
   },
   {
+    name: 'BLS',
+    coverage: 'US payroll employment and average hourly earnings as compact local detail in Macro.',
+    note: 'Public BLS API',
+  },
+  {
+    name: 'OECD',
+    coverage: 'Comparable employment-growth and industrial-production trends across country panels, plus leading indicators in Compare.',
+    note: 'Public OECD SDMX API',
+  },
+  {
+    name: 'Eurostat',
+    coverage: 'Official Euro Area GDP and unemployment, with retail-volume local detail in the EA Macro view.',
+    note: 'Public Eurostat API',
+  },
+  {
     name: 'CoinGecko',
     coverage: 'Cryptocurrency spot prices, rankings, market cap, and sparkline data.',
     note: 'Public API',
