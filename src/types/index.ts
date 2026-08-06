@@ -1058,14 +1058,18 @@ export interface BlsSeriesPoint {
   date: string;
   value: number;
   preliminary: boolean;
+  revised: boolean;
 }
 
 export interface BlsIndicator {
   id: string;
   label: string;
   shortLabel: string;
+  family: 'headline' | 'jolts' | 'work-cost' | 'productivity' | 'trade-prices' | 'sector-payrolls';
+  frequency: 'monthly' | 'quarterly';
   unit: string;
   seasonalAdjustment: 'seasonally adjusted' | 'not seasonally adjusted' | 'unknown';
+  transformation: 'level' | 'derived-yoy-percent';
   value: number | null;
   previous: number | null;
   change: number | null;
@@ -1107,7 +1111,7 @@ export interface OecdMacroData {
 }
 
 export interface OecdComparableIndicator {
-  key: 'employmentGrowth' | 'industrialProduction';
+  key: 'employmentGrowth' | 'industrialProduction' | 'businessConfidence';
   label: string;
   shortLabel: string;
   status: 'ready' | 'unavailable';
@@ -1128,7 +1132,7 @@ export interface OecdComparableIndicator {
 
 export interface OecdCountryMacroData {
   status: OecdStatus;
-  source: 'OECD Key Economic Indicators';
+  source: 'OECD economic indicators';
   accessedAt: string;
   country: MacroCountryCode;
   oecdCountryCode: string;
@@ -1142,17 +1146,23 @@ export type EurostatStatus = 'ready' | 'stale' | 'partial' | 'unavailable' | 'ra
 export interface EurostatIndicator {
   id: string;
   label: string;
+  shortLabel: string;
   value: number | null;
   previous: number | null;
   change: number | null;
   date?: string;
-  unit: 'index' | '%';
+  unit: 'index' | '%' | 'billion EUR';
+  unitLabel: string;
   frequency: 'monthly' | 'quarterly';
+  seasonalAdjustment: 'seasonally adjusted' | 'calendar adjusted' | 'seasonally and calendar adjusted' | 'not seasonally adjusted';
+  transformation: 'level' | 'year-over-year percent' | 'quarter-over-quarter percent';
   placement: 'core' | 'detail';
+  group?: 'labour' | 'activity' | 'prices-trade';
   metricKey?: MacroMetricKey;
   areaScope: string;
   series: Array<{ date: string; value: number }>;
   sourceUrl: string;
+  coverageNote?: string;
 }
 
 export interface EurostatMacroData {

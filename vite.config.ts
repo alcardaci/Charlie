@@ -32,7 +32,7 @@ import {
 } from './src/data/sec'
 import type { SecCompanyData } from './src/types'
 import type { SecTickerMapping } from './src/data/sec'
-import { EUROSTAT_SERIES } from './src/data/eurostatRegistry'
+import { EUROSTAT_PUBLIC_SERIES, EUROSTAT_SCHEMA_VERSION, EUROSTAT_SERIES } from './src/data/eurostatRegistry'
 import {
   OECD_COMPARABLE_SERIES,
   buildOecdKeiSeriesKey,
@@ -5650,7 +5650,7 @@ function marketDataMiddleware(): Plugin {
         } catch {
           return sendError(res, 'Unsupported OECD country contract', 404)
         }
-        const cacheKey = `oecd-country-v1:${country}`
+        const cacheKey = `oecd-country-v2:${country}`
         const cached = oecdCache.get(cacheKey)
         const age = cached ? Date.now() - cached.savedAt : Number.POSITIVE_INFINITY
         const refresh = async () => {
@@ -5726,11 +5726,11 @@ function marketDataMiddleware(): Plugin {
         const url = new URL(req.url ?? '/', 'http://localhost')
         if (url.pathname !== '/api/eurostat/macro') return next()
         if (req.method !== 'GET') return sendError(res, 'method not allowed', 405)
-        const cacheKey = 'eurostat-macro-v2'
+        const cacheKey = `eurostat-macro-v${EUROSTAT_SCHEMA_VERSION}`
         const cached = eurostatCache.get(cacheKey)
         const age = cached ? Date.now() - cached.savedAt : Number.POSITIVE_INFINITY
         const refresh = async () => {
-          const definitions = EUROSTAT_SERIES
+          const definitions = EUROSTAT_PUBLIC_SERIES
           const entries = await Promise.allSettled(definitions.map(async (definition) => {
             const query = new URLSearchParams({ ...definition.params, geo: 'EA21', lastTimePeriod: '24', lang: 'en', format: 'JSON' })
             return [definition.id, await fetchPublicStatsJson(`https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/${definition.dataset}?${query.toString()}`, new AbortController().signal)] as const

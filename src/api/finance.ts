@@ -2752,7 +2752,7 @@ export async function fetchBlsMacroData(signal?: AbortSignal): Promise<BlsMacroD
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({
         seriesid: BLS_SERIES.map((series) => series.id),
-        startyear: String(year - 2),
+        startyear: String(year - 3),
         endyear: String(year),
       }),
       signal,
@@ -2774,11 +2774,7 @@ export async function fetchBlsMacroData(signal?: AbortSignal): Promise<BlsMacroD
     const indicators = (payload?.Results?.series ?? []).flatMap((series) => {
       const definition = BLS_SERIES.find((candidate) => candidate.id === series.seriesID);
       if (!definition) return [];
-      const points = (series.data ?? [])
-        .map((row) => normalizeBlsPoint(row))
-        .filter((point): point is BlsIndicator['series'][number] => Boolean(point))
-        .sort((left, right) => left.date.localeCompare(right.date))
-        .slice(-24);
+      const points = normalizeBlsSeries(definition, series.data ?? []);
       return [buildBlsIndicator(definition, points)];
     });
     const status = indicators.length === BLS_SERIES.length ? (cache === 'stale' ? 'stale' : 'ready') : indicators.length > 0 ? 'partial' : 'unavailable';
@@ -2803,18 +2799,53 @@ export async function fetchBlsMacroData(signal?: AbortSignal): Promise<BlsMacroD
   }
 }
 
-export function normalizeBlsPoint(row: BlsApiDataRow): BlsIndicator['series'][number] | null {
+export function normalizeBlsPoint(
+  row: BlsApiDataRow,
+  frequency: BlsSeriesDefinition['frequency'] = 'monthly',
+): BlsIndicator['series'][number] | null {
   const year = String(row.year ?? '');
   const period = String(row.period ?? '');
   const value = Number(row.value);
   const month = /^M(0[1-9]|1[0-2])$/.exec(period)?.[1];
-  if (!/^\d{4}$/.test(year) || !month || !Number.isFinite(value)) return null;
+  const quarter = /^Q(0[1-4])$/.exec(period)?.[1];
+  if (!/^\d{4}$/.test(year) || !Number.isFinite(value)) return null;
+  const date = frequency === 'monthly' && month
+    ? `${year}-${month}-01`
+    : frequency === 'quarterly' && quarter
+      ? `${year}-${String((Number(quarter) - 1) * 3 + 1).padStart(2, '0')}-01`
+      : null;
+  if (!date) return null;
+  const notes = row.footnotes ?? [];
   return {
     period,
-    date: `${year}-${month}-01`,
+    date,
     value,
-    preliminary: (row.footnotes ?? []).some((note) => /preliminary/i.test(note?.text ?? '')),
+    preliminary: notes.some((note) => /preliminary/i.test(note?.text ?? '')),
+    revised: notes.some((note) => /revised|revision/i.test(note?.text ?? '')),
   };
+}
+
+export function normalizeBlsSeries(definition: BlsSeriesDefinition, rows: BlsApiDataRow[]): BlsIndicator['series'] {
+  const raw = rows
+    .map((row) => normalizeBlsPoint(row, definition.frequency))
+    .filter((point): point is BlsIndicator['series'][number] => Boolean(point))
+    .filter((point) => definition.transformation === 'derived-yoy-percent' || Math.abs(point.value) <= definition.maxAbsValue)
+    .sort((left, right) => left.date.localeCompare(right.date));
+
+  if (definition.transformation !== 'derived-yoy-percent') return raw.slice(-24);
+  const byDate = new Map(raw.map((point) => [point.date, point]));
+  return raw.flatMap((point) => {
+    const previous = byDate.get(priorYearDate(point.date));
+    if (!previous || previous.value === 0) return [];
+    const value = ((point.value / previous.value) - 1) * 100;
+    if (!Number.isFinite(value) || Math.abs(value) > definition.maxAbsValue) return [];
+    return [{ ...point, value }];
+  }).slice(-24);
+}
+
+function priorYearDate(date: string): string {
+  const [year, month] = date.split('-');
+  return `${Number(year) - 1}-${month}-01`;
 }
 
 function buildBlsIndicator(definition: BlsSeriesDefinition, series: BlsIndicator['series']): BlsIndicator {
@@ -2824,8 +2855,11 @@ function buildBlsIndicator(definition: BlsSeriesDefinition, series: BlsIndicator
     id: definition.id,
     label: definition.label,
     shortLabel: definition.shortLabel,
+    family: definition.family,
+    frequency: definition.frequency,
     unit: definition.unit,
     seasonalAdjustment: definition.seasonalAdjustment,
+    transformation: definition.transformation,
     value: latest?.value ?? null,
     previous: previous?.value ?? null,
     change: latest && previous ? latest.value - previous.value : null,

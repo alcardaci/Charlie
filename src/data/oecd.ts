@@ -88,7 +88,7 @@ export function normalizeOecdCountryData(
   const baseStatus = readyCount === indicators.length ? 'ready' : readyCount > 0 ? 'partial' : 'unavailable';
   return {
     status: cache === 'stale' && readyCount > 0 ? 'stale' : baseStatus,
-    source: 'OECD Key Economic Indicators',
+    source: 'OECD economic indicators',
     accessedAt: new Date().toISOString(),
     country,
     oecdCountryCode: countryContract.oecdCode,
@@ -118,6 +118,8 @@ export function normalizeOecdComparableSeries(
     ACTIVITY: contract.activity,
     ADJUSTMENT: contract.adjustment,
     TRANSFORMATION: contract.transformationCode,
+    ...(contract.timeHoriz ? { TIME_HORIZ: contract.timeHoriz } : {}),
+    ...(contract.methodology ? { METHODOLOGY: contract.methodology } : {}),
   };
   const timeIndex = dimensions.findIndex((dimension) => dimension.id === 'TIME_PERIOD');
   if (timeIndex < 0) return null;
@@ -157,7 +159,7 @@ export function normalizeOecdComparableSeries(
     frequency: contract.frequency,
     transformation: contract.transformation,
     areaScope: countryContract.label,
-    seriesId: `OECD-KEI:${buildOecdKeiSeriesKey(country, metric)}`,
+    seriesId: `OECD:${buildOecdKeiSeriesKey(country, metric)}`,
     series,
     sourceUrl: buildOecdKeiSourceUrl(country, metric),
   };
@@ -183,7 +185,7 @@ function unavailableComparableIndicator(
     frequency: contract.frequency,
     transformation: contract.transformation,
     areaScope: countryContract.label,
-    seriesId: `OECD-KEI:${countryContract.oecdCode}:${metric}:unavailable`,
+    seriesId: `OECD:${countryContract.oecdCode}:${metric}:unavailable`,
     series: [],
     sourceUrl: buildOecdKeiSourceUrl(country, metric),
     coverageNote,

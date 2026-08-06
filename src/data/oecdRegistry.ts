@@ -10,7 +10,7 @@ export const OECD_CLI_COUNTRIES = [
 
 export const OECD_CLI_SOURCE_URL = 'https://sdmx.oecd.org/public/rest/data/OECD.SDD.STES,DSD_STES@DF_CLI,4.1/USA+DEU+FRA+ITA+GBR.M.LI...AA...H';
 
-export type OecdComparableMetricKey = 'employmentGrowth' | 'industrialProduction';
+export type OecdComparableMetricKey = 'employmentGrowth' | 'industrialProduction' | 'businessConfidence';
 export type OecdComparableFrequency = 'monthly' | 'quarterly';
 export type OecdComparableTransformation = 'level' | 'derived-qoq-percent';
 
@@ -18,14 +18,16 @@ export interface OecdComparableSeriesContract {
   key: OecdComparableMetricKey;
   label: string;
   shortLabel: string;
-  dataset: 'OECD.SDD.STES,DSD_KEI@DF_KEI,4.0';
+  dataset: 'OECD.SDD.STES,DSD_KEI@DF_KEI,4.0' | 'OECD.SDD.STES,DSD_STES@DF_CLI,4.1';
   frequencyCode: 'M' | 'Q';
   frequency: OecdComparableFrequency;
-  measure: 'EMP' | 'PRVM';
+  measure: 'EMP' | 'PRVM' | 'BCICP';
   unitMeasure: 'PS' | 'IX';
-  activity: '_T' | 'BTE';
-  adjustment: 'Y';
-  transformationCode: '_Z';
+  activity: '_T' | 'BTE' | '_Z';
+  adjustment: 'Y' | 'AA';
+  transformationCode: '_Z' | 'IX';
+  timeHoriz?: '_Z';
+  methodology?: 'H';
   transformation: OecdComparableTransformation;
   unit: '%' | 'index';
   unitLabel: string;
@@ -69,6 +71,25 @@ export const OECD_COMPARABLE_SERIES: Record<OecdComparableMetricKey, OecdCompara
     maxAbsValue: 500,
     basePeriod: '2015',
   },
+  businessConfidence: {
+    key: 'businessConfidence',
+    label: 'Business confidence',
+    shortLabel: 'Business confidence',
+    dataset: 'OECD.SDD.STES,DSD_STES@DF_CLI,4.1',
+    frequencyCode: 'M',
+    frequency: 'monthly',
+    measure: 'BCICP',
+    unitMeasure: 'IX',
+    activity: '_Z',
+    adjustment: 'AA',
+    transformationCode: 'IX',
+    timeHoriz: '_Z',
+    methodology: 'H',
+    transformation: 'level',
+    unit: 'index',
+    unitLabel: 'Index · long-term average 100',
+    maxAbsValue: 130,
+  },
 };
 
 export interface OecdCountryContract {
@@ -81,16 +102,16 @@ export interface OecdCountryContract {
 const INDUSTRIAL_COVERAGE_GAP = 'OECD does not publish this comparable industrial-production series for this country.';
 
 export const OECD_COUNTRY_REGISTRY: Record<MacroCountryCode, OecdCountryContract> = {
-  US: { country: 'US', oecdCode: 'USA', label: 'United States', coverage: { employmentGrowth: true, industrialProduction: true } },
-  EA: { country: 'EA', oecdCode: 'EA20', label: 'Euro Area', coverage: { employmentGrowth: true, industrialProduction: true } },
-  GB: { country: 'GB', oecdCode: 'GBR', label: 'United Kingdom', coverage: { employmentGrowth: true, industrialProduction: true } },
-  CA: { country: 'CA', oecdCode: 'CAN', label: 'Canada', coverage: { employmentGrowth: true, industrialProduction: true } },
-  JP: { country: 'JP', oecdCode: 'JPN', label: 'Japan', coverage: { employmentGrowth: true, industrialProduction: true } },
-  CH: { country: 'CH', oecdCode: 'CHE', label: 'Switzerland', coverage: { employmentGrowth: true, industrialProduction: true } },
-  SE: { country: 'SE', oecdCode: 'SWE', label: 'Sweden', coverage: { employmentGrowth: true, industrialProduction: true } },
-  NO: { country: 'NO', oecdCode: 'NOR', label: 'Norway', coverage: { employmentGrowth: true, industrialProduction: true } },
-  AU: { country: 'AU', oecdCode: 'AUS', label: 'Australia', coverage: { employmentGrowth: true, industrialProduction: INDUSTRIAL_COVERAGE_GAP } },
-  NZ: { country: 'NZ', oecdCode: 'NZL', label: 'New Zealand', coverage: { employmentGrowth: true, industrialProduction: INDUSTRIAL_COVERAGE_GAP } },
+  US: { country: 'US', oecdCode: 'USA', label: 'United States', coverage: { employmentGrowth: true, industrialProduction: true, businessConfidence: true } },
+  EA: { country: 'EA', oecdCode: 'EA20', label: 'Euro Area', coverage: { employmentGrowth: true, industrialProduction: true, businessConfidence: true } },
+  GB: { country: 'GB', oecdCode: 'GBR', label: 'United Kingdom', coverage: { employmentGrowth: true, industrialProduction: true, businessConfidence: true } },
+  CA: { country: 'CA', oecdCode: 'CAN', label: 'Canada', coverage: { employmentGrowth: true, industrialProduction: true, businessConfidence: true } },
+  JP: { country: 'JP', oecdCode: 'JPN', label: 'Japan', coverage: { employmentGrowth: true, industrialProduction: true, businessConfidence: true } },
+  CH: { country: 'CH', oecdCode: 'CHE', label: 'Switzerland', coverage: { employmentGrowth: true, industrialProduction: true, businessConfidence: true } },
+  SE: { country: 'SE', oecdCode: 'SWE', label: 'Sweden', coverage: { employmentGrowth: true, industrialProduction: true, businessConfidence: true } },
+  NO: { country: 'NO', oecdCode: 'NOR', label: 'Norway', coverage: { employmentGrowth: true, industrialProduction: true, businessConfidence: true } },
+  AU: { country: 'AU', oecdCode: 'AUS', label: 'Australia', coverage: { employmentGrowth: true, industrialProduction: INDUSTRIAL_COVERAGE_GAP, businessConfidence: true } },
+  NZ: { country: 'NZ', oecdCode: 'NZL', label: 'New Zealand', coverage: { employmentGrowth: true, industrialProduction: INDUSTRIAL_COVERAGE_GAP, businessConfidence: true } },
 };
 
 export function getOecdCountryContract(country: MacroCountryCode): OecdCountryContract {
@@ -110,11 +131,17 @@ export function buildOecdKeiSeriesKey(country: MacroCountryCode, metric: OecdCom
   const coverage = countryContract.coverage[metric];
   if (coverage !== true) return null;
   const series = getOecdComparableSeriesContract(metric);
-  return [countryContract.oecdCode, series.frequencyCode, series.measure, series.unitMeasure, series.activity, series.adjustment, series.transformationCode].join('.');
+  const dimensions: string[] = [countryContract.oecdCode, series.frequencyCode, series.measure, series.unitMeasure, series.activity, series.adjustment, series.transformationCode];
+  if (series.dataset.includes('DF_CLI')) dimensions.push(series.timeHoriz ?? '_Z', series.methodology ?? 'H');
+  return dimensions.join('.');
 }
 
 export function buildOecdKeiSourceUrl(country: MacroCountryCode, metric: OecdComparableMetricKey): string {
   const seriesKey = buildOecdKeiSeriesKey(country, metric);
   if (!seriesKey) return 'https://data-explorer.oecd.org/';
-  return `https://data-explorer.oecd.org/vis?df%5Bag%5D=OECD.SDD.STES&df%5Bid%5D=DSD_KEI%40DF_KEI&df%5Bvs%5D=4.0&dq=${encodeURIComponent(seriesKey)}`;
+  const series = getOecdComparableSeriesContract(metric);
+  const isCli = series.dataset.includes('DF_CLI');
+  return `https://data-explorer.oecd.org/vis?df%5Bag%5D=OECD.SDD.STES&df%5Bid%5D=${isCli ? 'DSD_STES%40DF_CLI' : 'DSD_KEI%40DF_KEI'}&df%5Bvs%5D=${isCli ? '4.1' : '4.0'}&dq=${encodeURIComponent(seriesKey)}`;
 }
+
+export const OECD_COUNTRY_SCHEMA_VERSION = 2;

@@ -331,12 +331,12 @@ function OecdComparableTrends({ data, palette }: {
     <section className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
       <div className="px-4 py-2 panel-border-b flex flex-wrap items-center justify-between gap-2">
         <div>
-          <div className="text-terminal-muted text-xs font-bold tracking-wider">COMPARABLE ACTIVITY & LABOUR</div>
-          <div className="text-terminal-faint text-[10px] mt-1">Common OECD KEI contracts · {data.status.toUpperCase()}</div>
+          <div className="text-terminal-muted text-xs font-bold tracking-wider">COMPARABLE ACTIVITY, LABOUR & CONFIDENCE</div>
+          <div className="text-terminal-faint text-[10px] mt-1">Common OECD contracts · exact country and series mapping · {data.status.toUpperCase()}</div>
         </div>
         <a href="https://data-explorer.oecd.org/" target="_blank" rel="noreferrer" className="text-terminal-faint text-[10px] hover:text-terminal-text">OECD SOURCE ↗</a>
       </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 p-3">
+      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-3 p-3">
         {data.indicators.map((indicator) => <OecdComparableCard key={indicator.key} indicator={indicator} palette={palette} />)}
       </div>
       {data.warning && <div className="px-4 py-2 panel-border-t text-terminal-faint text-[10px]">{data.warning}</div>}
@@ -366,7 +366,7 @@ function OecdComparableCard({ indicator, palette }: { indicator: OecdComparableI
     series={indicator.series}
     unit={indicator.unitLabel}
     sourceUrl={indicator.sourceUrl}
-    color={indicator.key === 'employmentGrowth' ? palette.accent : palette.blue}
+    color={indicator.key === 'employmentGrowth' ? palette.accent : indicator.key === 'businessConfidence' ? palette.purple : palette.blue}
     palette={palette}
   />;
 }
@@ -381,7 +381,7 @@ function BlsLaborTrends({
   if (!data || data.indicators.length === 0) {
     return (
       <div className="bg-terminal-panel border border-terminal-border rounded px-4 py-3 text-terminal-faint text-xs">
-        BLS payroll and earnings trends are unavailable right now; the core Macro charts remain usable.
+        BLS local labour indicators are unavailable right now; the core Macro charts remain usable.
       </div>
     );
   }
@@ -391,29 +391,56 @@ function BlsLaborTrends({
       <div className="px-4 py-2 panel-border-b flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-terminal-muted text-xs font-bold tracking-wider">US LOCAL DETAIL</div>
-          <div className="text-terminal-faint text-[10px] mt-1">Monthly payroll level and average hourly earnings · {data.status.toUpperCase()}</div>
+          <div className="text-terminal-faint text-[10px] mt-1">Monthly and quarterly labour, cost and productivity trends · {data.status.toUpperCase()}</div>
         </div>
         <a href="https://www.bls.gov/developers/" target="_blank" rel="noreferrer" className="text-terminal-faint text-[10px] hover:text-terminal-text">
           BLS SOURCE ↗
         </a>
       </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 p-3">
-        {data.indicators.map((indicator) => <BlsIndicatorChart key={indicator.id} indicator={indicator} palette={palette} />)}
+      <div className="p-3 space-y-4">
+        <BlsFamilySection title="HEADLINE LABOUR" indicators={data.indicators.filter((indicator) => indicator.family === 'headline')} palette={palette} mode="cards" />
+        <BlsFamilySection title="LABOUR TURNOVER" indicators={data.indicators.filter((indicator) => indicator.family === 'jolts')} palette={palette} />
+        <BlsFamilySection title="WORK INTENSITY & COST" indicators={data.indicators.filter((indicator) => indicator.family === 'work-cost')} palette={palette} mode="cards" />
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+          <BlsFamilySection title="PRODUCTIVITY & UNIT COSTS" indicators={data.indicators.filter((indicator) => indicator.family === 'productivity')} palette={palette} compact />
+          <BlsFamilySection title="IMPORT & EXPORT PRICES" indicators={data.indicators.filter((indicator) => indicator.family === 'trade-prices')} palette={palette} compact />
+        </div>
+        <BlsFamilySection title="INVESTOR-RELEVANT INDUSTRY PAYROLLS" indicators={data.indicators.filter((indicator) => indicator.family === 'sector-payrolls')} palette={palette} />
       </div>
       {data.warning && <div className="px-4 py-2 panel-border-t text-terminal-faint text-[10px]">{data.warning}</div>}
     </section>
   );
 }
 
+function BlsFamilySection({ title, indicators, palette, mode = 'lines', compact = false }: {
+  title: string;
+  indicators: BlsIndicator[];
+  palette: ReturnType<typeof getThemePalette>;
+  mode?: 'lines' | 'cards';
+  compact?: boolean;
+}) {
+  if (mode === 'cards') {
+    return (
+      <div>
+        <div className="text-terminal-faint text-[10px] font-bold tracking-wider mb-2">{title}</div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          {indicators.map((indicator) => <BlsIndicatorChart key={indicator.id} indicator={indicator} palette={palette} />)}
+        </div>
+      </div>
+    );
+  }
+  return <GroupedTrendCard title={title} indicators={indicators} palette={palette} color={palette.accent} compact={compact} />;
+}
+
 function BlsIndicatorChart({ indicator, palette }: { indicator: BlsIndicator; palette: ReturnType<typeof getThemePalette> }) {
-  const value = indicator.value == null ? '--' : indicator.unit === '%' || indicator.unit === 'USD/hour'
-    ? `${indicator.value.toFixed(2)} ${indicator.unit}`
-    : `${fmt.number(indicator.value, 0)} ${indicator.unit}`;
+  const value = indicator.value == null ? '--' : indicator.unit === 'thousand jobs'
+    ? `${fmt.number(indicator.value, 0)} ${indicator.unit}`
+    : `${indicator.value.toFixed(indicator.unit === 'USD/hour' ? 2 : 1)} ${indicator.unit}`;
   const change = indicator.change == null ? 'No prior print' : `Δ ${formatSignedValue(indicator.change, 2)}`;
   return <SupplementalTrendCard
     title={indicator.label}
     value={value}
-    detail={`${change} · ${indicator.date ?? 'Latest unavailable'} · ${indicator.seasonalAdjustment}`}
+    detail={`${change} · ${indicator.date ?? 'Latest unavailable'} · ${indicator.frequency} · ${indicator.seasonalAdjustment}`}
     series={indicator.series}
     unit={indicator.unit}
     sourceUrl={indicator.sourceUrl}
@@ -466,12 +493,18 @@ function EurostatLocalDetail({ data, palette }: { data: NonNullable<MacroDashboa
       <div className="px-4 py-2 panel-border-b flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-terminal-muted text-xs font-bold tracking-wider">EURO AREA LOCAL DETAIL</div>
-          <div className="text-terminal-faint text-[10px] mt-1">Retail sales volume · Euro Area 21 · {data.status.toUpperCase()}</div>
+          <div className="text-terminal-faint text-[10px] mt-1">Labour, activity and price trends · Euro Area 21 only · {data.status.toUpperCase()}</div>
         </div>
         <a href="https://ec.europa.eu/eurostat/web/user-guides/data-browser/api-data-access/api-getting-started/api" target="_blank" rel="noreferrer" className="text-terminal-faint text-[10px] hover:text-terminal-text">EUROSTAT SOURCE ↗</a>
       </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 p-3">
-        {indicators.map((indicator) => <EurostatIndicatorChart key={indicator.id} indicator={indicator} palette={palette} />)}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 p-3">
+        <GroupedTrendCard title="LABOUR COSTS & VACANCIES" indicators={indicators.filter((indicator) => indicator.group === 'labour')} palette={palette} color={palette.accent} />
+        <GroupedTrendCard title="ACTIVITY VOLUMES" indicators={indicators.filter((indicator) => indicator.group === 'activity')} palette={palette} color={palette.blue} />
+        {indicators.filter((indicator) => indicator.group === 'prices-trade').map((indicator) => (
+          indicator.value == null
+            ? <UnavailableTrendCard key={indicator.id} title={indicator.label} detail={indicator.coverageNote ?? 'No current observation is available for this exact contract.'} cadence={`${indicator.frequency} · ${indicator.unitLabel}`} />
+            : <EurostatIndicatorChart key={indicator.id} indicator={indicator} palette={palette} />
+        ))}
       </div>
       {data.warning && <div className="px-4 py-2 panel-border-t text-terminal-faint text-[10px]">{data.warning}</div>}
     </section>
@@ -479,18 +512,85 @@ function EurostatLocalDetail({ data, palette }: { data: NonNullable<MacroDashboa
 }
 
 function EurostatIndicatorChart({ indicator, palette }: { indicator: EurostatIndicator; palette: ReturnType<typeof getThemePalette> }) {
-  const value = indicator.value == null ? '--' : `${indicator.value.toFixed(1)}${indicator.unit === '%' ? '%' : ''}`;
+  const value = indicator.value == null ? '--' : `${indicator.value.toFixed(1)}${indicator.unit === '%' ? '%' : indicator.unit === 'billion EUR' ? ' €bn' : ''}`;
   const change = indicator.change == null ? 'No prior print' : `Delta ${formatSignedValue(indicator.change, 1)}`;
   return <SupplementalTrendCard
     title={indicator.label}
     value={value}
-    detail={`${change} · ${indicator.date ?? 'Latest unavailable'} · ${indicator.unit === 'index' ? 'Index 2021=100' : indicator.unit}`}
+    detail={`${change} · ${indicator.date ?? 'Latest unavailable'} · ${indicator.frequency} · ${indicator.unitLabel} · ${indicator.seasonalAdjustment}`}
     series={indicator.series}
     unit={indicator.unit}
     sourceUrl={indicator.sourceUrl}
     color={palette.blue}
     palette={palette}
   />;
+}
+
+type GroupedTrendIndicator = Pick<BlsIndicator | EurostatIndicator, 'id' | 'shortLabel' | 'value' | 'date' | 'unit' | 'frequency' | 'series' | 'sourceUrl'>;
+
+function GroupedTrendCard({ title, indicators, palette, color, compact = false }: {
+  title: string;
+  indicators: GroupedTrendIndicator[];
+  palette: ReturnType<typeof getThemePalette>;
+  color: string;
+  compact?: boolean;
+}) {
+  const available = indicators.filter((indicator) => indicator.series.length > 0);
+  if (available.length === 0) return <UnavailableTrendCard title={title} detail="No current observations are available for these exact series contracts." cadence="Coverage unavailable" />;
+  const dates = Array.from(new Set(available.flatMap((indicator) => indicator.series.map((point) => point.date)))).sort();
+  const chartData = dates.map((date) => Object.fromEntries([
+    ['date', date],
+    ...available.map((indicator) => [indicator.id, indicator.series.find((point) => point.date === date)?.value]),
+  ]));
+  const colors = [color, palette.blue, palette.purple, palette.positive, palette.negative];
+  return (
+    <div className="bg-terminal-elevated border border-terminal-border rounded p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="text-terminal-muted text-xs font-bold tracking-wider">{title}</div>
+        <div className="text-terminal-faint text-[10px]">{Array.from(new Set(available.map((indicator) => indicator.frequency))).join(' + ')}</div>
+      </div>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
+        {indicators.map((indicator) => (
+          <a key={indicator.id} href={indicator.sourceUrl} target="_blank" rel="noreferrer" className="text-[10px] hover:text-terminal-text">
+            <span className="text-terminal-faint">{indicator.shortLabel}</span>{' '}
+            <span className="text-terminal-text tabular-nums font-bold">{formatSupplementalValue(indicator.value, indicator.unit)}</span>{' '}
+            <span className="text-terminal-faint">{indicator.date?.slice(0, 7) ?? 'unavailable'} ↗</span>
+          </a>
+        ))}
+      </div>
+      <div className={compact ? 'h-32 mt-2' : 'h-40 mt-2'}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={chartData}>
+            <CartesianGrid stroke={palette.chartGrid} strokeDasharray="3 3" />
+            <XAxis dataKey="date" tick={{ fill: palette.muted, fontSize: 10 }} tickFormatter={(value: string) => value.slice(2, 7)} axisLine={{ stroke: palette.border }} tickLine={false} />
+            <YAxis domain={['auto', 'auto']} tick={{ fill: palette.muted, fontSize: 10 }} axisLine={{ stroke: palette.border }} tickLine={false} tickFormatter={(value: number) => Math.abs(value) >= 1_000 ? `${(value / 1_000).toFixed(0)}k` : value.toFixed(1)} />
+            <Tooltip contentStyle={{ background: palette.elevated, border: `1px solid ${palette.border}`, borderRadius: '4px', fontSize: '11px' }} labelStyle={{ color: palette.text }} />
+            <Legend wrapperStyle={{ color: palette.muted, fontSize: '10px', paddingTop: '6px' }} />
+            {available.map((indicator, index) => <Line key={indicator.id} type="monotone" dataKey={indicator.id} name={indicator.shortLabel} stroke={colors[index % colors.length]} strokeWidth={2} dot={false} connectNulls />)}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+function UnavailableTrendCard({ title, detail, cadence }: { title: string; detail: string; cadence: string }) {
+  return (
+    <div className="bg-terminal-elevated border border-terminal-border rounded p-3 min-h-[10rem] flex flex-col">
+      <div className="text-terminal-muted text-xs font-bold tracking-wider">{title}</div>
+      <div className="text-terminal-faint text-xs mt-4">Coverage unavailable</div>
+      <div className="text-terminal-faint text-[10px] mt-2 leading-relaxed">{detail}</div>
+      <div className="text-terminal-faint text-[10px] mt-auto pt-3">{cadence}</div>
+    </div>
+  );
+}
+
+function formatSupplementalValue(value: number | null, unit: string): string {
+  if (value == null) return '--';
+  const formatted = Math.abs(value) >= 1_000 ? fmt.number(value, 0) : value.toFixed(1);
+  if (unit === '%') return `${formatted}%`;
+  if (unit === 'billion EUR') return `${formatted} €bn`;
+  return `${formatted} ${unit}`;
 }
 
 function SupplementalTrendCard({ title, value, detail, series, unit, sourceUrl, color, palette }: {

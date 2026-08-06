@@ -8,6 +8,15 @@ type EurostatPayload = {
   dimension?: Record<string, { category?: { index?: Record<string, number> } }>;
 };
 
+function matchesEurostatContract(payload: EurostatPayload, definition: EurostatSeriesDefinition): boolean {
+  if (!definition.publicApi) return false;
+  const expected = { ...definition.params, geo: 'EA21' };
+  return Object.entries(expected).every(([dimension, code]) => {
+    const index = payload.dimension?.[dimension]?.category?.index;
+    return Boolean(index && Object.prototype.hasOwnProperty.call(index, code));
+  });
+}
+
 export function normalizeEurostatPeriod(value: string, frequency: EurostatSeriesDefinition['frequency']): string | null {
   if (frequency === 'monthly' && /^\d{4}-\d{2}$/.test(value)) return `${value}-01`;
   const quarter = value.match(/^(\d{4})-Q([1-4])$/);
@@ -19,28 +28,35 @@ export function normalizeEurostatPeriod(value: string, frequency: EurostatSeries
 }
 
 export function normalizeEurostatSeries(payload: EurostatPayload, definition: EurostatSeriesDefinition): EurostatIndicator {
+  const validContract = matchesEurostatContract(payload, definition);
   const timeIndex = payload.dimension?.time?.category?.index ?? {};
-  const series = Object.entries(timeIndex)
+  const series = validContract ? Object.entries(timeIndex)
     .map(([period, index]) => ({ date: normalizeEurostatPeriod(period, definition.frequency), value: Number(payload.value?.[String(index)]) }))
     .filter((point): point is { date: string; value: number } => Boolean(point.date) && Number.isFinite(point.value))
-    .filter((point) => Math.abs(point.value) <= (definition.unit === '%' ? 50 : 1_000))
+    .filter((point) => Math.abs(point.value) <= definition.maxAbsValue)
     .sort((left, right) => left.date.localeCompare(right.date))
-    .slice(-24);
+    .slice(-24) : [];
   const latest = series[series.length - 1];
   const previous = series[series.length - 2];
   return {
     id: definition.id,
     label: definition.label,
+    shortLabel: definition.shortLabel,
     value: latest?.value ?? null,
     previous: previous?.value ?? null,
     change: latest && previous ? latest.value - previous.value : null,
     date: latest?.date,
     unit: definition.unit,
+    unitLabel: definition.unitLabel,
     frequency: definition.frequency,
+    seasonalAdjustment: definition.seasonalAdjustment,
+    transformation: definition.transformation,
     placement: definition.placement,
+    group: definition.group,
     metricKey: definition.metricKey,
     areaScope: definition.areaScope,
     series,
     sourceUrl: definition.sourceUrl,
+    coverageNote: definition.coverageNote,
   };
 }

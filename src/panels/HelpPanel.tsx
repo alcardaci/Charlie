@@ -44,17 +44,17 @@ const DATA_SOURCES = [
   },
   {
     name: 'BLS',
-    coverage: 'US payroll employment and average hourly earnings as compact local detail in Macro.',
+    coverage: 'U.S. labour, prices, and productivity statistics.',
     note: 'Public BLS API',
   },
   {
     name: 'OECD',
-    coverage: 'Comparable employment-growth and industrial-production trends across country panels, plus leading indicators in Compare.',
+    coverage: 'Cross-country economic indicators and confidence data.',
     note: 'Public OECD SDMX API',
   },
   {
     name: 'Eurostat',
-    coverage: 'Official Euro Area GDP and unemployment, with retail-volume local detail in the EA Macro view.',
+    coverage: 'Euro Area / EU labour, prices, production, and retail statistics.',
     note: 'Public Eurostat API',
   },
   {
@@ -210,7 +210,7 @@ export function HelpPanel() {
         <section className="rounded border border-terminal-border bg-terminal-panel px-4 py-3">
           <div className="text-terminal-faint text-xs leading-relaxed">
             Charlie is an open-source market terminal built with React, Vite, and Tailwind CSS.
-            Market data and event intelligence flow through Yahoo Finance, SEC EDGAR, Teleborsa/FIDA, CoinGecko, Polymarket, FRED, Finnhub,
+            Market data and event intelligence flow through Yahoo Finance, SEC EDGAR, Teleborsa/FIDA, BLS, OECD, Eurostat, CoinGecko, Polymarket, FRED, Finnhub,
             Caldara-Iacoviello GPR, and GDELT.
             Quote updates are near-real-time
             (provider and polling dependent), not guaranteed tick-level streaming.
