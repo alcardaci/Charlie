@@ -269,6 +269,25 @@ export function ThemeInsightCard({
                 );
               })}
             </div>
+            {theme.filingEvidence && theme.filingEvidence.length > 0 && (
+              <div className="mt-3 border-t border-terminal-border pt-2">
+                <div className="text-[10px] tracking-[0.14em] text-terminal-faint">FILING EVIDENCE</div>
+                <div className="mt-1 space-y-1">
+                  {theme.filingEvidence.slice(0, 3).map((item) => (
+                    <a
+                      key={item.id}
+                      href={item.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center justify-between gap-2 text-[11px] text-terminal-muted hover:text-terminal-text"
+                    >
+                      <span>{item.symbol} · {item.form} · filed {item.filedDate}</span>
+                      <ExternalLink size={10} className="flex-shrink-0 text-terminal-faint" />
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
           </details>
         </div>
 

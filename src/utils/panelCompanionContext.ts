@@ -335,7 +335,13 @@ async function buildEquityContext({ queryClient, state, renderedText }: BuildPan
         institutions: workbench.ownership.institutions.slice(0, 6),
         insiders: workbench.ownership.insiders.slice(0, 6),
       },
-      filings: workbench.filings.slice(0, 8),
+      filingSummary: {
+        count: workbench.filings.length,
+        recent: workbench.filings.slice(0, 8).map((filing) => ({
+          type: filing.type,
+          date: filing.date,
+        })),
+      },
       fund: workbench.fund
         ? {
             family: workbench.fund.family ?? null,

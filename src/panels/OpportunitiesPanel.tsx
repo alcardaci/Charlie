@@ -7,6 +7,7 @@ import {
   fetchOpenAIKeyStatus,
   fetchPredictionForecasts,
   fetchQuotes,
+  fetchSecCompanyData,
   fetchSentimentSnapshot,
   getOpenAIDebugPayload,
   generateThemeDiscovery,
@@ -16,7 +17,7 @@ import type { OpenAIDebugPayloadEntry } from '../api/finance';
 import { EarlySignalCard } from '../components/EarlySignalCard';
 import { ThemeInsightCard, ThemeStatCard } from '../components/ThemeInsightCard';
 import { useTerminalStore } from '../store/useTerminalStore';
-import type { CountryNewsCount, MarketSentimentSnapshot, NewsItem, Quote } from '../types';
+import type { CountryNewsCount, MarketSentimentSnapshot, NewsItem, Quote, SecCompanyData, SecOpportunityEvidence } from '../types';
 import { fmt } from '../utils/formatters';
 import { buildTimestampedJsonFilename, downloadJsonFile } from '../utils/downloadJson';
 import { isCachedDiscoverySnapshot, type CachedDiscoverySnapshot } from '../utils/discoveryCache';
@@ -43,12 +44,14 @@ import {
   DEFAULT_THEME_DISCOVERY_RECOMMENDATION_SYSTEM_PROMPT,
   DEFAULT_THEME_DISCOVERY_SYSTEM_PROMPT,
 } from '../utils/openaiConfig';
+import { attachSecEvidenceToExistingThemes, selectSecOpportunityEvidence } from '../utils/secOpportunityEvidence';
 
 const LOOKBACK_HOURS = 72;
 const DISCOVERY_CACHE_KEY = 'bterminal-hybrid-discovery-cache-v5';
 const HYBRID_CACHE_TTL_MS = 30 * 60 * 1000;
 const BASE_INPUT_QUERY_STALE_MS = 5 * 60 * 1000;
 const BASE_INPUT_FETCH_TIMEOUT_MS = 12_000;
+const SEC_OPPORTUNITY_FETCH_TIMEOUT_MS = 2_500;
 const EARLY_SIGNALS_FETCH_TIMEOUT_MS = 12_000;
 const EARLY_SIGNALS_QUERY_STALE_MS = 6 * 60 * 60 * 1000;
 const DISCOVERY_LOADING_STEPS = [
@@ -135,6 +138,20 @@ function discoveryEvidenceKey(dashboard: DiscoveryDashboard): string {
     .flatMap((theme) => theme.evidence.map((evidence) => `${evidence.id}:${evidence.timestamp}`))
     .sort()
     .join('|');
+}
+
+async function fetchOpportunitySecEvidence(symbols: string[], signal: AbortSignal): Promise<SecOpportunityEvidence[]> {
+  const relevantSymbols = Array.from(new Set(symbols.map((symbol) => symbol.trim().toUpperCase()).filter(Boolean))).slice(0, 8);
+  if (relevantSymbols.length === 0) return [];
+  const entries = await Promise.all(relevantSymbols.map(async (symbol) => {
+    try {
+      const data = await withTimeout(fetchSecCompanyData(symbol, signal), SEC_OPPORTUNITY_FETCH_TIMEOUT_MS, undefined);
+      return [symbol, data] as const;
+    } catch {
+      return [symbol, undefined] as const;
+    }
+  }));
+  return selectSecOpportunityEvidence(relevantSymbols, Object.fromEntries(entries) as Record<string, SecCompanyData | undefined>);
 }
 
 function toYmd(date: Date): string {
@@ -777,13 +794,26 @@ export function OpportunitiesPanel() {
         gcTime: HYBRID_CACHE_TTL_MS,
       });
 
-      const signalSnapshot = buildThemeDiscoverySignalPayload(baseInput);
+      const relevantSymbols = [
+        ...watchlist,
+        ...portfolio.map((position) => position.symbol),
+        ...(discoveryQuery.data?.themes.flatMap((theme) => theme.linkedAssets.map((asset) => asset.symbol)) ?? []),
+      ];
+      const secEvidence = await fetchOpportunitySecEvidence(relevantSymbols, signal);
+      const signalSnapshot = {
+        ...buildThemeDiscoverySignalPayload(baseInput),
+        secEvidence,
+      };
       const aiResult = await generateThemeDiscovery({
         model: openAISettings.model.trim(),
         snapshot: signalSnapshot,
         signal,
       });
-      return buildAIDiscoveryDashboard(baseInput, aiResult);
+      const dashboard = buildAIDiscoveryDashboard(baseInput, aiResult);
+      return {
+        ...dashboard,
+        themes: attachSecEvidenceToExistingThemes(dashboard.themes, secEvidence),
+      };
     },
     enabled: Boolean(discoveryQuery.data) &&
       openAISettings.hasStoredApiKey &&

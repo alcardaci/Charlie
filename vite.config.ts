@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { execFile } from 'node:child_process'
+import https from 'node:https'
 import { promisify } from 'node:util'
 import NodeWS from 'ws'
 import { defineConfig, type Plugin, type PreviewServer, type ViteDevServer } from 'vite'
@@ -17,6 +18,29 @@ import {
   DEFAULT_TOPIC_THEME_GUIDANCE_SYSTEM_PROMPT,
   getCompanionModelReasoningEffort,
 } from './src/utils/openaiConfig'
+import {
+  SEC_CACHE_POLICY,
+  SEC_IDENTITY_URL,
+  SEC_REQUEST_POLICY,
+  buildSecCompanyData,
+  buildSecCacheKey,
+  buildSecFactsUrl,
+  buildSecSubmissionUrl,
+  createSecSourceEnvelope,
+  isSecRetryableStatus,
+  resolveCikFromTicker,
+} from './src/data/sec'
+import type { SecCompanyData } from './src/types'
+import type { SecTickerMapping } from './src/data/sec'
+import { selectSecEvidenceForTheme } from './src/utils/secOpportunityEvidence'
+import { EUROSTAT_PUBLIC_SERIES, EUROSTAT_SCHEMA_VERSION, EUROSTAT_SERIES } from './src/data/eurostatRegistry'
+import {
+  OECD_COMPARABLE_SERIES,
+  buildOecdKeiSeriesKey,
+  getOecdCountryContract,
+  type OecdComparableMetricKey,
+} from './src/data/oecdRegistry'
+import type { MacroCountryCode } from './src/types'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let yf: any = null
@@ -459,6 +483,294 @@ function sendJSON(res: any, data: unknown, status = 200) {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function sendError(res: any, msg: string, status = 500) {
   sendJSON(res, { error: msg }, status)
+}
+
+const BLS_CACHE_TTL_MS = 30 * 60 * 1000
+const BLS_CACHE_STALE_MS = 6 * 60 * 60 * 1000
+const BLS_TIMEOUT_MS = 3_500
+const BLS_RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504])
+const PUBLIC_STATS_TIMEOUT_MS = 5_000
+const PUBLIC_STATS_RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504])
+
+type BlsProxyCacheEntry = { savedAt: number; payload: unknown }
+
+async function fetchBlsUpstream(body: string, registrationKey: string | undefined, signal: AbortSignal): Promise<unknown> {
+  const apiVersion = registrationKey ? 'v2' : 'v1'
+  const payload = registrationKey
+    ? { ...(JSON.parse(body) as Record<string, unknown>), registrationkey: registrationKey }
+    : JSON.parse(body)
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), BLS_TIMEOUT_MS)
+    const abortFromRequest = () => controller.abort()
+    signal.addEventListener('abort', abortFromRequest, { once: true })
+    try {
+      const response = await fetch(`https://api.bls.gov/publicAPI/${apiVersion}/timeseries/data/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'User-Agent': 'Charlie/1.0' },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      })
+      const responseBody = await response.json().catch(() => null)
+      if (response.ok) return responseBody
+      if (attempt < 2 && BLS_RETRYABLE_STATUS_CODES.has(response.status)) {
+        await new Promise((resolve) => setTimeout(resolve, 300 * attempt))
+        continue
+      }
+      throw new Error(typeof responseBody?.message === 'string' ? responseBody.message : `BLS upstream failed: ${response.status}`)
+    } finally {
+      clearTimeout(timeoutId)
+      signal.removeEventListener('abort', abortFromRequest)
+    }
+  }
+
+  throw new Error('BLS upstream failed after retries.')
+}
+
+function sendBlsResponse(res: any, payload: unknown, cacheState: 'fresh' | 'stale' | 'miss', status = 200) {
+  res.writeHead(status, {
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-cache',
+    'X-Charlie-Cache': cacheState,
+    'Access-Control-Allow-Origin': '*',
+  })
+  res.end(JSON.stringify(payload))
+}
+
+async function fetchPublicStatsJson(url: string, signal: AbortSignal): Promise<unknown> {
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), PUBLIC_STATS_TIMEOUT_MS)
+    const abortFromRequest = () => controller.abort()
+    signal.addEventListener('abort', abortFromRequest, { once: true })
+    try {
+      const response = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': 'Charlie/1.0' }, signal: controller.signal })
+      const payload = await response.json().catch(() => null)
+      if (response.ok) return payload
+      if (attempt < 2 && PUBLIC_STATS_RETRYABLE_STATUS_CODES.has(response.status)) {
+        await new Promise((resolve) => setTimeout(resolve, 350 * attempt))
+        continue
+      }
+      throw new Error(`Public statistics request failed: ${response.status}`)
+    } finally {
+      clearTimeout(timeoutId)
+      signal.removeEventListener('abort', abortFromRequest)
+    }
+  }
+  throw new Error('Public statistics request failed after retries.')
+}
+
+async function fetchOecdJson(url: string, signal: AbortSignal): Promise<unknown> {
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), PUBLIC_STATS_TIMEOUT_MS)
+    const abortFromRequest = () => controller.abort()
+    signal.addEventListener('abort', abortFromRequest, { once: true })
+    try {
+      const payload = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const request = https.get(url, { headers: { Accept: 'application/json', 'User-Agent': 'Charlie/1.0' }, signal: controller.signal }, (response) => {
+          let body = ''
+          response.setEncoding('utf8')
+          response.on('data', (chunk) => { body += chunk })
+          response.on('end', () => resolve({ status: response.statusCode ?? 0, body }))
+        })
+        request.on('error', reject)
+      })
+      if (payload.status >= 200 && payload.status < 300) return JSON.parse(payload.body)
+      if (attempt < 2 && PUBLIC_STATS_RETRYABLE_STATUS_CODES.has(payload.status)) {
+        await new Promise((resolve) => setTimeout(resolve, 350 * attempt))
+        continue
+      }
+      throw new Error(`OECD request failed: ${payload.status}`)
+    } finally {
+      clearTimeout(timeoutId)
+      signal.removeEventListener('abort', abortFromRequest)
+    }
+  }
+  throw new Error('OECD request failed after retries.')
+}
+
+const SEC_DEFAULT_USER_AGENT = 'Charlie/1.0 (SEC EDGAR data client)'
+const SEC_USER_AGENT = process.env.SEC_USER_AGENT?.trim() || SEC_DEFAULT_USER_AGENT
+
+class SecHttpError extends Error {
+  status: number
+  retryAfterMs?: number
+
+  constructor(status: number, message: string, retryAfterMs?: number) {
+    super(message)
+    this.name = 'SecHttpError'
+    this.status = status
+    this.retryAfterMs = retryAfterMs
+  }
+}
+
+let secActiveRequests = 0
+let secLastRequestAt = 0
+const secPendingRequests: Array<{
+  signal?: AbortSignal
+  resolve: () => void
+  reject: (error: Error) => void
+}> = []
+
+function secSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function throwIfSecAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new DOMException('SEC request cancelled', 'AbortError')
+}
+
+async function acquireSecRequestSlot(signal?: AbortSignal): Promise<void> {
+  throwIfSecAborted(signal)
+  if (secActiveRequests < SEC_REQUEST_POLICY.maxConcurrentRequests) {
+    secActiveRequests += 1
+    return
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const pending = { signal, resolve: () => { secActiveRequests += 1; resolve() }, reject }
+    secPendingRequests.push(pending)
+    signal?.addEventListener('abort', () => {
+      const index = secPendingRequests.indexOf(pending)
+      if (index >= 0) secPendingRequests.splice(index, 1)
+      reject(new DOMException('SEC request cancelled', 'AbortError'))
+    }, { once: true })
+  })
+}
+
+function releaseSecRequestSlot(): void {
+  secActiveRequests = Math.max(0, secActiveRequests - 1)
+  const next = secPendingRequests.shift()
+  if (next) {
+    if (next.signal?.aborted) {
+      next.reject(new DOMException('SEC request cancelled', 'AbortError'))
+      releaseSecRequestSlot()
+      return
+    }
+    next.resolve()
+  }
+}
+
+async function withSecRequestSlot<T>(task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  await acquireSecRequestSlot(signal)
+  try {
+    const elapsed = Date.now() - secLastRequestAt
+    if (elapsed < SEC_REQUEST_POLICY.minIntervalMs) await secSleep(SEC_REQUEST_POLICY.minIntervalMs - elapsed)
+    throwIfSecAborted(signal)
+    secLastRequestAt = Date.now()
+    return await task()
+  } finally {
+    releaseSecRequestSlot()
+  }
+}
+
+function secRetryDelayMs(attempt: number, retryAfterMs?: number): number {
+  return Math.min(retryAfterMs ?? 350 * 2 ** attempt, 3000)
+}
+
+async function fetchSecJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+  let lastError: unknown = null
+  for (let attempt = 0; attempt < SEC_REQUEST_POLICY.maxRetries; attempt += 1) {
+    throwIfSecAborted(signal)
+    const controller = new AbortController()
+    const abort = () => controller.abort()
+    const timeoutId = setTimeout(() => controller.abort(), SEC_REQUEST_POLICY.timeoutMs)
+    signal?.addEventListener('abort', abort, { once: true })
+    try {
+      const response = await withSecRequestSlot(
+        () => fetch(url, {
+          headers: {
+            Accept: 'application/json',
+            'User-Agent': SEC_USER_AGENT,
+          },
+          signal: controller.signal,
+        }),
+        signal
+      )
+      if (!response.ok) {
+        const retryAfter = Number(response.headers.get('retry-after') ?? '')
+        throw new SecHttpError(
+          response.status,
+          `SEC EDGAR request failed: ${response.status}`,
+          Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : undefined
+        )
+      }
+      return await response.json() as T
+    } catch (error) {
+      lastError = error
+      if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error
+      const status = error instanceof SecHttpError ? error.status : 0
+      if (!isSecRetryableStatus(status) || attempt >= SEC_REQUEST_POLICY.maxRetries - 1) throw error
+      await secSleep(secRetryDelayMs(attempt, error instanceof SecHttpError ? error.retryAfterMs : undefined))
+    } finally {
+      clearTimeout(timeoutId)
+      signal?.removeEventListener('abort', abort)
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError))
+}
+
+type SecCacheEntry<T> = { value: T; expiresAt: number; staleUntil: number }
+type SecCacheState = 'fresh' | 'stale' | 'unavailable'
+
+async function readSecCache<T>(args: {
+  key: string
+  cache: Map<string, SecCacheEntry<T>>
+  inFlight: Map<string, Promise<T>>
+  ttlMs: number
+  staleMs: number
+  loader: (signal?: AbortSignal) => Promise<T>
+  signal?: AbortSignal
+}): Promise<{ value: T; state: Exclude<SecCacheState, 'unavailable'> }> {
+  const now = Date.now()
+  const cached = args.cache.get(args.key)
+  if (cached && cached.expiresAt > now) return { value: cached.value, state: 'fresh' }
+
+  const refresh = async (signal?: AbortSignal): Promise<T> => {
+    const existing = args.inFlight.get(args.key)
+    if (existing) return existing
+    const promise = args.loader(signal).then((value) => {
+      const storedAt = Date.now()
+      args.cache.set(args.key, { value, expiresAt: storedAt + args.ttlMs, staleUntil: storedAt + args.ttlMs + args.staleMs })
+      return value
+    }).finally(() => args.inFlight.delete(args.key))
+    args.inFlight.set(args.key, promise)
+    return promise
+  }
+
+  if (cached && cached.staleUntil > now) {
+    void refresh().catch((error) => console.warn(`[vite-sec] stale refresh failed for ${args.key}`, error))
+    return { value: cached.value, state: 'stale' }
+  }
+
+  throwIfSecAborted(args.signal)
+  return { value: await refresh(args.signal), state: 'fresh' }
+}
+
+function emptySecCompanyData(ticker: string, status: SecCompanyData['status'], error?: string, warnings: string[] = []): SecCompanyData {
+  const now = new Date().toISOString()
+  return {
+    status,
+    ticker: ticker.toUpperCase(),
+    identity: null,
+    filings: [],
+    observations: [],
+    metrics: { revenue: null, operatingIncome: null, netIncome: null, cash: null, debt: null },
+    source: {
+      provider: 'SEC EDGAR',
+      source: 'sec-edgar',
+      accessedAt: now,
+      identityUrl: SEC_IDENTITY_URL,
+      submissionsUrl: '',
+      factsUrl: '',
+      schemaVersion: 1,
+    },
+    cache: { identity: 'unavailable', submissions: 'unavailable', facts: 'unavailable' },
+    warnings,
+    ...(error ? { error } : {}),
+  }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -3585,9 +3897,122 @@ function formatCompanionInput(args: {
 function marketDataMiddleware(): Plugin {
   const yahooQuoteCache = new Map<string, { expiresAt: number; staleUntil: number; payload: unknown[] }>()
   const polymarketForecastCache = new Map<string, { expiresAt: number; payload: unknown }>()
+  const secIdentityCache = new Map<string, SecCacheEntry<unknown>>()
+  const secSubmissionsCache = new Map<string, SecCacheEntry<unknown>>()
+  const secFactsCache = new Map<string, SecCacheEntry<unknown>>()
+  const secIdentityInFlight = new Map<string, Promise<unknown>>()
+  const secSubmissionsInFlight = new Map<string, Promise<unknown>>()
+  const secFactsInFlight = new Map<string, Promise<unknown>>()
+  const blsCache = new Map<string, BlsProxyCacheEntry>()
+  const blsInFlight = new Map<string, Promise<unknown>>()
+  const oecdCache = new Map<string, BlsProxyCacheEntry>()
+  const oecdInFlight = new Map<string, Promise<unknown>>()
+  const eurostatCache = new Map<string, BlsProxyCacheEntry>()
+  const eurostatInFlight = new Map<string, Promise<unknown>>()
 
   const registerMarketDataMiddlewares = (server: ViteDevServer | PreviewServer) => {
     registerLocalStateMiddleware(server)
+
+      server.middlewares.use(async (req, res, next) => {
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const path = url.pathname
+        if (!path.startsWith('/api/sec/')) return next()
+        if (req.method !== 'GET') return sendError(res, 'method not allowed', 405)
+
+        const route = path.replace('/api/sec/', '')
+        const match = route.match(/^company\/([^/]+)$/)
+        if (!match) return sendError(res, `Unknown SEC route: ${route}`, 404)
+
+        const ticker = decodeURIComponent(match[1]).trim().toUpperCase()
+        if (!/^[A-Z0-9][A-Z0-9.-]{0,9}$/.test(ticker)) {
+          return sendJSON(res, emptySecCompanyData(ticker, 'unsupported', 'Unsupported ticker format.'))
+        }
+
+        const requestController = new AbortController()
+        const onDisconnect = () => requestController.abort()
+        const cleanup = () => {
+          req.removeListener('aborted', onDisconnect)
+          res.removeListener('close', onDisconnect)
+        }
+        req.once('aborted', onDisconnect)
+        res.once('close', onDisconnect)
+
+        try {
+          const identityKey = buildSecCacheKey('identity-map')
+          const identityResult = await readSecCache({
+            key: identityKey,
+            cache: secIdentityCache,
+            inFlight: secIdentityInFlight,
+            ttlMs: SEC_CACHE_POLICY.identityTtlMs,
+            staleMs: SEC_CACHE_POLICY.identityStaleMs,
+            loader: (signal) => fetchSecJson(SEC_IDENTITY_URL, signal),
+            signal: requestController.signal,
+          })
+          const identity = resolveCikFromTicker(ticker, identityResult.value as SecTickerMapping)
+          if (!identity) {
+            return sendJSON(res, emptySecCompanyData(ticker, 'unsupported', 'SEC does not list this ticker.', [
+              'SEC EDGAR support is limited to instruments present in the verified SEC ticker mapping.',
+            ]))
+          }
+
+          const submissionsKey = buildSecCacheKey('submissions', identity.cik)
+          const factsKey = buildSecCacheKey('facts', identity.cik)
+          const [submissionsResult, factsResult] = await Promise.allSettled([
+            readSecCache({
+              key: submissionsKey,
+              cache: secSubmissionsCache,
+              inFlight: secSubmissionsInFlight,
+              ttlMs: SEC_CACHE_POLICY.submissionsTtlMs,
+              staleMs: SEC_CACHE_POLICY.submissionsStaleMs,
+              loader: (signal) => fetchSecJson(buildSecSubmissionUrl(identity.cik), signal),
+              signal: requestController.signal,
+            }),
+            readSecCache({
+              key: factsKey,
+              cache: secFactsCache,
+              inFlight: secFactsInFlight,
+              ttlMs: SEC_CACHE_POLICY.factsTtlMs,
+              staleMs: SEC_CACHE_POLICY.factsStaleMs,
+              loader: (signal) => fetchSecJson(buildSecFactsUrl(identity.cik), signal),
+              signal: requestController.signal,
+            }),
+          ])
+
+          const submissions = submissionsResult.status === 'fulfilled' ? submissionsResult.value : null
+          const facts = factsResult.status === 'fulfilled' ? factsResult.value : null
+          const failures = [submissionsResult, factsResult]
+            .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+          const rateLimited = failures.some((result) => result.reason instanceof SecHttpError && result.reason.status === 429)
+          const warnings = failures.map((result) => result.reason instanceof Error ? result.reason.message : String(result.reason))
+          const partial = failures.length > 0
+          const cache = {
+            identity: identityResult.state,
+            submissions: submissions?.state ?? 'unavailable',
+            facts: facts?.state ?? 'unavailable',
+          } as SecCompanyData['cache']
+          const source = createSecSourceEnvelope(identity)
+          const data = buildSecCompanyData({
+            ticker,
+            identity,
+            submissions: submissions?.value ?? {},
+            facts: facts?.value ?? {},
+            source,
+            status: rateLimited ? 'rate-limit' : partial ? 'partial' : Object.values(cache).includes('stale') ? 'stale' : 'ready',
+            cache,
+            warnings,
+            error: warnings[0],
+          })
+          return sendJSON(res, data)
+        } catch (error) {
+          const status = error instanceof SecHttpError && error.status === 429 ? 'rate-limit' : 'error'
+          const message = error instanceof Error ? error.message : String(error)
+          if (error instanceof DOMException && error.name === 'AbortError') return
+          console.error('[vite-sec]', message)
+          return sendJSON(res, emptySecCompanyData(ticker, status, message), 200)
+        } finally {
+          cleanup()
+        }
+      })
 
       server.middlewares.use(async (req, res, next) => {
         const url = new URL(req.url ?? '/', 'http://localhost')
@@ -4762,12 +5187,14 @@ function marketDataMiddleware(): Plugin {
               '- supportingSignalIds must identify the supplied signals that directly support the guidance.',
               '- Do not state a catalyst, company implication, or recommendation that is not supported by those signals or the supplied exposure.',
               '- Use only the evidence inside each theme bundle.',
+              '- secEvidence is compact company corroboration for an already-selected theme only. Do not create, rename, rank, or change linked assets based on it; keep recommendations grounded in the supplied supportingSignalIds.',
               '',
               JSON.stringify({
                 portfolio,
                 watchlist,
                 themes: firstThemes.map((theme) => ({
                   ...theme,
+                  secEvidence: selectSecEvidenceForTheme((snapshot as any).secEvidence, theme.linkedAssets),
                   signals: rawSignals
                     .filter((signal) => theme.signalIds.includes(signal.id))
                     .map((signal) => ({
@@ -5210,6 +5637,131 @@ function marketDataMiddleware(): Plugin {
         }
       })
 
+      // OECD proxy — two exact KEI contracts for one selected country, cached as a bounded bundle.
+      server.middlewares.use(async (req, res, next) => {
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const match = url.pathname.match(/^\/api\/oecd\/country\/([A-Z]{2})$/)
+        if (!match) return next()
+        if (req.method !== 'GET') return sendError(res, 'method not allowed', 405)
+
+        const country = match[1] as MacroCountryCode
+        let countryContract
+        try {
+          countryContract = getOecdCountryContract(country)
+        } catch {
+          return sendError(res, 'Unsupported OECD country contract', 404)
+        }
+        const cacheKey = `oecd-country-v2:${country}`
+        const cached = oecdCache.get(cacheKey)
+        const age = cached ? Date.now() - cached.savedAt : Number.POSITIVE_INFINITY
+        const refresh = async () => {
+          const metrics = Object.keys(OECD_COMPARABLE_SERIES) as OecdComparableMetricKey[]
+          const entries = await Promise.allSettled(metrics.flatMap((metric) => {
+            const seriesKey = buildOecdKeiSeriesKey(country, metric)
+            if (!seriesKey) return []
+            const definition = OECD_COMPARABLE_SERIES[metric]
+            const year = new Date().getUTCFullYear() - 4
+            const startPeriod = definition.frequency === 'quarterly' ? `${year}-Q1` : `${year}-01`
+            const target = `https://sdmx.oecd.org/public/rest/data/${definition.dataset}/${seriesKey}?startPeriod=${startPeriod}&dimensionAtObservation=AllDimensions&format=jsondata`
+            return [fetchOecdJson(target, new AbortController().signal).then((payload) => [metric, payload] as const)]
+          }))
+          const series: Partial<Record<OecdComparableMetricKey, unknown>> = {}
+          const errors: string[] = []
+          entries.forEach((entry) => {
+            if (entry.status === 'fulfilled') series[entry.value[0]] = entry.value[1]
+            else errors.push(entry.reason instanceof Error ? entry.reason.message : String(entry.reason))
+          })
+          const payload = { country, oecdCountryCode: countryContract.oecdCode, series, errors }
+          oecdCache.set(cacheKey, { savedAt: Date.now(), payload })
+          return payload
+        }
+        try {
+          if (cached && age <= BLS_CACHE_TTL_MS) return sendBlsResponse(res, cached.payload, 'fresh')
+          if (cached && age <= BLS_CACHE_STALE_MS) {
+            if (!oecdInFlight.has(cacheKey)) oecdInFlight.set(cacheKey, refresh().finally(() => oecdInFlight.delete(cacheKey)))
+            return sendBlsResponse(res, cached.payload, 'stale')
+          }
+          const inFlight = oecdInFlight.get(cacheKey) ?? refresh().finally(() => oecdInFlight.delete(cacheKey))
+          oecdInFlight.set(cacheKey, inFlight)
+          return sendBlsResponse(res, await inFlight, 'miss')
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          if (cached) return sendBlsResponse(res, cached.payload, 'stale')
+          return sendError(res, message, 502)
+        }
+      })
+
+      // OECD proxy — one bounded cross-country CLI slice for Compare, cached and rate-limited by reuse.
+      server.middlewares.use(async (req, res, next) => {
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        if (url.pathname !== '/api/oecd/cli') return next()
+        if (req.method !== 'GET') return sendError(res, 'method not allowed', 405)
+        const cacheKey = 'oecd-cli-v1'
+        const cached = oecdCache.get(cacheKey)
+        const age = cached ? Date.now() - cached.savedAt : Number.POSITIVE_INFINITY
+        const refresh = async () => {
+          const year = new Date().getUTCFullYear() - 1
+          const target = `https://sdmx.oecd.org/public/rest/data/OECD.SDD.STES,DSD_STES@DF_CLI,4.1/USA+DEU+FRA+ITA+GBR.M.LI...AA...H?startPeriod=${year}-01&dimensionAtObservation=AllDimensions&format=jsondata`
+          const payload = await fetchOecdJson(target, new AbortController().signal)
+          oecdCache.set(cacheKey, { savedAt: Date.now(), payload })
+          return payload
+        }
+        try {
+          if (cached && age <= BLS_CACHE_TTL_MS) return sendBlsResponse(res, cached.payload, 'fresh')
+          if (cached && age <= BLS_CACHE_STALE_MS) {
+            if (!oecdInFlight.has(cacheKey)) oecdInFlight.set(cacheKey, refresh().finally(() => oecdInFlight.delete(cacheKey)))
+            return sendBlsResponse(res, cached.payload, 'stale')
+          }
+          const inFlight = oecdInFlight.get(cacheKey) ?? refresh().finally(() => oecdInFlight.delete(cacheKey))
+          oecdInFlight.set(cacheKey, inFlight)
+          return sendBlsResponse(res, await inFlight, 'miss')
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          if (cached) return sendBlsResponse(res, cached.payload, 'stale')
+          return sendError(res, message, 502)
+        }
+      })
+
+      // Eurostat proxy — bounded EA21 core and detail series, fetched as one cached bundle.
+      server.middlewares.use(async (req, res, next) => {
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        if (url.pathname !== '/api/eurostat/macro') return next()
+        if (req.method !== 'GET') return sendError(res, 'method not allowed', 405)
+        const cacheKey = `eurostat-macro-v${EUROSTAT_SCHEMA_VERSION}`
+        const cached = eurostatCache.get(cacheKey)
+        const age = cached ? Date.now() - cached.savedAt : Number.POSITIVE_INFINITY
+        const refresh = async () => {
+          const definitions = EUROSTAT_PUBLIC_SERIES
+          const entries = await Promise.allSettled(definitions.map(async (definition) => {
+            const query = new URLSearchParams({ ...definition.params, geo: 'EA21', lastTimePeriod: '24', lang: 'en', format: 'JSON' })
+            return [definition.id, await fetchPublicStatsJson(`https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/${definition.dataset}?${query.toString()}`, new AbortController().signal)] as const
+          }))
+          const series: Record<string, unknown> = {}
+          const errors: string[] = []
+          entries.forEach((entry, index) => {
+            if (entry.status === 'fulfilled') series[entry.value[0]] = entry.value[1]
+            else errors.push(`${definitions[index].id}: ${entry.reason instanceof Error ? entry.reason.message : String(entry.reason)}`)
+          })
+          const payload = { series, errors }
+          eurostatCache.set(cacheKey, { savedAt: Date.now(), payload })
+          return payload
+        }
+        try {
+          if (cached && age <= BLS_CACHE_TTL_MS) return sendBlsResponse(res, cached.payload, 'fresh')
+          if (cached && age <= BLS_CACHE_STALE_MS) {
+            if (!eurostatInFlight.has(cacheKey)) eurostatInFlight.set(cacheKey, refresh().finally(() => eurostatInFlight.delete(cacheKey)))
+            return sendBlsResponse(res, cached.payload, 'stale')
+          }
+          const inFlight = eurostatInFlight.get(cacheKey) ?? refresh().finally(() => eurostatInFlight.delete(cacheKey))
+          eurostatInFlight.set(cacheKey, inFlight)
+          return sendBlsResponse(res, await inFlight, 'miss')
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          if (cached) return sendBlsResponse(res, cached.payload, 'stale')
+          return sendError(res, message, 502)
+        }
+      })
+
       // FRED proxy - live macro series, release calendar, and metadata
       server.middlewares.use(async (req, res, next) => {
         const url = new URL(req.url ?? '/', 'http://localhost')
@@ -5237,6 +5789,57 @@ function marketDataMiddleware(): Plugin {
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
           sendError(res, msg)
+        }
+      })
+
+      // BLS proxy — public national labor and price series; optional BLS_API_KEY enables API v2 limits.
+      server.middlewares.use(async (req, res, next) => {
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        if (!url.pathname.startsWith('/api/bls/')) return next()
+        if (req.method !== 'POST' || url.pathname !== '/api/bls/timeseries/data/') return sendError(res, 'method not allowed', 405)
+
+        const requestController = new AbortController()
+        const onDisconnect = () => requestController.abort()
+        req.once('aborted', onDisconnect)
+        res.once('close', onDisconnect)
+        try {
+          const rawBody = await readRequestBody(req)
+          const parsed = rawBody ? JSON.parse(rawBody) as Record<string, unknown> : {}
+          const seriesid = Array.isArray(parsed.seriesid)
+            ? parsed.seriesid.map((value) => String(value ?? '').trim().toUpperCase()).filter(Boolean).slice(0, 25)
+            : []
+          const startyear = String(parsed.startyear ?? '')
+          const endyear = String(parsed.endyear ?? '')
+          if (seriesid.length === 0 || !/^\d{4}$/.test(startyear) || !/^\d{4}$/.test(endyear)) {
+            return sendError(res, 'BLS requires bounded seriesid, startyear, and endyear values.', 400)
+          }
+          const body = JSON.stringify({ seriesid, startyear, endyear })
+          const cached = blsCache.get(body)
+          const age = cached ? Date.now() - cached.savedAt : Number.POSITIVE_INFINITY
+          if (cached && age <= BLS_CACHE_TTL_MS) return sendBlsResponse(res, cached.payload, 'fresh')
+          if (cached && age <= BLS_CACHE_STALE_MS) {
+            if (!blsInFlight.has(body)) {
+              const refresh = fetchBlsUpstream(body, process.env.BLS_API_KEY?.trim() || undefined, requestController.signal)
+                .then((payload) => { blsCache.set(body, { savedAt: Date.now(), payload }); return payload })
+                .finally(() => blsInFlight.delete(body))
+              blsInFlight.set(body, refresh)
+            }
+            return sendBlsResponse(res, cached.payload, 'stale')
+          }
+
+          const inFlight = blsInFlight.get(body) ?? fetchBlsUpstream(body, process.env.BLS_API_KEY?.trim() || undefined, requestController.signal)
+            .then((payload) => { blsCache.set(body, { savedAt: Date.now(), payload }); return payload })
+            .finally(() => blsInFlight.delete(body))
+          blsInFlight.set(body, inFlight)
+          return sendBlsResponse(res, await inFlight, 'miss')
+        } catch (error) {
+          if (requestController.signal.aborted) return
+          const message = error instanceof Error ? error.message : String(error)
+          console.error('[vite-bls]', message)
+          return sendError(res, message, 502)
+        } finally {
+          req.removeListener('aborted', onDisconnect)
+          res.removeListener('close', onDisconnect)
         }
       })
   }

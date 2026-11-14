@@ -39,6 +39,12 @@ import {
   MacroDashboardData,
   MacroMetricKey,
   MacroMetricSnapshot,
+  BlsMacroData,
+  BlsIndicator,
+  OecdMacroData,
+  OecdCountryMacroData,
+  EurostatMacroData,
+  EurostatIndicator,
   MarketSentimentPillar,
   MarketSentimentSnapshot,
   NewsGeoFilterKey,
@@ -49,14 +55,21 @@ import {
   RegionalNewsCount,
   Quote,
   SearchResult,
+  SecCompanyData,
 } from '../types';
 import {
-  FRED_SERIES_REGISTRY,
   MACRO_COUNTRIES,
   MACRO_METRICS,
   US_RELEASE_TARGETS,
-  type FredSeriesCandidate,
+  getMacroSeriesContract,
+  isValidMacroMagnitude,
 } from '../data/macroRegistry';
+import { BLS_SERIES, type BlsSeriesDefinition } from '../data/blsRegistry';
+import { normalizeOecdCli, normalizeOecdCountryData } from '../data/oecd';
+import { OECD_CLI_COUNTRIES, OECD_CLI_SOURCE_URL } from '../data/oecdRegistry';
+import { normalizeEurostatSeries } from '../data/eurostat';
+import { EUROSTAT_SERIES } from '../data/eurostatRegistry';
+import { getMacroSourcePlacement } from '../data/macroSourcePlacement';
 import { POLICY_SCHEDULE_EVENTS } from '../data/policyCalendar';
 import type { AIThemeDiscoveryResult, AIThemeGuidanceResult } from '../utils/themeDiscoveryEngine';
 import { sanitizePersistedCountryCounts } from '../utils/geopoliticalCache';
@@ -64,16 +77,44 @@ import { sanitizePersistedCountryCounts } from '../utils/geopoliticalCache';
 const YF = '/api/yf';
 const FH = '/api/finnhub';
 const FRED = '/api/fred';
+const BLS = '/api/bls';
+const OECD = '/api/oecd';
+const EUROSTAT = '/api/eurostat';
 const TMF = '/api/tmf';
 const OPENAI = '/api/openai';
 const GPR = '/api/gpr';
 const POLYMARKET = '/api/polymarket';
 const GDELT = '/api/gdelt';
 const CONNECTIONS = '/api/connections';
+const SEC = '/api/sec';
 const FRED_MAX_CONCURRENT_REQUESTS = 4;
 const FRED_MAX_RETRIES = 3;
 const FRED_BASE_RETRY_DELAY_MS = 400;
 const FRED_RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+type BlsApiResponse = {
+  status?: string;
+  message?: string;
+  Results?: {
+    series?: Array<{
+      seriesID?: string;
+      data?: Array<{
+        year?: string;
+        period?: string;
+        periodName?: string;
+        value?: string;
+        footnotes?: Array<{ text?: string | null } | null>;
+      }>;
+    }>;
+  };
+};
+type BlsApiDataRow = {
+  year?: string;
+  period?: string;
+  periodName?: string;
+  value?: string;
+  footnotes?: Array<{ text?: string | null } | null>;
+};
 
 export type OpenAIDebugPayloadRoute =
   | 'overview-summary'
@@ -924,13 +965,6 @@ interface FundamentalRecord {
   [key: string]: string | number | undefined | null;
 }
 
-interface FredSeriesSearchResponse {
-  seriess?: Array<{
-    id: string;
-    title: string;
-  }>;
-}
-
 interface FredObservationsResponse {
   observations?: Array<{
     date: string;
@@ -974,7 +1008,6 @@ export interface FinnhubEconomicEvent {
   unit: string;
 }
 
-const fredSeriesCache = new Map<string, { id: string; title: string } | null>();
 const teleborsaQuoteCache = new Map<string, Promise<Quote | null>>();
 const teleborsaWorkbenchCache = new Map<string, Promise<CompanyWorkbench | null>>();
 
@@ -1357,6 +1390,13 @@ export async function fetchQuotes(symbols: string[]): Promise<Quote[]> {
 export async function fetchQuote(symbol: string): Promise<Quote | null> {
   const results = await fetchQuotes([symbol]);
   return results[0] ?? null;
+}
+
+export async function fetchSecCompanyData(symbol: string, signal?: AbortSignal): Promise<SecCompanyData> {
+  const res = await fetch(`${SEC}/company/${encodeURIComponent(symbol.trim().toUpperCase())}`, { signal });
+  const data = await res.json() as SecCompanyData | { error?: string };
+  if (!res.ok && !('status' in data)) throw new Error(('error' in data && data.error) || `SEC data fetch failed: ${res.status}`);
+  return data as SecCompanyData;
 }
 
 export async function fetchForexPairs(
@@ -2591,11 +2631,241 @@ export async function fetchMacroDashboard(countryCodes?: MacroCountryCode[]): Pr
     (Object.keys(MACRO_METRICS) as MacroMetricKey[]).some((metricKey) => Boolean(country.values[metricKey]))
   );
 
+  const sourcePlacement = getMacroSourcePlacement(countryCodes);
+  const selectedCountryCode = countryCodes?.length === 1 ? countryCodes[0] : undefined;
+  const [bls, oecd, oecdCountry, eurostat] = await Promise.all([
+    sourcePlacement.bls ? fetchBlsMacroData() : Promise.resolve(undefined),
+    sourcePlacement.oecdCli ? fetchOecdCliMacroData() : Promise.resolve(undefined),
+    sourcePlacement.oecdCountry && selectedCountryCode ? fetchOecdCountryMacroData(selectedCountryCode) : Promise.resolve(undefined),
+    sourcePlacement.eurostat ? fetchEurostatMacroData() : Promise.resolve(undefined),
+  ]);
+
+  const euroArea = countries.find((country) => country.country === 'EA');
+  if (euroArea && eurostat) {
+    for (const indicator of eurostat.indicators) {
+      if (indicator.placement !== 'core' || !indicator.metricKey || indicator.value == null) continue;
+      euroArea.values[indicator.metricKey] = buildEurostatMacroSnapshot(indicator);
+    }
+  }
+
   return {
     configured: !configError || hasAnyMetricData,
     error: hasAnyMetricData ? undefined : configError,
     asOf: new Date().toISOString(),
     countries,
+    bls,
+    oecd,
+    oecdCountry,
+    eurostat,
+  };
+}
+
+export async function fetchOecdCountryMacroData(country: MacroCountryCode, signal?: AbortSignal): Promise<OecdCountryMacroData> {
+  try {
+    const response = await fetch(`${OECD}/country/${country}`, { headers: { Accept: 'application/json' }, signal });
+    const cacheHeader = response.headers.get('x-charlie-cache');
+    const cache = cacheHeader === 'stale' ? 'stale' : 'fresh';
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      return {
+        ...normalizeOecdCountryData(country, null, 'unavailable'),
+        status: response.status === 429 ? 'rate-limit' : 'error',
+        warning: `OECD country indicators failed: ${response.status}`,
+      };
+    }
+    return normalizeOecdCountryData(country, payload, cache);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return {
+      ...normalizeOecdCountryData(country, null, 'unavailable'),
+      status: 'error',
+      warning: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export async function fetchOecdCliMacroData(signal?: AbortSignal): Promise<OecdMacroData> {
+  try {
+    const response = await fetch(`${OECD}/cli`, { headers: { Accept: 'application/json' }, signal });
+    const cache = response.headers.get('x-charlie-cache');
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      return { status: response.status === 429 ? 'rate-limit' : 'error', source: 'OECD Composite Leading Indicator', accessedAt: new Date().toISOString(), indicators: [], warning: `OECD request failed: ${response.status}`, cache: cache === 'stale' ? 'stale' : 'unavailable' };
+    }
+    const indicators = normalizeOecdCli(payload, OECD_CLI_SOURCE_URL);
+    const hasAnyValue = indicators.some((indicator) => indicator.value != null);
+    const hasAllValues = indicators.length === OECD_CLI_COUNTRIES.length && indicators.every((indicator) => indicator.value != null);
+    return { status: hasAnyValue ? (cache === 'stale' ? 'stale' : hasAllValues ? 'ready' : 'partial') : 'unavailable', source: 'OECD Composite Leading Indicator', accessedAt: new Date().toISOString(), indicators, warning: hasAllValues ? undefined : 'Some OECD reference areas have no current CLI print.', cache: cache === 'stale' ? 'stale' : 'fresh' };
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return { status: 'error', source: 'OECD Composite Leading Indicator', accessedAt: new Date().toISOString(), indicators: [], warning: error instanceof Error ? error.message : String(error), cache: 'unavailable' };
+  }
+}
+
+export async function fetchEurostatMacroData(signal?: AbortSignal): Promise<EurostatMacroData> {
+  try {
+    const response = await fetch(`${EUROSTAT}/macro`, { headers: { Accept: 'application/json' }, signal });
+    const cache = response.headers.get('x-charlie-cache');
+    const payload = await response.json().catch(() => null) as { series?: Record<string, unknown>; errors?: string[] } | null;
+    if (!response.ok) {
+      return { status: response.status === 429 ? 'rate-limit' : 'error', source: 'Eurostat', accessedAt: new Date().toISOString(), geo: 'EA21', indicators: [], warning: `Eurostat request failed: ${response.status}`, cache: cache === 'stale' ? 'stale' : 'unavailable' };
+    }
+    const indicators = EUROSTAT_SERIES.map((definition) => normalizeEurostatSeries(payload?.series?.[definition.id] ?? {}, definition));
+    const hasAnyValue = indicators.some((indicator) => indicator.value != null);
+    const hasAllValues = indicators.length === EUROSTAT_SERIES.length && indicators.every((indicator) => indicator.value != null);
+    const warning = payload?.errors?.length ? payload.errors.join('; ') : hasAllValues ? undefined : 'Some Eurostat EU detail series have no current print.';
+    return { status: hasAnyValue ? (cache === 'stale' ? 'stale' : hasAllValues && !payload?.errors?.length ? 'ready' : 'partial') : 'unavailable', source: 'Eurostat', accessedAt: new Date().toISOString(), geo: 'EA21', indicators, warning, cache: cache === 'stale' ? 'stale' : 'fresh' };
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return { status: 'error', source: 'Eurostat', accessedAt: new Date().toISOString(), geo: 'EA21', indicators: [], warning: error instanceof Error ? error.message : String(error), cache: 'unavailable' };
+  }
+}
+
+export function buildEurostatMacroSnapshot(indicator: EurostatIndicator): MacroMetricSnapshot {
+  if (!indicator.metricKey || indicator.placement !== 'core' || indicator.unit !== '%') {
+    throw new Error(`Eurostat series ${indicator.id} is not a valid core macro metric`);
+  }
+  const metric = MACRO_METRICS[indicator.metricKey];
+  return {
+    key: indicator.metricKey,
+    label: indicator.label,
+    shortLabel: metric.shortLabel,
+    unit: '%',
+    value: indicator.value,
+    previous: indicator.previous,
+    change: indicator.change,
+    date: indicator.date,
+    source: `Eurostat · ${indicator.areaScope}`,
+    sourceUrl: indicator.sourceUrl,
+    areaScope: indicator.areaScope,
+    frequency: indicator.frequency,
+    seriesId: `EUROSTAT:${indicator.id}`,
+    series: indicator.series,
+  };
+}
+
+export async function fetchBlsMacroData(signal?: AbortSignal): Promise<BlsMacroData> {
+  const year = new Date().getUTCFullYear();
+  try {
+    const response = await fetch(`${BLS}/timeseries/data/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        seriesid: BLS_SERIES.map((series) => series.id),
+        startyear: String(year - 3),
+        endyear: String(year),
+      }),
+      signal,
+    });
+    const cache = response.headers.get('x-charlie-cache');
+    const payload = await response.json().catch(() => null) as BlsApiResponse | null;
+    if (!response.ok) {
+      const status = response.status === 429 ? 'rate-limit' : 'error';
+      return {
+        status,
+        source: 'BLS Public Data API',
+        accessedAt: new Date().toISOString(),
+        indicators: [],
+        warning: payload?.message ?? `BLS request failed: ${response.status}`,
+        cache: cache === 'stale' ? 'stale' : 'unavailable',
+      };
+    }
+
+    const indicators = (payload?.Results?.series ?? []).flatMap((series) => {
+      const definition = BLS_SERIES.find((candidate) => candidate.id === series.seriesID);
+      if (!definition) return [];
+      const points = normalizeBlsSeries(definition, series.data ?? []);
+      return [buildBlsIndicator(definition, points)];
+    });
+    const status = indicators.length === BLS_SERIES.length ? (cache === 'stale' ? 'stale' : 'ready') : indicators.length > 0 ? 'partial' : 'unavailable';
+    return {
+      status,
+      source: 'BLS Public Data API',
+      accessedAt: new Date().toISOString(),
+      indicators,
+      warning: payload?.status !== 'REQUEST_SUCCEEDED' ? payload?.message : undefined,
+      cache: cache === 'stale' ? 'stale' : 'fresh',
+    };
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return {
+      status: 'error',
+      source: 'BLS Public Data API',
+      accessedAt: new Date().toISOString(),
+      indicators: [],
+      warning: error instanceof Error ? error.message : String(error),
+      cache: 'unavailable',
+    };
+  }
+}
+
+export function normalizeBlsPoint(
+  row: BlsApiDataRow,
+  frequency: BlsSeriesDefinition['frequency'] = 'monthly',
+): BlsIndicator['series'][number] | null {
+  const year = String(row.year ?? '');
+  const period = String(row.period ?? '');
+  const value = Number(row.value);
+  const month = /^M(0[1-9]|1[0-2])$/.exec(period)?.[1];
+  const quarter = /^Q(0[1-4])$/.exec(period)?.[1];
+  if (!/^\d{4}$/.test(year) || !Number.isFinite(value)) return null;
+  const date = frequency === 'monthly' && month
+    ? `${year}-${month}-01`
+    : frequency === 'quarterly' && quarter
+      ? `${year}-${String((Number(quarter) - 1) * 3 + 1).padStart(2, '0')}-01`
+      : null;
+  if (!date) return null;
+  const notes = row.footnotes ?? [];
+  return {
+    period,
+    date,
+    value,
+    preliminary: notes.some((note) => /preliminary/i.test(note?.text ?? '')),
+    revised: notes.some((note) => /revised|revision/i.test(note?.text ?? '')),
+  };
+}
+
+export function normalizeBlsSeries(definition: BlsSeriesDefinition, rows: BlsApiDataRow[]): BlsIndicator['series'] {
+  const raw = rows
+    .map((row) => normalizeBlsPoint(row, definition.frequency))
+    .filter((point): point is BlsIndicator['series'][number] => Boolean(point))
+    .filter((point) => definition.transformation === 'derived-yoy-percent' || Math.abs(point.value) <= definition.maxAbsValue)
+    .sort((left, right) => left.date.localeCompare(right.date));
+
+  if (definition.transformation !== 'derived-yoy-percent') return raw.slice(-24);
+  const byDate = new Map(raw.map((point) => [point.date, point]));
+  return raw.flatMap((point) => {
+    const previous = byDate.get(priorYearDate(point.date));
+    if (!previous || previous.value === 0) return [];
+    const value = ((point.value / previous.value) - 1) * 100;
+    if (!Number.isFinite(value) || Math.abs(value) > definition.maxAbsValue) return [];
+    return [{ ...point, value }];
+  }).slice(-24);
+}
+
+function priorYearDate(date: string): string {
+  const [year, month] = date.split('-');
+  return `${Number(year) - 1}-${month}-01`;
+}
+
+function buildBlsIndicator(definition: BlsSeriesDefinition, series: BlsIndicator['series']): BlsIndicator {
+  const latest = series[series.length - 1];
+  const previous = series[series.length - 2];
+  return {
+    id: definition.id,
+    label: definition.label,
+    shortLabel: definition.shortLabel,
+    family: definition.family,
+    frequency: definition.frequency,
+    unit: definition.unit,
+    seasonalAdjustment: definition.seasonalAdjustment,
+    transformation: definition.transformation,
+    value: latest?.value ?? null,
+    previous: previous?.value ?? null,
+    change: latest && previous ? latest.value - previous.value : null,
+    date: latest?.date,
+    series,
+    sourceUrl: definition.sourceUrl,
   };
 }
 
@@ -2656,19 +2926,15 @@ export async function fetchEconomicCalendar(from: string, to: string): Promise<F
 }
 
 async function fetchMacroMetric(countryCode: MacroCountryCode, metricKey: MacroMetricKey): Promise<MacroMetricSnapshot | null> {
-  const candidate = FRED_SERIES_REGISTRY[countryCode][metricKey];
-  const metric = MACRO_METRICS[metricKey];
-  const resolved = await resolveFredSeries(candidate);
-  if (!resolved) return null;
-
-  const observations = await fetchFredObservations(resolved.id, candidate.units);
+  const contract = getMacroSeriesContract(countryCode, metricKey);
+  const observations = await fetchFredObservations(contract.seriesId, contract.fredUnits);
   const series = observations
     .filter((observation) => observation.value !== '.')
     .map((observation) => ({
       date: observation.date,
       value: Number(observation.value),
     }))
-    .filter((point) => !Number.isNaN(point.value));
+    .filter((point) => isValidMacroMagnitude(contract, point.value));
 
   if (!series.length) return null;
   const latest = series[series.length - 1];
@@ -2676,55 +2942,20 @@ async function fetchMacroMetric(countryCode: MacroCountryCode, metricKey: MacroM
 
   return {
     key: metricKey,
-    label: metric.label,
-    shortLabel: metric.shortLabel,
-    unit: metric.unit,
+    label: contract.displayLabel,
+    shortLabel: contract.shortLabel,
+    unit: contract.unit,
     value: latest?.value ?? null,
     previous: previous?.value ?? null,
     change: latest && previous ? latest.value - previous.value : null,
     date: latest?.date,
-    source: resolved.title,
-    seriesId: resolved.id,
+    source: contract.sourceTitle,
+    sourceUrl: contract.sourceUrl,
+    areaScope: contract.areaScope,
+    frequency: contract.frequency,
+    seriesId: contract.seriesId,
     series: series.slice(-24),
   };
-}
-
-async function resolveFredSeries(candidate: FredSeriesCandidate): Promise<{ id: string; title: string } | null> {
-  const cacheKey = JSON.stringify(candidate);
-  if (fredSeriesCache.has(cacheKey)) {
-    return fredSeriesCache.get(cacheKey) ?? null;
-  }
-
-  for (const id of candidate.ids ?? []) {
-    try {
-      const observations = await fetchFredObservations(id, candidate.units);
-      const hasData = observations.some((observation) => observation.value !== '.');
-      if (hasData) {
-        const resolved = { id, title: id };
-        fredSeriesCache.set(cacheKey, resolved);
-        return resolved;
-      }
-    } catch {
-      // fall through to search-based lookup
-    }
-  }
-
-  const params = new URLSearchParams({
-    search_text: candidate.searchText,
-    limit: '12',
-    order_by: 'search_rank',
-    sort_order: 'asc',
-  });
-  const search = await fetchFredJson<FredSeriesSearchResponse>(`/series/search?${params}`);
-  const results = search.seriess ?? [];
-  const preferred = results.find((result) =>
-    (candidate.preferredTitleIncludes ?? []).some((fragment) =>
-      result.title.toLowerCase().includes(fragment.toLowerCase())
-    )
-  ) ?? results[0];
-
-  fredSeriesCache.set(cacheKey, preferred ? { id: preferred.id, title: preferred.title } : null);
-  return preferred ? { id: preferred.id, title: preferred.title } : null;
 }
 
 async function fetchFredObservations(seriesId: string, units?: string): Promise<Array<{ date: string; value: string }>> {

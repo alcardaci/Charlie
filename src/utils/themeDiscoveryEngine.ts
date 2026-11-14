@@ -6,6 +6,7 @@ import {
   PortfolioPosition,
   PredictionForecast,
   Quote,
+  SecOpportunityEvidence,
 } from '../types';
 
 type SignalType = 'news' | 'geopolitics' | 'prediction' | 'macro' | 'sentiment';
@@ -102,6 +103,7 @@ export interface DiscoveredTheme {
   watchItems: string[];
   invalidationSignals: string[];
   evidence: DiscoveredThemeEvidence[];
+  filingEvidence?: SecOpportunityEvidence[];
   portfolioImpact: {
     label: string;
     portfolioLabel: string;

@@ -11,8 +11,9 @@ import {
   TrendingUp,
   Users,
 } from 'lucide-react';
-import { fetchCompanyFinancials, fetchCompanyWorkbench, fetchQuotes } from '../api/finance';
-import { CompanyFinancials, CompanyWorkbench, FinancialPeriodType } from '../types';
+import { fetchCompanyFinancials, fetchCompanyWorkbench, fetchQuotes, fetchSecCompanyData } from '../api/finance';
+import { mergeCompanyFilings } from '../data/sec';
+import { CompanyFinancials, CompanyWorkbench, FinancialPeriodType, SecCompanyData, SecMetricKey, SecMetricObservation } from '../types';
 import { useTerminalStore } from '../store/useTerminalStore';
 import { fmt, changeColor } from '../utils/formatters';
 import type { MultiAssetView } from '../store/useTerminalStore';
@@ -66,6 +67,15 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
     enabled: workbench?.instrumentKind !== 'fund' && tab === 'financials',
     staleTime: 10 * 60 * 1000,
     gcTime: 30 * 60 * 1000,
+  });
+
+  const { data: secData, isLoading: loadingSec } = useQuery({
+    queryKey: ['equity-sec', selectedSymbol],
+    queryFn: ({ signal }) => fetchSecCompanyData(selectedSymbol, signal),
+    enabled: workbench?.instrumentKind === 'equity',
+    staleTime: 10 * 60 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
+    retry: false,
   });
 
   const sectorEtf = workbench?.sectorContext.sectorEtf;
@@ -264,10 +274,10 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
           </>
         ) : (
           <>
-            {tab === 'overview' && <OverviewTab workbench={workbench} sectorQuote={sectorQuote} />}
+            {tab === 'overview' && <OverviewTab workbench={workbench} sectorQuote={sectorQuote} secData={secData} loadingSec={loadingSec} />}
             {tab === 'financials' && <FinancialsTab financials={financials} loading={loadingFinancials} currency={quote.currency} />}
             {tab === 'analysis' && <AnalysisTab workbench={workbench} />}
-            {tab === 'ownership' && <OwnershipTab workbench={workbench} />}
+            {tab === 'ownership' && <OwnershipTab workbench={workbench} secData={secData} loadingSec={loadingSec} />}
           </>
         )}
       </div>
@@ -275,7 +285,17 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
   );
 }
 
-function OverviewTab({ workbench, sectorQuote }: { workbench: CompanyWorkbench; sectorQuote: CompanyWorkbench['quote'] | null | undefined }) {
+function OverviewTab({
+  workbench,
+  sectorQuote,
+  secData,
+  loadingSec,
+}: {
+  workbench: CompanyWorkbench;
+  sectorQuote: CompanyWorkbench['quote'] | null | undefined;
+  secData?: SecCompanyData;
+  loadingSec: boolean;
+}) {
   const { quote, profile, calendar, analysis, sectorContext } = workbench;
 
   return (
@@ -294,6 +314,8 @@ function OverviewTab({ workbench, sectorQuote }: { workbench: CompanyWorkbench; 
         <MetricRow label="Free Cash Flow" value={formatCompactCurrency(analysis.freeCashflow, quote.currency)} />
         <MetricRow label="Overall Risk" value={profile.overallRisk != null ? fmt.number(profile.overallRisk, 0) : '--'} />
       </div>
+
+      <SecMetricsCard data={secData} loading={loadingSec} />
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <div className="xl:col-span-2 bg-terminal-panel border border-terminal-border rounded p-4">
@@ -378,6 +400,135 @@ function OverviewTab({ workbench, sectorQuote }: { workbench: CompanyWorkbench; 
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+const SEC_METRIC_ORDER: SecMetricKey[] = ['revenue', 'operatingIncome', 'netIncome', 'cash', 'debt'];
+
+function secStatusLabel(status: SecCompanyData['status']): string {
+  switch (status) {
+    case 'ready': return 'READY';
+    case 'stale': return 'STALE CACHE';
+    case 'partial': return 'PARTIAL';
+    case 'unsupported': return 'UNSUPPORTED';
+    case 'rate-limit': return 'RATE LIMITED';
+    case 'error': return 'UNAVAILABLE';
+  }
+}
+
+function SecMetricsCard({ data, loading }: { data?: SecCompanyData; loading: boolean }) {
+  return (
+    <div className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+      <div className="px-4 py-2 panel-border-b flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Landmark size={12} className="text-terminal-accent" />
+          <span className="text-terminal-muted text-xs font-bold tracking-wider">SEC EDGAR REPORTED METRICS</span>
+        </div>
+        <span className="text-terminal-faint text-[10px]">SOURCE: SEC</span>
+      </div>
+      {loading ? (
+        <div className="p-4 text-terminal-faint text-xs">Loading verified SEC identity and reported facts…</div>
+      ) : !data ? (
+        <div className="p-4 text-terminal-faint text-xs">SEC EDGAR enrichment is not available. Yahoo values remain unchanged.</div>
+      ) : data.status === 'unsupported' ? (
+        <div className="p-4 text-terminal-faint text-xs">SEC does not list this instrument in its verified ticker mapping.</div>
+      ) : (
+        <div className="p-4 space-y-3">
+          <div className="flex flex-wrap items-center gap-2 text-[10px] text-terminal-faint">
+            <span className={data.status === 'ready' ? 'text-terminal-positive' : data.status === 'rate-limit' ? 'text-terminal-negative' : 'text-terminal-accent'}>
+              {secStatusLabel(data.status)}
+            </span>
+            {data.identity && <span>CIK {data.identity.cik}</span>}
+            <span>Yahoo values are retained separately</span>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+            {SEC_METRIC_ORDER.map((metric) => {
+              const observation = data.metrics[metric];
+              return (
+                <div key={metric} className="bg-terminal-elevated border border-terminal-border rounded p-2">
+                  <div className="text-terminal-faint text-[10px]">{observation?.label ?? metric}</div>
+                  <div className="text-terminal-text text-sm font-bold tabular-nums mt-1">
+                    {formatSecObservation(observation)}
+                  </div>
+                  <div className="text-terminal-faint text-[10px] mt-1">
+                    {observation?.availability === 'reported'
+                      ? `${observation.periodType.toUpperCase()} · ${formatDate(observation.reportPeriodEnd ?? undefined)}`
+                      : 'Not reported'}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {data.warnings.length > 0 && <div className="text-terminal-faint text-[10px]">Some SEC endpoints were unavailable; available evidence is shown.</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatSecObservation(observation: SecMetricObservation | null | undefined): string {
+  if (!observation || observation.availability === 'missing' || observation.value == null) return 'Not reported';
+  if (observation.unit === 'USD') return formatCompactCurrency(observation.value, 'USD');
+  return `${fmt.number(observation.value)} ${observation.unit ?? ''}`.trim();
+}
+
+function UnifiedFilingsCard({
+  yahooFilings,
+  data,
+  loading,
+}: {
+  yahooFilings: CompanyWorkbench['filings'];
+  data?: SecCompanyData;
+  loading: boolean;
+}) {
+  const filings = mergeCompanyFilings(yahooFilings, data?.filings ?? []).slice(0, 12);
+  const hasSecStatus = Boolean(data && data.status !== 'ready' && data.status !== 'unsupported');
+
+  return (
+    <div className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+      <div className="px-4 py-2 panel-border-b flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <FileText size={12} className="text-terminal-accent" />
+          <span className="text-terminal-muted text-xs font-bold tracking-wider">LATEST FILINGS</span>
+        </div>
+        <span className="text-terminal-faint text-[10px]">{filings.length} ITEMS</span>
+      </div>
+      {loading && filings.length === 0 ? (
+        <div className="p-4 text-terminal-faint text-xs">Loading latest filings…</div>
+      ) : filings.length === 0 ? (
+        <div className="p-4 text-terminal-faint text-xs">No latest filing evidence is available.</div>
+      ) : (
+        <div className="divide-y divide-terminal-border/40">
+          {filings.map((filing) => (
+            <a
+              key={`${filing.form}-${filing.date}-${filing.accessionNumber ?? filing.url}`}
+              href={filing.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block px-4 py-3 hover:bg-terminal-hover transition-colors"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-terminal-text text-xs font-bold">{filing.form}</div>
+                <div className="text-terminal-faint text-xs">{formatDate(filing.date)}</div>
+              </div>
+              <div className="text-terminal-muted text-xs mt-1">
+                {filing.title ?? `${filing.form} filing`}
+                {filing.reportPeriod ? ` · Report period ${formatDate(filing.reportPeriod)}` : ''}
+                {filing.accessionNumber ? ` · ${filing.accessionNumber}` : ''}
+              </div>
+              <div className="text-terminal-faint text-[10px] mt-1">
+                {filing.exhibitCount} exhibits{filing.isAmendment ? ' · AMENDMENT' : ''}
+              </div>
+            </a>
+          ))}
+        </div>
+      )}
+      {(hasSecStatus || loading) && (
+        <div className="px-4 py-2 panel-border-t text-terminal-faint text-[10px]">
+          {loading ? 'UPDATING' : secStatusLabel(data!.status)} · Filing coverage may be incomplete or delayed; available rows are shown.
+        </div>
+      )}
     </div>
   );
 }
@@ -647,7 +798,7 @@ function AnalysisTab({ workbench }: { workbench: CompanyWorkbench }) {
   );
 }
 
-function OwnershipTab({ workbench }: { workbench: CompanyWorkbench }) {
+function OwnershipTab({ workbench, secData, loadingSec }: { workbench: CompanyWorkbench; secData?: SecCompanyData; loadingSec: boolean }) {
   const { ownership, filings, calendar, quote } = workbench;
 
   return (
@@ -723,34 +874,7 @@ function OwnershipTab({ workbench }: { workbench: CompanyWorkbench }) {
         </div>
       </div>
 
-      <div className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
-        <div className="px-4 py-2 panel-border-b flex items-center gap-2">
-          <FileText size={12} className="text-terminal-accent" />
-          <span className="text-terminal-muted text-xs font-bold tracking-wider">LATEST SEC FILINGS</span>
-        </div>
-        {filings.length === 0 ? (
-          <div className="p-4 text-terminal-faint text-xs">No live filings are available.</div>
-        ) : (
-          <div className="divide-y divide-terminal-border/40">
-            {filings.map((filing) => (
-              <a
-                key={`${filing.type}-${filing.date}-${filing.url}`}
-                href={filing.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="block px-4 py-3 hover:bg-terminal-hover transition-colors"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-terminal-text text-xs font-bold">{filing.type}</div>
-                  <div className="text-terminal-faint text-xs">{formatDate(filing.date)}</div>
-                </div>
-                <div className="text-terminal-muted text-xs mt-1">{filing.title}</div>
-                <div className="text-terminal-faint text-xs mt-1">{filing.exhibitCount} exhibits</div>
-              </a>
-            ))}
-          </div>
-        )}
-      </div>
+      <UnifiedFilingsCard yahooFilings={filings} data={secData} loading={loadingSec} />
     </div>
   );
 }

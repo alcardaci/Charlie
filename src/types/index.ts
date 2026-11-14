@@ -710,6 +710,22 @@ export interface CompanyFiling {
   title: string;
   url: string;
   exhibitCount: number;
+  reportPeriod?: string | null;
+  accessionNumber?: string | null;
+  primaryDocument?: string | null;
+  isAmendment?: boolean;
+}
+
+export interface UnifiedCompanyFiling {
+  date: string;
+  form: string;
+  title: string | null;
+  url: string;
+  exhibitCount: number;
+  reportPeriod: string | null;
+  accessionNumber: string | null;
+  primaryDocument: string | null;
+  isAmendment: boolean;
 }
 
 export interface FundReturnSnapshot {
@@ -903,6 +919,96 @@ export interface CompanyFinancials {
   sections: FinancialStatementSection[];
 }
 
+export const SEC_SCHEMA_VERSION = 1 as const;
+
+export type SecStatus = 'ready' | 'stale' | 'partial' | 'unsupported' | 'rate-limit' | 'error';
+export type SecPeriodType = 'annual' | 'quarterly' | 'ttm' | 'instant' | 'unknown';
+export type SecMetricKey = 'revenue' | 'operatingIncome' | 'netIncome' | 'cash' | 'debt';
+
+export interface SecSourceEnvelope {
+  provider: 'SEC EDGAR';
+  source: 'sec-edgar';
+  accessedAt: string;
+  identityUrl: string;
+  submissionsUrl: string;
+  factsUrl: string;
+  schemaVersion: typeof SEC_SCHEMA_VERSION;
+}
+
+export interface SecIdentity {
+  ticker: string;
+  title: string;
+  cik: string;
+  verified: true;
+  sourceUrl: string;
+}
+
+export interface SecFiling {
+  accessionNumber: string;
+  form: string;
+  filedDate: string;
+  reportPeriod: string | null;
+  primaryDocument: string | null;
+  filingUrl: string;
+  isAmendment: boolean;
+}
+
+export interface SecMetricObservation {
+  metric: SecMetricKey;
+  label: string;
+  value: number | null;
+  availability: 'reported' | 'missing';
+  unit: string | null;
+  periodType: SecPeriodType;
+  reportPeriodStart: string | null;
+  reportPeriodEnd: string | null;
+  filedDate: string | null;
+  form: string | null;
+  accessionNumber: string | null;
+  taxonomy: string | null;
+  concept: string | null;
+  frame: string | null;
+  measurement: 'reported' | 'derived';
+  sourceUrl: string | null;
+  sourceAccessionNumbers?: string[];
+  sourceConcepts?: string[];
+}
+
+export interface SecCompanyData {
+  status: SecStatus;
+  ticker: string;
+  identity: SecIdentity | null;
+  filings: SecFiling[];
+  observations: SecMetricObservation[];
+  metrics: Record<SecMetricKey, SecMetricObservation | null>;
+  source: SecSourceEnvelope;
+  cache: {
+    identity: 'fresh' | 'stale' | 'unavailable';
+    submissions: 'fresh' | 'stale' | 'unavailable';
+    facts: 'fresh' | 'stale' | 'unavailable';
+  };
+  warnings: string[];
+  error?: string;
+}
+
+export interface SecOpportunityEvidence {
+  id: string;
+  symbol: string;
+  form: string;
+  filedDate: string;
+  reportPeriod: string | null;
+  accessionNumber: string;
+  url: string;
+  metrics: Array<{
+    key: SecMetricKey;
+    label: string;
+    value: number;
+    unit: string;
+    periodType: SecPeriodType;
+    reportPeriod: string | null;
+  }>;
+}
+
 export type MacroCountryCode = 'US' | 'EA' | 'GB' | 'CA' | 'JP' | 'CH' | 'SE' | 'NO' | 'AU' | 'NZ';
 export type MacroMetricKey = 'policyRate' | 'inflation' | 'unemployment' | 'gdpGrowth' | 'yield10y';
 
@@ -921,6 +1027,9 @@ export interface MacroMetricSnapshot {
   change: number | null;
   date?: string;
   source?: string;
+  sourceUrl?: string;
+  areaScope?: string;
+  frequency?: 'daily' | 'monthly' | 'quarterly' | 'annual';
   seriesId?: string;
   series: MacroSeriesPoint[];
 }
@@ -936,6 +1045,134 @@ export interface MacroDashboardData {
   error?: string;
   asOf: string;
   countries: MacroCountrySnapshot[];
+  bls?: BlsMacroData;
+  oecd?: OecdMacroData;
+  oecdCountry?: OecdCountryMacroData;
+  eurostat?: EurostatMacroData;
+}
+
+export type BlsStatus = 'ready' | 'stale' | 'partial' | 'unavailable' | 'rate-limit' | 'error';
+
+export interface BlsSeriesPoint {
+  period: string;
+  date: string;
+  value: number;
+  preliminary: boolean;
+  revised: boolean;
+}
+
+export interface BlsIndicator {
+  id: string;
+  label: string;
+  shortLabel: string;
+  family: 'headline' | 'jolts' | 'work-cost' | 'productivity' | 'trade-prices' | 'sector-payrolls';
+  frequency: 'monthly' | 'quarterly';
+  unit: string;
+  seasonalAdjustment: 'seasonally adjusted' | 'not seasonally adjusted' | 'unknown';
+  transformation: 'level' | 'derived-yoy-percent';
+  value: number | null;
+  previous: number | null;
+  change: number | null;
+  date?: string;
+  series: BlsSeriesPoint[];
+  sourceUrl: string;
+}
+
+export interface BlsMacroData {
+  status: BlsStatus;
+  source: 'BLS Public Data API';
+  accessedAt: string;
+  indicators: BlsIndicator[];
+  warning?: string;
+  cache?: 'fresh' | 'stale' | 'unavailable';
+}
+
+export type OecdStatus = 'ready' | 'stale' | 'partial' | 'unavailable' | 'rate-limit' | 'error';
+
+export interface OecdIndicator {
+  countryCode: string;
+  countryLabel: string;
+  value: number | null;
+  previous: number | null;
+  change: number | null;
+  date?: string;
+  series: Array<{ date: string; value: number }>;
+  unit: 'index';
+  sourceUrl: string;
+}
+
+export interface OecdMacroData {
+  status: OecdStatus;
+  source: 'OECD Composite Leading Indicator';
+  accessedAt: string;
+  indicators: OecdIndicator[];
+  warning?: string;
+  cache?: 'fresh' | 'stale' | 'unavailable';
+}
+
+export interface OecdComparableIndicator {
+  key: 'employmentGrowth' | 'industrialProduction' | 'businessConfidence';
+  label: string;
+  shortLabel: string;
+  status: 'ready' | 'unavailable';
+  value: number | null;
+  previous: number | null;
+  change: number | null;
+  date?: string;
+  unit: '%' | 'index';
+  unitLabel: string;
+  frequency: 'monthly' | 'quarterly';
+  transformation: 'level' | 'derived-qoq-percent';
+  areaScope: string;
+  seriesId: string;
+  series: Array<{ date: string; value: number }>;
+  sourceUrl: string;
+  coverageNote?: string;
+}
+
+export interface OecdCountryMacroData {
+  status: OecdStatus;
+  source: 'OECD economic indicators';
+  accessedAt: string;
+  country: MacroCountryCode;
+  oecdCountryCode: string;
+  indicators: OecdComparableIndicator[];
+  warning?: string;
+  cache?: 'fresh' | 'stale' | 'unavailable';
+}
+
+export type EurostatStatus = 'ready' | 'stale' | 'partial' | 'unavailable' | 'rate-limit' | 'error';
+
+export interface EurostatIndicator {
+  id: string;
+  label: string;
+  shortLabel: string;
+  value: number | null;
+  previous: number | null;
+  change: number | null;
+  date?: string;
+  unit: 'index' | '%' | 'billion EUR';
+  unitLabel: string;
+  frequency: 'monthly' | 'quarterly';
+  seasonalAdjustment: 'seasonally adjusted' | 'calendar adjusted' | 'seasonally and calendar adjusted' | 'not seasonally adjusted';
+  transformation: 'level' | 'year-over-year percent' | 'quarter-over-quarter percent';
+  placement: 'core' | 'detail';
+  group?: 'labour' | 'activity' | 'prices-trade';
+  metricKey?: MacroMetricKey;
+  areaScope: string;
+  series: Array<{ date: string; value: number }>;
+  sourceUrl: string;
+  coverageNote?: string;
+}
+
+export interface EurostatMacroData {
+  status: EurostatStatus;
+  source: 'Eurostat';
+  accessedAt: string;
+  geo: 'EA21';
+  indicators: EurostatIndicator[];
+  warning?: string;
+  cache?: 'fresh' | 'stale' | 'unavailable';
 }
 
 export interface MacroCalendarData {
