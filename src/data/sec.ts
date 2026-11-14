@@ -45,8 +45,12 @@ const METRIC_CONCEPTS: Record<SecMetricKey, string[]> = {
   operatingIncome: ['OperatingIncomeLoss'],
   netIncome: ['NetIncomeLoss', 'ProfitLoss'],
   cash: ['CashAndCashEquivalentsAtCarryingValue', 'CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents'],
-  debt: ['LongTermDebtAndFinanceLeaseObligationsCurrent', 'LongTermDebtAndFinanceLeaseObligationsNoncurrent', 'LongTermDebtCurrent', 'LongTermDebtNoncurrent', 'DebtCurrent'],
+  debt: [], // Only matched current/noncurrent pairs are eligible; never label one component as total debt.
 };
+const DEBT_CONCEPT_PAIRS = [
+  ['LongTermDebtAndFinanceLeaseObligationsCurrent', 'LongTermDebtAndFinanceLeaseObligationsNoncurrent'],
+  ['LongTermDebtCurrent', 'LongTermDebtNoncurrent'],
+] as const;
 
 type SecTickerRow = { cik_str?: number | string; ticker?: string; title?: string };
 export type SecTickerMapping = Record<string, SecTickerRow> | SecTickerRow[];
@@ -322,17 +326,15 @@ export function mergeCompanyFilings(yahooFilings: CompanyFiling[], secFilings: S
 }
 
 function periodTypeForFact(fact: NormalizedRawFact): SecPeriodType {
+  if (!fact.start) return 'instant';
   const frame = String(fact.frame ?? '');
   if (/^CY\d{4}Q[1-4]$/.test(frame)) return 'quarterly';
-  const fp = String(fact.fp ?? '').toUpperCase();
-  if (fp === 'FY') return 'annual';
-  if (/^Q[1-4]$/.test(fp)) return 'quarterly';
   if (fact.start && fact.end) {
     const durationDays = (Date.parse(`${fact.end}T00:00:00Z`) - Date.parse(`${fact.start}T00:00:00Z`)) / 86400000;
-    if (durationDays >= 300) return 'annual';
-    if (durationDays >= 70 && durationDays <= 290) return 'quarterly';
+    if (durationDays >= 300 && durationDays <= 400) return 'annual';
+    if (durationDays >= 70 && durationDays <= 110) return 'quarterly';
   }
-  return fact.start ? 'unknown' : 'instant';
+  return 'unknown'; // Fiscal-period labels can describe YTD facts, not just standalone quarters.
 }
 
 function normalizeFactRows(raw: unknown, taxonomy: string, concept: string): NormalizedRawFact[] {
@@ -424,17 +426,19 @@ function deriveDebtObservations(
   identity: SecIdentity,
   filingByAccession: Map<string, SecFiling>
 ): SecMetricObservation[] {
-  const noncurrentByEnd = new Map(noncurrent.map((fact) => [`${fact.end}-${fact.filed}`, fact]));
+  const key = (fact: NormalizedRawFact) => `${fact.end}|${fact.filed}|${fact.unit}|${fact.accn}`;
+  const noncurrentByEnd = new Map(noncurrent.map((fact) => [key(fact), fact]));
   return current
     .map((fact) => {
-      const matching = noncurrentByEnd.get(`${fact.end}-${fact.filed}`);
-      if (!matching || matching.unit !== fact.unit) return null;
+      const matching = noncurrentByEnd.get(key(fact));
+      if (!fact.accn || !matching || fact.start || matching.start || fact.value < 0 || matching.value < 0) return null;
       return toObservation('debt', {
         ...fact,
         value: fact.value + matching.value,
         concept: `${fact.concept}+${matching.concept}`,
       }, identity, filingByAccession, {
         measurement: 'derived',
+        label: fact.concept.includes('FinanceLease') ? 'Long-term Debt & Finance Leases' : 'Long-term Debt',
         sourceAccessionNumbers: Array.from(new Set([String(fact.accn ?? ''), String(matching.accn ?? '')].filter(Boolean))),
         sourceConcepts: [fact.concept, matching.concept],
       });
@@ -445,10 +449,16 @@ function deriveDebtObservations(
 function deriveTtmObservation(metric: SecMetricKey, observations: SecMetricObservation[]): SecMetricObservation | null {
   if (!FLOW_METRICS.has(metric)) return null;
   const quarterly = observations
-    .filter((observation) => observation.availability === 'reported' && observation.periodType === 'quarterly' && observation.value != null && observation.frame)
-    .sort((left, right) => String(right.reportPeriodEnd).localeCompare(String(left.reportPeriodEnd)));
-  const unique = Array.from(new Map(quarterly.map((observation) => [observation.frame, observation])).values()).slice(0, 4);
+    .filter((observation) => observation.availability === 'reported' && observation.periodType === 'quarterly' && observation.value != null && /^CY\d{4}Q[1-4]$/.test(observation.frame ?? ''))
+    .sort((left, right) => `${right.frame}-${right.filedDate}`.localeCompare(`${left.frame}-${left.filedDate}`));
+  const byFrame = new Map<string, SecMetricObservation>();
+  for (const observation of quarterly) {
+    if (!byFrame.has(observation.frame!)) byFrame.set(observation.frame!, observation);
+  }
+  const unique = Array.from(byFrame.values()).slice(0, 4);
   if (unique.length !== 4 || new Set(unique.map((observation) => observation.unit)).size !== 1) return null;
+  const quarters = unique.map((observation) => Number(observation.frame!.slice(2, 6)) * 4 + Number(observation.frame!.slice(-1)));
+  if (quarters.some((quarter, index) => index > 0 && quarters[index - 1] - quarter !== 1)) return null;
   const latest = unique[0];
   const earliest = unique[unique.length - 1];
   if (!latest || !earliest || unique.some((observation) => observation.value == null)) return null;
@@ -456,7 +466,7 @@ function deriveTtmObservation(metric: SecMetricKey, observations: SecMetricObser
     ...latest,
     value: unique.reduce((sum, observation) => sum + (observation.value ?? 0), 0),
     periodType: 'ttm',
-    reportPeriodStart: earliest.reportPeriodEnd,
+    reportPeriodStart: earliest.reportPeriodStart,
     measurement: 'derived',
     sourceAccessionNumbers: unique.map((observation) => observation.accessionNumber).filter((value): value is string => Boolean(value)),
     sourceConcepts: unique.map((observation) => observation.concept).filter((value): value is string => Boolean(value)),
@@ -475,6 +485,18 @@ export function normalizeSecFacts(raw: unknown, identity: SecIdentity, filings: 
       observations.push(missingObservation(metric));
       continue;
     }
+    if (metric === 'debt') {
+      const derivedDebt = DEBT_CONCEPT_PAIRS.flatMap(([current, noncurrent]) => {
+        const read = (concept: string) => normalizeFactRows((taxonomyRoot as Record<string, unknown>)[concept], 'us-gaap', concept)
+          .filter((fact) => SEC_FORMS.has(String(fact.form ?? '')));
+        return deriveDebtObservations(read(current), read(noncurrent), identity, filingByAccession);
+      });
+      const uniqueDebt = Array.from(new Map(derivedDebt.reverse().map((observation) => [
+        `${observation.reportPeriodEnd}-${observation.filedDate}-${observation.accessionNumber}`, observation,
+      ])).values()).sort((left, right) => `${right.reportPeriodEnd}-${right.filedDate}`.localeCompare(`${left.reportPeriodEnd}-${left.filedDate}`));
+      observations.push(...(uniqueDebt.length ? uniqueDebt.slice(0, 8) : [missingObservation(metric)]));
+      continue;
+    }
     const concepts = METRIC_CONCEPTS[metric];
     let metricRows: NormalizedRawFact[] = [];
     for (const concept of concepts) {
@@ -491,21 +513,10 @@ export function normalizeSecFacts(raw: unknown, identity: SecIdentity, filings: 
       continue;
     }
 
-    if (metric === 'debt') {
-      const currentConcept = normalizeFactRows((taxonomyRoot as Record<string, unknown>).LongTermDebtAndFinanceLeaseObligationsCurrent, 'us-gaap', 'LongTermDebtAndFinanceLeaseObligationsCurrent');
-      const noncurrentConcept = normalizeFactRows((taxonomyRoot as Record<string, unknown>).LongTermDebtAndFinanceLeaseObligationsNoncurrent, 'us-gaap', 'LongTermDebtAndFinanceLeaseObligationsNoncurrent');
-      const derivedDebt = deriveDebtObservations(currentConcept, noncurrentConcept, identity, filingByAccession);
-      if (derivedDebt.length) {
-        observations.push(...derivedDebt.slice(0, 8));
-        continue;
-      }
-    }
-
     const reported = metricRows
       .sort((left, right) => `${right.end}-${right.filed}`.localeCompare(`${left.end}-${left.filed}`))
-      .slice(0, 8)
       .map((fact) => toObservation(metric, fact, identity, filingByAccession));
-    observations.push(...reported);
+    observations.push(...reported.slice(0, 8));
     const ttm = deriveTtmObservation(metric, reported);
     if (ttm) observations.push(ttm);
   }
@@ -515,7 +526,7 @@ export function normalizeSecFacts(raw: unknown, identity: SecIdentity, filings: 
 
 function observationRank(observation: SecMetricObservation): number {
   const periodRank: Record<SecPeriodType, number> = { ttm: 4, annual: 3, quarterly: 2, instant: 1, unknown: 0 };
-  return periodRank[observation.periodType] * 1e12 + Date.parse(`${observation.reportPeriodEnd ?? '1900-01-01'}T00:00:00Z`);
+  return Date.parse(`${observation.reportPeriodEnd ?? '1900-01-01'}T00:00:00Z`) + periodRank[observation.periodType];
 }
 
 export function buildSecCompanyData(args: {

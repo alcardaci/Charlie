@@ -32,6 +32,7 @@ import {
 } from './src/data/sec'
 import type { SecCompanyData } from './src/types'
 import type { SecTickerMapping } from './src/data/sec'
+import { selectSecEvidenceForTheme } from './src/utils/secOpportunityEvidence'
 import { EUROSTAT_PUBLIC_SERIES, EUROSTAT_SCHEMA_VERSION, EUROSTAT_SERIES } from './src/data/eurostatRegistry'
 import {
   OECD_COMPARABLE_SERIES,
@@ -5116,14 +5117,12 @@ function marketDataMiddleware(): Plugin {
               '- linkedAssets should be liquid symbols that best express the theme.',
               '- confidence and importance must be integers from 0 to 100.',
               '- Exclude weak, duplicate, or purely descriptive clusters that are not useful for an investor.',
-              '- secEvidence is compact corroboration only. It may qualify an already-supported theme or linked company, but SEC evidence alone must never create, name, or rank a theme.',
               '',
               JSON.stringify({
                 generatedAt: (snapshot as any).generatedAt ?? new Date().toISOString(),
                 signals: rawSignals,
                 portfolio,
                 watchlist,
-                secEvidence: Array.isArray((snapshot as any).secEvidence) ? (snapshot as any).secEvidence.slice(0, 24) : [],
               }, null, 2),
             ].join('\n')
 
@@ -5188,12 +5187,14 @@ function marketDataMiddleware(): Plugin {
               '- supportingSignalIds must identify the supplied signals that directly support the guidance.',
               '- Do not state a catalyst, company implication, or recommendation that is not supported by those signals or the supplied exposure.',
               '- Use only the evidence inside each theme bundle.',
+              '- secEvidence is compact company corroboration for an already-selected theme only. Do not create, rename, rank, or change linked assets based on it; keep recommendations grounded in the supplied supportingSignalIds.',
               '',
               JSON.stringify({
                 portfolio,
                 watchlist,
                 themes: firstThemes.map((theme) => ({
                   ...theme,
+                  secEvidence: selectSecEvidenceForTheme((snapshot as any).secEvidence, theme.linkedAssets),
                   signals: rawSignals
                     .filter((signal) => theme.signalIds.includes(signal.id))
                     .map((signal) => ({

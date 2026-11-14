@@ -5,7 +5,7 @@ import {
 } from '../../src/utils/themeDiscoveryEngine.ts';
 import { isCachedDiscoverySnapshot } from '../../src/utils/discoveryCache.ts';
 import { sanitizePersistedCountryCounts } from '../../src/utils/geopoliticalCache.ts';
-import { attachSecEvidenceToExistingThemes, selectSecOpportunityEvidence } from '../../src/utils/secOpportunityEvidence.ts';
+import { attachSecEvidenceToExistingThemes, selectSecOpportunityEvidence, selectSecEvidenceForTheme } from '../../src/utils/secOpportunityEvidence.ts';
 
 const now = Date.now();
 
@@ -457,6 +457,12 @@ const existingTheme = { linkedAssets: [{ symbol: 'AAPL' }] } as any;
 const attachedThemes = attachSecEvidenceToExistingThemes([existingTheme], selectedSecEvidence);
 assert(attachedThemes.length === 1 && attachedThemes[0].filingEvidence?.length === 1, 'SEC evidence should annotate an existing matching theme');
 assert(attachSecEvidenceToExistingThemes([], selectedSecEvidence).length === 0, 'SEC-only evidence must never create a new theme');
+assert(selectSecEvidenceForTheme(selectedSecEvidence, ['MSFT']).length === 0, 'Unrelated SEC evidence must not reach theme guidance');
+const guidanceSec = selectSecEvidenceForTheme([{ ...selectedSecEvidence[0], rawText: 'Not permitted', metrics: [
+  { ...selectedSecEvidence[0].metrics[0], rawText: 'Not permitted' },
+] }], ['AAPL']);
+assert(guidanceSec.length === 1 && !JSON.stringify(guidanceSec).includes('Not permitted'), 'Guidance SEC context must be projected to compact fields, never raw filings');
+assert(selectSecEvidenceForTheme([null, { ...selectedSecEvidence[0], url: 'https://example.test/not-sec' }], ['AAPL']).length === 0, 'Malformed or unofficial SEC context must be rejected');
 
 console.log(JSON.stringify({
   suppressedLabels: ['MONTHLY HIT', 'SECOND QUARTER', 'WILL / THE', 'David Lisnard'],

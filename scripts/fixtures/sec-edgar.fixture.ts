@@ -104,6 +104,43 @@ assert(ready.metrics.revenue?.periodType === 'ttm', 'Latest metric selection sho
 assert(ready.metrics.cash?.value === 0, 'Metric envelopes must preserve zero values');
 assert(ready.metrics.debt?.availability === 'missing', 'Metric envelopes must preserve missing state');
 
+const revenueFacts = facts.facts['us-gaap'].RevenueFromContractWithCustomerExcludingAssessedTax.units.USD;
+function withRevenue(rows: unknown[]) {
+  return { facts: { 'us-gaap': { RevenueFromContractWithCustomerExcludingAssessedTax: { units: { USD: rows } } } } };
+}
+const gap = normalizeSecFacts(withRevenue(revenueFacts.slice(0, 4).map((row, index) => index === 0 ? { ...row, frame: 'CY2022Q4' } : row)), identity!, filings);
+assert(!gap.some((row) => row.periodType === 'ttm'), 'Nonconsecutive quarter frames must not be labeled TTM');
+const revised = normalizeSecFacts(withRevenue([
+  ...revenueFacts,
+  ...Array.from({ length: 10 }, (_, index) => ({ ...revenueFacts[3], val: 450, filed: `2025-03-${String(index + 1).padStart(2, '0')}` })),
+]), identity!, filings);
+const revisedTtm = revised.find((row) => row.periodType === 'ttm');
+assert(revisedTtm?.value === 1050 && revisedTtm.reportPeriodStart === '2023-01-01', 'TTM must use latest revisions, deduplicate before bounding, and retain the true start date');
+const ytd = normalizeSecFacts(withRevenue([{ ...revenueFacts[2], frame: undefined, start: '2023-01-01', fp: 'Q3' }]), identity!, filings);
+assert(ytd.find((row) => row.metric === 'revenue')?.periodType === 'unknown', 'Nine-month YTD must not be labeled a standalone quarter');
+const newerAnnual = buildSecCompanyData({ ticker: 'AAPL', identity: identity!, submissions: submission, source: ready.source,
+  facts: withRevenue([...revenueFacts, { ...revenueFacts[4], val: 1500, start: '2024-01-01', end: '2024-12-31', filed: '2025-03-01' }]),
+});
+assert(newerAnnual.metrics.revenue?.value === 1500 && newerAnnual.metrics.revenue.periodType === 'annual', 'Old TTM must not outrank more recent reported data');
+
+const debtFact = { val: 10, end: '2024-09-28', accn: '0000320193-24-000002', form: '10-K/A', filed: '2024-11-05', fp: 'FY' };
+function debtFacts(current: string, noncurrent?: string, other: Record<string, unknown> = {}) {
+  return { facts: { 'us-gaap': { [current]: { units: { USD: [debtFact] } },
+    ...(noncurrent ? { [noncurrent]: { units: { USD: [{ ...debtFact, val: 90, ...other }] } } } : {}),
+  } } };
+}
+assert(normalizeSecFacts(debtFacts('LongTermDebtCurrent'), identity!, filings).find((row) => row.metric === 'debt')?.availability === 'missing', 'Current-only debt must never appear as total debt');
+for (const [current, noncurrent] of [
+  ['LongTermDebtAndFinanceLeaseObligationsCurrent', 'LongTermDebtAndFinanceLeaseObligationsNoncurrent'],
+  ['LongTermDebtCurrent', 'LongTermDebtNoncurrent'],
+]) {
+  const combined = normalizeSecFacts(debtFacts(current, noncurrent), identity!, filings).find((row) => row.metric === 'debt');
+  assert(combined?.value === 100 && combined.measurement === 'derived' && combined.periodType === 'instant'
+    && combined.label.startsWith('Long-term Debt') && combined.sourceConcepts?.length === 2, 'Debt pairs must preserve exact scope and derived provenance');
+  assert(normalizeSecFacts(debtFacts(current, noncurrent, { accn: '0000320193-24-000099' }), identity!, filings)
+    .find((row) => row.metric === 'debt')?.availability === 'missing', 'Debt must not combine components from different filings');
+}
+
 assert(buildSecCacheKey('facts', '0000320193') === 'sec:v1:facts:0000320193', 'Cache keys must include schema version and identity');
 assert(classifySecCacheEntry(100, 200, 300) === 'fresh', 'Fresh cache entries should be served directly');
 assert(classifySecCacheEntry(250, 200, 300) === 'stale', 'Stale cache entries should support SWR');

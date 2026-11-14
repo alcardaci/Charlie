@@ -67,3 +67,28 @@ export function attachSecEvidenceToExistingThemes(
     return filingEvidence.length > 0 ? { ...theme, filingEvidence } : theme;
   });
 }
+
+// Only the existing guidance pass receives SEC context, after discovery has fixed the themes/assets.
+export function selectSecEvidenceForTheme(evidence: unknown, linkedAssets: string[]): SecOpportunityEvidence[] {
+  if (!Array.isArray(evidence)) return [];
+  const symbols = new Set(linkedAssets.map(normalizeSymbol));
+  return evidence.slice(0, MAX_SYMBOLS * MAX_FILINGS_PER_SYMBOL).flatMap((item) => {
+    if (!item || typeof item !== 'object' || typeof item.symbol !== 'string') return [];
+    const symbol = normalizeSymbol(item.symbol);
+    if (!symbols.has(symbol) || !SEC_EVIDENCE_FORMS.has(item.form)
+      || !/^\d{10}-\d{2}-\d{6}$/.test(item.accessionNumber ?? '')
+      || !/^\d{4}-\d{2}-\d{2}$/.test(item.filedDate ?? '')
+      || !/^https:\/\/www\.sec\.gov\/Archives\/edgar\/data\/\d+\/\d{18}\//.test(item.url ?? '')) return [];
+    const metrics = Array.isArray(item.metrics) ? item.metrics.flatMap((metric: SecOpportunityEvidence['metrics'][number]) => {
+      if (!metric || !['revenue', 'operatingIncome', 'netIncome', 'cash', 'debt'].includes(metric.key)
+        || typeof metric.value !== 'number' || !Number.isFinite(metric.value)
+        || typeof metric.label !== 'string' || typeof metric.unit !== 'string'
+        || !['annual', 'quarterly', 'ttm', 'instant', 'unknown'].includes(metric.periodType)) return [];
+      return [{ key: metric.key, label: metric.label.slice(0, 80), value: metric.value, unit: metric.unit.slice(0, 20),
+        periodType: metric.periodType, reportPeriod: /^\d{4}-\d{2}-\d{2}$/.test(metric.reportPeriod ?? '') ? metric.reportPeriod : null }];
+    }).slice(0, MAX_METRICS_PER_SYMBOL) : [];
+    return [{ id: `sec:${symbol}:${item.accessionNumber}`, symbol, form: item.form, filedDate: item.filedDate,
+      reportPeriod: /^\d{4}-\d{2}-\d{2}$/.test(item.reportPeriod ?? '') ? item.reportPeriod : null,
+      accessionNumber: item.accessionNumber, url: item.url, metrics }];
+  });
+}
