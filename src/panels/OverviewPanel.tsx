@@ -16,6 +16,7 @@ import {
 import type { OpenAIDebugPayloadEntry } from '../api/finance';
 import { OverviewSentiment } from '../components/OverviewSentiment';
 import { OverviewIndices } from '../components/OverviewIndices';
+import { OverviewWatchlist } from '../components/OverviewWatchlist';
 import { getHeatPaint, heatDotBackground } from '../utils/heatmapPaint';
 import { WorkspaceHeader } from '../components/WorkspaceHeader';
 import { useTerminalStore } from '../store/useTerminalStore';
@@ -353,6 +354,13 @@ function buildOverviewRequestContext(
   };
 }
 
+function focusWatchlist(section: HTMLElement | null) {
+  if (!section) return;
+  section.focus({ preventScroll: true });
+  section.scrollIntoView({ block: 'start' });
+  useTerminalStore.setState({ watchlistFocusRequested: false });
+}
+
 export function OverviewPanel() {
   const queryClient = useQueryClient();
   const {
@@ -361,6 +369,7 @@ export function OverviewPanel() {
     openAISettings,
     portfolio,
     portfolioDisplayCurrency: displayCurrency,
+    watchlistFocusRequested,
     marketOverviewSummary,
     marketOverviewSummaryCollapsed,
     updateOpenAISettings,
@@ -627,19 +636,24 @@ export function OverviewPanel() {
         aiPayload={overviewSummaryPayload}
       />
 
-      <div className="overview-primary-region">
-        <div className="overview-primary-pair">
+      <div className="overview-pair-region">
+        <div className="overview-pair overview-primary-pair">
           <OverviewSentiment sentiment={sentiment} isLoading={loadingSentiment} onSelectSymbol={openEquity} />
           <OverviewIndices symbols={INDICES} names={INDEX_NAMES} quotes={indices} loading={loadingIdx} onSelect={openEquity} />
         </div>
       </div>
 
-      <PortfolioSnapshotCard
-        snapshot={portfolioSnapshot}
-        loading={loadingPortfolioSnapshot || loadingPortfolioFx}
-        onOpenPortfolio={() => setActivePanel('portfolio')}
-        onSelectSymbol={(symbol) => setActivePanel('equity', symbol)}
-      />
+      <div className="overview-pair-region">
+        <div className="overview-pair overview-holdings-pair">
+          <PortfolioSnapshotCard
+            snapshot={portfolioSnapshot}
+            loading={loadingPortfolioSnapshot || loadingPortfolioFx}
+            onOpenPortfolio={() => setActivePanel('portfolio')}
+            onSelectSymbol={openEquity}
+          />
+          <OverviewWatchlist sectionRef={watchlistFocusRequested ? focusWatchlist : undefined} />
+        </div>
+      </div>
 
       {/* Sector Performance + Movers */}
       <div className="flex flex-col xl:flex-row gap-3 min-h-0">
@@ -883,12 +897,12 @@ function PortfolioSnapshotCard({
   onSelectSymbol: (symbol: string) => void;
 }) {
   return (
-    <div>
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
-        <div className="instrument-heading text-terminal-muted text-xs font-bold tracking-wider">YOUR PORTFOLIO SNAPSHOT</div>
+    <section aria-label="Your portfolio snapshot">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="instrument-heading text-xs font-bold tracking-wider">YOUR PORTFOLIO SNAPSHOT</h2>
         <button
           onClick={onOpenPortfolio}
-          className="w-full sm:w-auto px-2.5 py-1 text-[11px] rounded border border-terminal-border text-terminal-faint hover:text-terminal-accent hover:border-terminal-accent/40 hover:bg-terminal-hover transition-colors"
+          className="px-2.5 py-1 text-[11px] rounded border border-terminal-border text-terminal-faint hover:text-terminal-accent hover:border-terminal-accent/40 hover:bg-terminal-hover transition-colors"
         >
           OPEN PORTFOLIO
         </button>
@@ -904,7 +918,7 @@ function PortfolioSnapshotCard({
         <div className="instrument-card rounded border border-terminal-border bg-terminal-panel p-3">
           <div className="mb-2 text-[11px] text-terminal-faint">Valued in {snapshot.currency} using latest available FX rates.</div>
           {!snapshot.complete && <div className="mb-3 rounded border border-terminal-accent/30 bg-terminal-accent/5 px-2 py-1.5 text-xs text-terminal-muted" role="status">Portfolio valuation is incomplete. {snapshot.missingQuoteSymbols.length > 0 && `Missing quotes: ${snapshot.missingQuoteSymbols.join(', ')}. `}{snapshot.missingFxCurrencies.length > 0 && `Missing FX: ${snapshot.missingFxCurrencies.join(', ')}. `}Current value, P&L, and allocation are withheld until coverage is complete.</div>}
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-2">
+          <div className="flex flex-wrap gap-2">
             <SnapshotStat label="ASSETS" value={String(snapshot.assetCount)} />
             <SnapshotStat label="LOTS" value={String(snapshot.lotCount)} />
             <SnapshotStat label="TOTAL VALUE" value={formatSnapshotCurrency(snapshot.totalValue, snapshot.currency)} />
@@ -933,7 +947,7 @@ function PortfolioSnapshotCard({
           </div>}
         </div>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -958,7 +972,7 @@ function SnapshotStat({
       : 'text-terminal-text';
 
   return (
-    <div className="instrument-section rounded border border-terminal-border bg-terminal-elevated px-3 py-2.5 shadow-sm">
+    <div className="instrument-section min-w-0 flex-[1_1_8rem] rounded border border-terminal-border bg-terminal-elevated px-3 py-2.5 shadow-sm">
       <div className="text-terminal-muted text-[10px] font-bold tracking-[0.18em]">{label}</div>
       <div className={`font-bold text-sm mt-1 tabular-nums ${valueClass}`}>{value}</div>
     </div>

@@ -71,8 +71,9 @@ interface TerminalState {
   debugMode: boolean;
   newsLayout: NewsLayout;
   setNewsLayout: (layout: NewsLayout) => void;
-  watchlistSidebarVisible: boolean;
   watchlist: string[];
+  watchlistFocusRequested: boolean;
+  openWatchlist: () => void;
   portfolio: PortfolioPosition[];
   commandHistory: string[];
   historyIndex: number;
@@ -95,8 +96,6 @@ interface TerminalState {
   addMultiAssetTile: (symbol: string, view?: MultiAssetView) => void;
   removeMultiAssetTile: (id: string) => void;
   setMultiAssetTileView: (id: string, view: MultiAssetView) => void;
-  toggleWatchlistSidebar: () => void;
-  setWatchlistSidebarVisible: (visible: boolean) => void;
   goHome: () => void;
   setChartStyle: (style: ChartStyle) => void;
   setForexPairs: (pairs: string[]) => void;
@@ -127,7 +126,6 @@ interface TerminalState {
 type PersistedTerminalState = Pick<
   TerminalState,
   | 'newsLayout'
-  | 'watchlistSidebarVisible'
   | 'watchlist'
   | 'portfolio'
   | 'commandHistory'
@@ -323,9 +321,9 @@ export const useTerminalStore = create<TerminalState>()(
       activePanel: 'overview',
       activeSymbol: 'AAPL',
       debugMode: false,
-      watchlistSidebarVisible: true,
       chartSymbol: 'AAPL',
       watchlist: DEFAULT_WATCHLIST,
+      watchlistFocusRequested: false,
       portfolio: [],
       commandHistory: [],
       historyIndex: -1,
@@ -347,6 +345,7 @@ export const useTerminalStore = create<TerminalState>()(
         const prev: NavEntry = { panel: get().activePanel, symbol: get().activeSymbol };
         set((state) => ({
           activePanel: panel,
+          watchlistFocusRequested: false,
           ...(upper ? { activeSymbol: upper, chartSymbol: upper } : {}),
           // Push to nav history (max 30 entries, avoid duplicate consecutive entries)
           navHistory: prev.panel === panel && prev.symbol === (upper ?? get().activeSymbol)
@@ -373,6 +372,7 @@ export const useTerminalStore = create<TerminalState>()(
 
           return {
             activePanel: 'multiAsset',
+            watchlistFocusRequested: false,
             activeSymbol: upper,
             chartSymbol: upper,
             multiAssetTiles: nextTiles,
@@ -424,17 +424,10 @@ export const useTerminalStore = create<TerminalState>()(
         }));
       },
 
-      toggleWatchlistSidebar: () => {
-        set((state) => ({ watchlistSidebarVisible: !state.watchlistSidebarVisible }));
-      },
-
-      setWatchlistSidebarVisible: (visible) => {
-        set({ watchlistSidebarVisible: visible });
-      },
-
       goHome: () => {
         set({
           activePanel: 'overview',
+          watchlistFocusRequested: false,
           navHistory: [],
         });
       },
@@ -444,6 +437,7 @@ export const useTerminalStore = create<TerminalState>()(
         if (!prev) return;
         set({
           activePanel: prev.panel,
+          watchlistFocusRequested: false,
           activeSymbol: prev.symbol,
           chartSymbol: prev.symbol,
           navHistory: rest,
@@ -503,6 +497,11 @@ export const useTerminalStore = create<TerminalState>()(
 
       setMarketOverviewSummaryCollapsed: (collapsed) => {
         set({ marketOverviewSummaryCollapsed: collapsed });
+      },
+
+      openWatchlist: () => {
+        get().setActivePanel('overview');
+        set({ watchlistFocusRequested: true });
       },
 
       addToWatchlist: (symbol) => {
@@ -577,6 +576,10 @@ export const useTerminalStore = create<TerminalState>()(
         }));
 
         const { setActivePanel } = get();
+        if (cmd === 'WL') {
+          get().openWatchlist();
+          return;
+        }
         const mainPanel = getScreenCommandPanel(cmd);
         if (mainPanel) {
           if (mainPanel === 'overview') {
@@ -670,7 +673,8 @@ export const useTerminalStore = create<TerminalState>()(
       skipHydration: true,
       storage: createJSONStorage<PersistedTerminalState>(() => terminalStateStorage),
       merge: (persistedState, currentState) => {
-        const persisted = (persistedState ?? {}) as Partial<PersistedTerminalState>;
+        const { watchlistSidebarVisible: _legacySidebar, ...persisted } =
+          (persistedState ?? {}) as Partial<PersistedTerminalState> & { watchlistSidebarVisible?: boolean };
         const companionConversations = normalizeCompanionConversations(persisted.companionConversations);
         const activeCompanionConversationId = (
           typeof persisted.activeCompanionConversationId === 'string' &&
@@ -697,7 +701,6 @@ export const useTerminalStore = create<TerminalState>()(
       },
       partialize: (state): PersistedTerminalState => ({
         newsLayout: state.newsLayout,
-        watchlistSidebarVisible: state.watchlistSidebarVisible,
         watchlist: state.watchlist,
         portfolio: state.portfolio,
         commandHistory: state.commandHistory,

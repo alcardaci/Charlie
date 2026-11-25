@@ -1,0 +1,7 @@
+.daily-close-sparkline {
+  display: block;
+  width: clamp(64px, 20cqi, 116px);
+  height: auto;
+  margin-left: auto;
+  color: var(--terminal-muted);
+}

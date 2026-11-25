@@ -995,14 +995,6 @@ export function PortfolioPanel() {
         EXPORT CSV
       </button>
       <button
-        onClick={allLotsExpanded ? handleCollapseAllLots : handleExpandAllLots}
-        disabled={positions.length === 0}
-        className="flex items-center gap-1.5 px-3 py-1.5 bg-terminal-panel border border-terminal-border text-terminal-muted rounded text-xs hover:text-terminal-accent hover:border-terminal-accent/40 hover:bg-terminal-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-      >
-        {allLotsExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-        {allLotsExpanded ? 'COLLAPSE ALL' : 'EXPAND ALL'}
-      </button>
-      <button
         onClick={() => {
           setShowClearPortfolioConfirm(true);
           scrollToPortfolioTop();

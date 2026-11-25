@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, KeyboardEvent, type CSSProperties } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Bot, Bug, Moon, PanelLeftClose, PanelLeftOpen, Sparkles, Sun } from 'lucide-react';
+import { Bot, Bug, Moon, Sparkles, Star, Sun } from 'lucide-react';
 import { searchSymbols } from '../api/finance';
 import { useTerminalStore } from '../store/useTerminalStore';
 import { shouldUseSearch } from '../utils/commandParsing';
@@ -28,8 +28,6 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
     setActivePanel,
     debugMode,
     toggleDebugMode,
-    watchlistSidebarVisible,
-    toggleWatchlistSidebar,
     companionOpen,
     toggleCompanionOpen,
   } = useTerminalStore();
@@ -225,16 +223,6 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
 
       {/* Right side status */}
       <div className="ml-auto flex items-center gap-2 flex-shrink-0 md:ml-4 md:gap-4" style={electronNoDragStyle}>
-        <button
-          onClick={toggleWatchlistSidebar}
-          className="hidden md:flex items-center gap-1.5 rounded border border-terminal-border px-2 py-1 text-xs text-terminal-muted transition-colors hover:border-terminal-accent/40 hover:bg-terminal-hover hover:text-terminal-accent"
-          title={watchlistSidebarVisible ? 'Hide watchlist' : 'Show watchlist'}
-          aria-label={watchlistSidebarVisible ? 'Hide watchlist' : 'Show watchlist'}
-          style={electronNoDragStyle}
-        >
-          {watchlistSidebarVisible ? <PanelLeftClose size={12} /> : <PanelLeftOpen size={12} />}
-          <span className="hidden lg:inline">{watchlistSidebarVisible ? 'HIDE WL' : 'SHOW WL'}</span>
-        </button>
         {onOpenWatchlist && (
           <button
             onClick={onOpenWatchlist}
@@ -242,7 +230,7 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
             aria-label="Open watchlist"
             style={electronNoDragStyle}
           >
-            <PanelLeftOpen size={12} />
+            <Star size={12} />
           </button>
         )}
         <button

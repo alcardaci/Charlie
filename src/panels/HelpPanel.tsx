@@ -1,20 +1,21 @@
 import type { ReactNode } from 'react';
 import { WorkspaceHeader } from '../components/WorkspaceHeader';
+import { workspaceShortcuts } from '../data/workspaceShortcuts';
 import { useTerminalStore } from '../store/useTerminalStore';
 import { useAppVersion } from '../utils/appVersion';
 
 const WORKSPACES = [
   { title: 'Market Overview', command: 'HOME', summary: 'Cross-asset pulse, movers, sentiment, portfolio snapshot, macro calendar, and prediction-market forecasts.' },
+  { title: 'News + Geopolitics', command: 'NEWS', summary: 'Yahoo Finance and GDELT headlines, live TV, and the published risk index. Connect OpenAI in Settings for the event map and country summaries.' },
   { title: 'Portfolio', command: 'PORT', summary: 'Lots, cost basis, exposures, and editable portfolio bookkeeping.' },
   { title: 'Research Workspace', command: 'AAPL', summary: 'Ticker-level company stats, leadership, filings, segment data, and analyst context.' },
   { title: 'Chart View', command: 'MSFT GP', summary: 'Interactive price action with multiple chart styles and timeframes.' },
-  { title: 'News + Geopolitics', command: 'NEWS', summary: 'Yahoo Finance and GDELT headlines, live TV, and the published risk index. Connect OpenAI in Settings for the event map and country summaries.' },
-  { title: 'Prediction Markets', command: 'PRED', summary: 'Market-implied probabilities, themes, liquidity, and event metadata.' },
-  { title: 'Macro + Yield Monitor', command: 'MACRO', summary: 'Macro dashboard, release calendar, and Treasury yield-curve tools.' },
   { title: 'Heatmap', command: 'HEAT', summary: 'Curated equity sample with reported-cap or equal-size views, quote coverage, breadth, and symbol research links.' },
+  { title: 'Macro + Yield Monitor', command: 'MACRO', summary: 'Macro dashboard, release calendar, and Treasury yield-curve tools.' },
   { title: 'Forex', command: 'FX', summary: 'Currency monitor with custom pair selection and quick conversion.' },
-  { title: 'Crypto', command: 'CRYPTO', summary: 'Crypto market breadth, leaders, and ranking-driven workflows.' },
   { title: 'ETF Monitor', command: 'ETF', summary: 'Sector, fixed income, commodity, and international ETF lookup.' },
+  { title: 'Crypto', command: 'CRYPTO', summary: 'Crypto market breadth, leaders, and ranking-driven workflows.' },
+  { title: 'Prediction Markets', command: 'PRED', summary: 'Market-implied probabilities, themes, liquidity, and event metadata.' },
   { title: 'Connections & AI Settings', command: 'SETTINGS', summary: 'Manage local provider credentials and the OpenAI model/prompt used by AI-assisted workflows.' },
 ] as const;
 
@@ -23,7 +24,7 @@ const KEYBOARD = [
   { key: 'ENTER', desc: 'Execute the command or open the first search match.' },
   { key: 'TAB', desc: 'Accept the top autocomplete result while typing.' },
   { key: 'ESC', desc: 'Clear the current command or close the dropdown.' },
-  { key: 'F1-F12', desc: 'Jump straight to the shortcut workspaces in the bottom bar: `F1` Market Overview, `F2` Portfolio, `F3` Equity Research, `F4` News + Geopolitics, `F5` Macro, `F6` Heat, `F7` FX, `F8` ETF, `F9` Crypto, `F10` Predictions, `F11` Help, and `F12` Settings.' },
+  { key: 'F1-F12', desc: workspaceShortcuts.map(({ key, name }) => `${key} ${name}`).join(' · ') },
 ] as const;
 
 const DATA_SOURCES = [

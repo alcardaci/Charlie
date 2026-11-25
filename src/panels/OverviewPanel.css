@@ -8,18 +8,19 @@
   color: var(--sector-change-text);
 }
 
-.overview-primary-region {
+.overview-pair-region {
   container: overview-instruments / inline-size;
 }
 
-.overview-primary-pair {
+.overview-pair {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   align-items: start;
 }
 
-.overview-primary-panel {
+.overview-primary-panel,
+.overview-holdings-pair > section {
   min-width: 0;
   padding: 12px;
   background-color: var(--terminal-bg);
@@ -32,12 +33,54 @@
   font-weight: 700;
 }
 
+.overview-holdings-pair > section + section {
+  border-block-start: 1px solid var(--section-rule-color);
+}
+
+.watchlist-quotes {
+  table-layout: fixed;
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+
+.watchlist-quotes th,
+.watchlist-quotes td {
+  padding: 5px 3px;
+  border-bottom: 1px solid var(--section-rule-color);
+}
+
+.watchlist-quotes thead th {
+  position: sticky;
+  top: 0;
+  background: var(--terminal-bg);
+  color: var(--terminal-faint);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.watchlist-quotes .watchlist-history-column { width: clamp(68px, 23cqi, 122px); }
+.watchlist-quotes .watchlist-price-column { width: 30%; }
+.watchlist-quotes .watchlist-action-column { width: 30px; }
+.watchlist-quotes tbody tr:last-child > * { border-bottom: 0; }
+.watchlist-quotes tbody tr:is(:hover, :focus-within) { background: var(--terminal-hover); }
+
 @container overview-instruments (min-width: 46rem) {
-  .overview-primary-pair {
+  .overview-pair {
     grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr);
   }
 
-  .overview-primary-panel {
+  .overview-primary-panel,
+  .overview-holdings-pair > section {
     padding: 14px;
+  }
+
+  .overview-holdings-pair > section + section {
+    border-block-start: 0;
+    border-inline-start: 1px solid var(--section-rule-color);
+  }
+
+  .watchlist-table-scroll {
+    max-height: 24rem;
+    overflow-y: auto;
   }
 }

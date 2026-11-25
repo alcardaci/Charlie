@@ -7,7 +7,6 @@ It keeps a command-driven shell around a routed center panel, then layers persis
 
 - `CommandBar`: command entry, panel routing, search/autocomplete, theme toggle, debug toggle, and AI companion toggle
 - `MarketTicker`: always-on quote strip
-- `WatchlistSidebar`: saved symbols and quick navigation
 - `MainPanel`: the active workspace
 - `NewsPanel`: either the top half of the combined `NEWS`/`GEO` workspace or a right-hand rail, depending on the current tab
 - `StatusBar`: function-key shortcuts and market-open state
@@ -91,6 +90,7 @@ What it contains:
 - Cross-asset quotes for commodities and major currencies
 - Sentiment regime summary plus underlying sentiment pillars
 - Portfolio snapshot
+- Watchlist beside the portfolio snapshot, stacking below it on narrow screens, with current quotes, 30-day daily-close charts, and links to equity research
 - Prediction-market snapshot
 - Upcoming macro calendar
 - Optional AI-written market summary
@@ -360,11 +360,6 @@ How it is processed:
 - It keeps only non-sensitive status or model metadata in app state, while the actual secrets live in local machine storage
 
 ## Non-panel areas that change panel behavior
-
-### Watchlist sidebar
-
-- Local persistent watchlist state
-- Quick-open routing into equity workspaces
 
 ### Right-side news rail
 

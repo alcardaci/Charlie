@@ -28,7 +28,7 @@ export function CryptoPanel() {
       <button type="button" onClick={() => void refetch()} disabled={isFetching} className="rounded border border-terminal-border px-3 py-1 text-xs text-terminal-muted hover:text-terminal-text disabled:opacity-50">{isFetching ? 'Refreshing…' : 'Refresh'}</button>
     </WorkspaceHeader>
     <div className="min-h-0 flex-1 overflow-y-auto p-4">
-      <div className="text-xs text-terminal-faint mb-3">{coins.length ? `${coins.length} assets returned` : 'Top 50 requested'} · USD · change over rolling 24 hours. Sample shares are not global market dominance. {dataUpdatedAt ? `Checked ${new Date(dataUpdatedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}.` : ''}</div>
+      <div className="text-xs text-terminal-faint mb-3">{coins.length ? `${coins.length} assets returned` : 'Top 50 requested'} · USD · change over rolling 24 hours. {dataUpdatedAt ? `Checked ${new Date(dataUpdatedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}.` : ''}</div>
       {isError && <div role="status" className="instrument-section text-terminal-muted border border-terminal-border rounded text-xs p-3 mb-3">{coins.length ? 'Refresh failed; the last received market data remains visible.' : 'CoinGecko data is unavailable or rate-limited. Use Refresh to try again.'}</div>}
 
       {isLoading ? (

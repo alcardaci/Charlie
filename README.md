@@ -12,7 +12,7 @@ Charlie is a local-first desktop market workspace built with React, Vite, and El
 
 ## Current Feature Set
 
-- Command-driven terminal UI with a top command bar, live market ticker, watchlist sidebar, main panel, status bar, and optional live player.
+- Command-driven terminal UI with a top command bar, live market ticker, main panel, status bar, and optional live player. Market Overview pairs the portfolio snapshot with your watchlist and its 30-day price charts.
 - Dedicated workspaces for market overview, ticker research, charts, news and geopolitics, prediction markets, macro and yield monitoring, portfolio tracking, sector heatmaps, forex, crypto, ETF monitoring, help, and settings.
 - Fast ticker shortcuts such as `AAPL`, `AAPL GP`, `AAPL NEWS`, and `AAPL WL`.
 - Optional AI-assisted market summaries, geopolitics extraction, and a general-purpose research companion with autonomous web access and workspace awareness.

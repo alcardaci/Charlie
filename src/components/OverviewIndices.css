@@ -33,11 +33,3 @@
 .overview-indices-table button:focus-visible { outline: 1px solid var(--terminal-accent); }
 .overview-index-price { font-weight: 700; }
 .overview-index-price, .overview-index-move, .overview-indices-table thead th { white-space: nowrap; }
-
-.overview-index-trend {
-  display: block;
-  width: clamp(64px, 20cqi, 116px);
-  height: auto;
-  margin-left: auto;
-  color: var(--terminal-muted);
-}
