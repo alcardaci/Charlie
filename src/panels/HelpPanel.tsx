@@ -5,13 +5,12 @@ import { useAppVersion } from '../utils/appVersion';
 const WORKSPACES = [
   { title: 'Market Overview', command: 'HOME', summary: 'Cross-asset pulse, movers, sentiment, portfolio snapshot, macro calendar, and prediction-market forecasts.' },
   { title: 'Portfolio', command: 'PORT', summary: 'Lots, cost basis, exposures, and editable portfolio bookkeeping.' },
-  { title: 'Opportunities', command: 'OPPS', summary: 'Live themes, keyword research, and locally baselined early structural signals.' },
   { title: 'Research Workspace', command: 'AAPL', summary: 'Ticker-level company stats, leadership, filings, segment data, and analyst context.' },
   { title: 'Chart View', command: 'MSFT GP', summary: 'Interactive price action with multiple chart styles and timeframes.' },
-  { title: 'News + Geopolitics', command: 'NEWS', summary: 'World news, geopolitical risk, and the global event map in one view.' },
+  { title: 'News + Geopolitics', command: 'NEWS', summary: 'Yahoo Finance and GDELT headlines, live TV, and the published risk index. Connect OpenAI in Settings for the event map and country summaries.' },
   { title: 'Prediction Markets', command: 'PRED', summary: 'Market-implied probabilities, themes, liquidity, and event metadata.' },
   { title: 'Macro + Yield Monitor', command: 'MACRO', summary: 'Macro dashboard, release calendar, and Treasury yield-curve tools.' },
-  { title: 'Heatmap', command: 'HEAT', summary: 'Fast sector leadership read for the S&P 500 and related ETFs.' },
+  { title: 'Heatmap', command: 'HEAT', summary: 'Curated equity sample with reported-cap or equal-size views, quote coverage, breadth, and symbol research links.' },
   { title: 'Forex', command: 'FX', summary: 'Currency monitor with custom pair selection and quick conversion.' },
   { title: 'Crypto', command: 'CRYPTO', summary: 'Crypto market breadth, leaders, and ranking-driven workflows.' },
   { title: 'ETF Monitor', command: 'ETF', summary: 'Sector, fixed income, commodity, and international ETF lookup.' },
@@ -23,7 +22,7 @@ const KEYBOARD = [
   { key: 'ENTER', desc: 'Execute the command or open the first search match.' },
   { key: 'TAB', desc: 'Accept the top autocomplete result while typing.' },
   { key: 'ESC', desc: 'Clear the current command or close the dropdown.' },
-  { key: 'F1-F12', desc: 'Jump straight to the shortcut workspaces in the bottom bar: `F1` Market Overview, `F2` Portfolio, `F3` Opportunities, `F4` News + Geopolitics, `F5` Macro, `F6` Heat, `F7` FX, `F8` ETF, `F9` Crypto, `F10` Predictions, `F11` Help, and `F12` Settings.' },
+  { key: 'F1-F12', desc: 'Jump straight to the shortcut workspaces in the bottom bar: `F1` Market Overview, `F2` Portfolio, `F3` Equity Research, `F4` News + Geopolitics, `F5` Macro, `F6` Heat, `F7` FX, `F8` ETF, `F9` Crypto, `F10` Predictions, `F11` Help, and `F12` Settings.' },
 ] as const;
 
 const DATA_SOURCES = [
@@ -83,8 +82,8 @@ const DATA_SOURCES = [
     note: 'Public dataset',
   },
   {
-    name: 'GDELT DOC 2.0',
-    coverage: 'Geopolitics headline/event inputs, including country-level clustering and map enrichment.',
+    name: 'GDELT DOC and Global Knowledge Graph',
+    coverage: 'Search results and quarter-hour archive batches supply linked articles for the event map.',
     note: 'Public API',
   },
 ] as const;

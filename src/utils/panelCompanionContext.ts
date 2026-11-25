@@ -1,4 +1,7 @@
-import type { QueryClient } from '@tanstack/react-query';
+import { fmt } from './formatters';
+import { predictionRowsFromPages, trackedMarketCap } from './marketPanelDisplay';
+import type { InfiniteData, QueryClient } from '@tanstack/react-query';
+import { buildPortfolioOverviewSnapshot, normalizePortfolioCurrency, quoteCurrencyUnit, type PortfolioOverviewSnapshot } from './portfolioValuation';
 import { fetchCryptoMarkets } from '../api/crypto';
 import {
   fetchChart,
@@ -17,16 +20,20 @@ import type {
   CryptoAsset,
   ForexPair,
   MacroMetricKey,
+  MacroCountryCode,
   PanelType,
   PortfolioPosition,
+  PredictionForecastPage,
   Quote,
 } from '../types';
 
 type CompanionState = {
+  macroCountry?: MacroCountryCode;
   activePanel: PanelType;
   activeSymbol: string;
   watchlist: string[];
   portfolio: PortfolioPosition[];
+  portfolioDisplayCurrency: string;
   forexPairs: string[];
 };
 
@@ -123,59 +130,29 @@ function toCompactQuote(quote: Quote) {
   };
 }
 
-function buildPortfolioSnapshot(portfolio: PortfolioPosition[], quotes: Quote[]) {
-  const quoteMap = new Map(quotes.map((quote) => [quote.symbol.toUpperCase(), quote]));
-  const positions = portfolio.map((lot) => {
-    const symbol = lot.symbol.toUpperCase();
-    const quote = quoteMap.get(symbol);
-    const currentPrice = quote?.regularMarketPrice ?? lot.avgCost;
-    const currentValue = currentPrice * lot.shares;
-    const totalCost = lot.avgCost * lot.shares;
-    const gainLoss = currentValue - totalCost;
-
-    return {
-      symbol,
-      shares: lot.shares,
-      avgCost: lot.avgCost,
-      currentPrice,
-      currentValue,
-      totalCost,
-      gainLoss,
-      gainLossPct: totalCost > 0 ? (gainLoss / totalCost) * 100 : 0,
-      label: quote?.longName ?? quote?.shortName ?? symbol,
-    };
-  });
-
-  const totalValue = positions.reduce((sum, position) => sum + position.currentValue, 0);
-  const totalCost = positions.reduce((sum, position) => sum + position.totalCost, 0);
-  const gainLoss = totalValue - totalCost;
-
-  return {
-    positionCount: positions.length,
-    totalValue,
-    totalCost,
-    gainLoss,
-    gainLossPct: totalCost > 0 ? (gainLoss / totalCost) * 100 : 0,
-    topPositions: positions
-      .sort((left, right) => right.currentValue - left.currentValue)
-      .slice(0, 8)
-      .map((position) => ({
-        ...position,
-        weightPct: totalValue > 0 ? (position.currentValue / totalValue) * 100 : 0,
-      })),
-  };
+async function fetchPortfolioSnapshot(queryClient: QueryClient, state: CompanionState, quotes: Quote[]): Promise<PortfolioOverviewSnapshot> {
+  const currency = normalizePortfolioCurrency(state.portfolioDisplayCurrency);
+  const currencies = [...new Set([...state.portfolio.map((lot) => normalizePortfolioCurrency(lot.currency)), ...quotes.map((quote) => quoteCurrencyUnit(quote.currency).currency)])].sort();
+  const pairs = currencies.filter((base) => base !== currency).map((base) => ({ base, quote: currency }));
+  const fx = pairs.length ? await queryClient.fetchQuery({
+    queryKey: ['portfolio-fx-rates', currencies.join(','), currency],
+    queryFn: () => fetchForexPairs(pairs),
+    staleTime: 300000,
+    retry: 1,
+  }).catch(() => []) : [];
+  return buildPortfolioOverviewSnapshot(state.portfolio, quotes, currency, fx);
 }
 
-function summarizeOverview(indices: Quote[], sentiment: Awaited<ReturnType<typeof fetchSentimentSnapshot>> | null, portfolio: ReturnType<typeof buildPortfolioSnapshot>) {
+function summarizeOverview(indices: Quote[], sentiment: Awaited<ReturnType<typeof fetchSentimentSnapshot>> | null, portfolio: PortfolioOverviewSnapshot) {
   const spx = indices.find((quote) => quote.symbol === '^GSPC');
   const ndx = indices.find((quote) => quote.symbol === '^IXIC');
   const vix = indices.find((quote) => quote.symbol === '^VIX');
   const parts = [
-    spx ? `S&P 500 ${spx.regularMarketChangePercent?.toFixed(2) ?? '0.00'}%` : null,
-    ndx ? `Nasdaq ${ndx.regularMarketChangePercent?.toFixed(2) ?? '0.00'}%` : null,
+    spx && Number.isFinite(spx.regularMarketChangePercent) ? `S&P 500 ${spx.regularMarketChangePercent.toFixed(2)}%` : null,
+    ndx && Number.isFinite(ndx.regularMarketChangePercent) ? `Nasdaq ${ndx.regularMarketChangePercent.toFixed(2)}%` : null,
     vix ? `VIX ${vix.regularMarketPrice?.toFixed(2) ?? '—'}` : null,
     sentiment?.regime ? `sentiment ${sentiment.regime}` : null,
-    portfolio.positionCount ? `portfolio ${portfolio.gainLossPct.toFixed(2)}%` : null,
+    portfolio.assetCount ? portfolio.complete ? `portfolio return ${fmt.pct(portfolio.gainLossPct)}` : 'portfolio valuation incomplete' : null,
   ].filter(Boolean);
 
   return parts.join(' | ') || 'Cross-asset overview snapshot.';
@@ -195,7 +172,7 @@ async function buildOverviewContext({ queryClient, state, renderedText }: BuildP
     queryClient.fetchQuery({
       queryKey: ['indices'],
       queryFn: () => fetchQuotes([...OVERVIEW_INDEX_SYMBOLS]),
-      staleTime: 5000,
+      staleTime: 30000,
     }),
     queryClient.fetchQuery({
       queryKey: ['sectors'],
@@ -205,17 +182,17 @@ async function buildOverviewContext({ queryClient, state, renderedText }: BuildP
     queryClient.fetchQuery({
       queryKey: ['movers'],
       queryFn: () => fetchQuotes([...OVERVIEW_MOVER_SYMBOLS]),
-      staleTime: 5000,
+      staleTime: 30000,
     }),
     queryClient.fetchQuery({
       queryKey: ['market-sentiment'],
       queryFn: fetchSentimentSnapshot,
-      staleTime: 5000,
+      staleTime: 30000,
     }).catch(() => null),
     queryClient.fetchQuery({
       queryKey: ['overview-cross-asset'],
       queryFn: () => fetchQuotes([...OVERVIEW_CROSS_ASSET_SYMBOLS]),
-      staleTime: 5000,
+      staleTime: 30000,
     }).catch(() => []),
     queryClient.fetchQuery({
       queryKey: ['overview-predictions', 4],
@@ -234,14 +211,14 @@ async function buildOverviewContext({ queryClient, state, renderedText }: BuildP
     }).catch(() => ({ events: [] })),
     state.portfolio.length
       ? queryClient.fetchQuery({
-          queryKey: ['overview-portfolio-quotes', state.portfolio.map((position) => position.symbol.toUpperCase()).sort().join(',')],
+          queryKey: ['portfolio-quotes', [...new Set(state.portfolio.map((position) => position.symbol.trim().toUpperCase()))].sort()],
           queryFn: () => fetchQuotes(Array.from(new Set(state.portfolio.map((position) => position.symbol.toUpperCase())))),
-          staleTime: 5000,
+          staleTime: 30000,
         }).catch(() => [])
       : Promise.resolve([]),
   ]);
 
-  const portfolio = buildPortfolioSnapshot(state.portfolio, portfolioQuotes);
+  const portfolio = await fetchPortfolioSnapshot(queryClient, state, portfolioQuotes);
 
   return buildBaseContext(
     'overview',
@@ -249,19 +226,20 @@ async function buildOverviewContext({ queryClient, state, renderedText }: BuildP
     summarizeOverview(indices, sentiment, portfolio),
     {
       indices: indices.map(toCompactQuote),
-      sectorLeaders: [...sectors]
+      sectorLeaders: sectors.filter((quote) => Number.isFinite(quote.regularMarketChangePercent) && quote.regularMarketChangePercent > 0)
         .sort((left, right) => (right.regularMarketChangePercent ?? 0) - (left.regularMarketChangePercent ?? 0))
         .slice(0, 5)
         .map(toCompactQuote),
-      sectorLaggards: [...sectors]
+      sectorLaggards: sectors.filter((quote) => Number.isFinite(quote.regularMarketChangePercent) && quote.regularMarketChangePercent < 0)
         .sort((left, right) => (left.regularMarketChangePercent ?? 0) - (right.regularMarketChangePercent ?? 0))
         .slice(0, 5)
         .map(toCompactQuote),
-      gainers: [...movers]
+      moversScope: 'Fixed sample of tracked US stocks, not market-wide rankings',
+      gainers: movers.filter((quote) => Number.isFinite(quote.regularMarketChangePercent) && quote.regularMarketChangePercent > 0)
         .sort((left, right) => (right.regularMarketChangePercent ?? 0) - (left.regularMarketChangePercent ?? 0))
         .slice(0, 6)
         .map(toCompactQuote),
-      losers: [...movers]
+      losers: movers.filter((quote) => Number.isFinite(quote.regularMarketChangePercent) && quote.regularMarketChangePercent < 0)
         .sort((left, right) => (left.regularMarketChangePercent ?? 0) - (right.regularMarketChangePercent ?? 0))
         .slice(0, 6)
         .map(toCompactQuote),
@@ -402,10 +380,10 @@ async function buildChartContext({ queryClient, state, renderedText }: BuildPane
   );
 }
 
-async function buildMacroContext({ queryClient, renderedText }: BuildPanelContextArgs): Promise<CompanionPanelContext> {
+async function buildMacroContext({ queryClient, renderedText, state }: BuildPanelContextArgs): Promise<CompanionPanelContext> {
   const dashboard = await queryClient.fetchQuery({
-    queryKey: ['macro-dashboard', 'US'],
-    queryFn: () => fetchMacroDashboard(['US']),
+    queryKey: ['macro-dashboard', state.macroCountry ?? 'US'],
+    queryFn: () => fetchMacroDashboard([state.macroCountry ?? 'US']),
     staleTime: 5 * 60 * 1000,
   });
   const country = dashboard.countries[0];
@@ -416,6 +394,7 @@ async function buildMacroContext({ queryClient, renderedText }: BuildPanelContex
         value: country.values[key]?.value ?? null,
         change: country.values[key]?.change ?? null,
         date: country.values[key]?.date ?? null,
+        unit: country.values[key]?.unit ?? null,
         source: country.values[key]?.source ?? null,
       }))
     : [];
@@ -435,21 +414,23 @@ async function buildMacroContext({ queryClient, renderedText }: BuildPanelContex
 }
 
 async function buildPortfolioContext({ queryClient, state, renderedText }: BuildPanelContextArgs): Promise<CompanionPanelContext> {
-  const symbols = Array.from(new Set(state.portfolio.map((position) => position.symbol.toUpperCase())));
+  const symbols = Array.from(new Set(state.portfolio.map((position) => position.symbol.trim().toUpperCase()))).sort();
   const quotes = symbols.length
     ? await queryClient.fetchQuery({
-        queryKey: ['portfolio-companion-quotes', symbols.join(',')],
+        queryKey: ['portfolio-quotes', symbols],
         queryFn: () => fetchQuotes(symbols),
         staleTime: 10000,
       }).catch(() => [])
     : [];
-  const portfolio = buildPortfolioSnapshot(state.portfolio, quotes);
+  const portfolio = await fetchPortfolioSnapshot(queryClient, state, quotes);
 
   return buildBaseContext(
     'portfolio',
     state.portfolio.length && renderedText ? 'visible-panel' : 'local-state',
     state.portfolio.length
-      ? `${portfolio.positionCount} positions | total value ${portfolio.totalValue.toFixed(2)} | P/L ${portfolio.gainLossPct.toFixed(2)}%`
+      ? portfolio.complete
+        ? `${portfolio.assetCount} assets, ${portfolio.lotCount} lots | value ${portfolio.currency} ${portfolio.totalValue?.toFixed(2) ?? '—'} | P/L ${fmt.pct(portfolio.gainLossPct)}`
+        : `${portfolio.assetCount} assets | valuation incomplete: missing quotes ${portfolio.missingQuoteSymbols.join(', ') || 'none'}; missing FX ${portfolio.missingFxCurrencies.join(', ') || 'none'}`
       : 'Portfolio is currently empty.',
     portfolio,
     renderedText
@@ -457,7 +438,8 @@ async function buildPortfolioContext({ queryClient, state, renderedText }: Build
 }
 
 async function buildPredictionsContext({ queryClient, renderedText }: BuildPanelContextArgs): Promise<CompanionPanelContext> {
-  const snapshot = await queryClient.fetchQuery({
+  const pages = queryClient.getQueryData<InfiniteData<PredictionForecastPage>>(['prediction-market-pages'])?.pages;
+  const snapshot = pages?.length ? { ...pages[0], forecasts: predictionRowsFromPages(pages) } : await queryClient.fetchQuery({
     queryKey: ['prediction-markets-panel', 12],
     queryFn: () => fetchPredictionForecasts(12),
     staleTime: 60 * 1000,
@@ -469,7 +451,7 @@ async function buildPredictionsContext({ queryClient, renderedText }: BuildPanel
     `${snapshot.forecasts.length} prediction markets loaded.`,
     {
       updatedAt: snapshot.updatedAt,
-      forecasts: snapshot.forecasts.slice(0, 10),
+      forecasts: snapshot.forecasts.slice(0, 24),
     },
     renderedText
   );
@@ -478,7 +460,7 @@ async function buildPredictionsContext({ queryClient, renderedText }: BuildPanel
 async function buildGeopoliticsContext({ queryClient, renderedText }: BuildPanelContextArgs): Promise<CompanionPanelContext> {
   const [risk, hotspots] = await Promise.all([
     queryClient.fetchQuery({
-      queryKey: ['geopolitical-risk'],
+      queryKey: ['geopolitical-risk-snapshot'],
       queryFn: fetchGeopoliticalRiskSnapshot,
       staleTime: 10 * 60 * 1000,
     }),
@@ -492,7 +474,7 @@ async function buildGeopoliticsContext({ queryClient, renderedText }: BuildPanel
   return buildBaseContext(
     'geopolitics',
     renderedText ? 'visible-panel' : 'query-snapshot',
-    `Official GPR ${risk.latest.value.toFixed(1)} | daily delta ${risk.change?.toFixed(1) ?? '0.0'}`,
+    `Official GPR ${risk.latest.value.toFixed(1)} | daily delta ${fmt.change(risk.change, 1)}`,
     {
       updatedAt: risk.updatedAt,
       latest: risk.latest,
@@ -559,17 +541,17 @@ async function buildForexContext({ queryClient, state, renderedText }: BuildPane
 async function buildCryptoContext({ queryClient, renderedText }: BuildPanelContextArgs): Promise<CompanionPanelContext> {
   const coins: CryptoAsset[] = await queryClient.fetchQuery({
     queryKey: ['crypto-markets'],
-    queryFn: () => fetchCryptoMarkets('usd', 30),
+    queryFn: () => fetchCryptoMarkets('usd', 50),
     staleTime: 30000,
   });
-  const totalMarketCap = coins.reduce((sum, coin) => sum + (coin.market_cap ?? 0), 0);
+  const sampleMarketCap = trackedMarketCap(coins);
 
   return buildBaseContext(
     'crypto',
     renderedText ? 'visible-panel' : 'query-snapshot',
-    `${coins.length} crypto assets loaded | total market cap ${totalMarketCap.toFixed(0)}`,
+    `${coins.length} crypto assets loaded | tracked sample market cap ${fmt.marketCap(sampleMarketCap)}`,
     {
-      totalMarketCap,
+      sampleMarketCap,
       leaders: coins.slice(0, 12).map((coin) => ({
         symbol: coin.symbol.toUpperCase(),
         name: coin.name,

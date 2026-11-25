@@ -22,12 +22,18 @@
     "check:macro-sources": "node scripts/check-macro-sources.mjs",
     "check:opportunities-quality": "node scripts/check-opportunities-quality.mjs",
     "check:early-signals": "node scripts/check-early-signals.mjs",
-    "verify:desktop": "node scripts/verify-macos-build.mjs"
+    "verify:desktop": "node scripts/verify-macos-build.mjs",
+    "check:portfolio": "node scripts/check-portfolio.mjs",
+    "check:market-display": "node scripts/check-market-display.mjs",
+    "check:public-data": "node scripts/check-public-data.mjs",
+    "check:news-coverage": "node scripts/check-news-coverage.mjs",
+    "check:startup": "node scripts/check-startup.mjs"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "^4.2.1",
     "@tanstack/react-query": "^5.17.9",
+    "@vitejs/plugin-react": "^4.2.1",
     "date-fns": "^3.2.0",
+    "fflate": "^0.8.3",
     "lightweight-charts": "^4.1.3",
     "lucide-react": "^0.314.0",
     "react": "^18.2.0",
@@ -139,6 +145,9 @@
       "dist/**/*",
       "electron/**/*",
       "vite.config.ts",
+      "server/gdelt.ts",
+      "src/data/**/*.ts",
+      "src/utils/secOpportunityEvidence.ts",
       "src/utils/openaiConfig.ts",
       "package.json"
     ]

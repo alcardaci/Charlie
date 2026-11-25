@@ -1,3 +1,5 @@
+import { isValidPortfolioPurchaseDate } from './portfolioHistory';
+
 export interface ImportedPortfolioLot {
   symbol: string;
   shares: number;
@@ -45,7 +47,7 @@ function detectDelimiter(text: string): ',' | ';' | '\t' {
   return bestDelimiter;
 }
 
-function parseCsvText(text: string): { normalizedHeaders: string[]; rows: string[][] } {
+function parseCsvText(text: string): { normalizedHeaders: string[]; rows: string[][]; decimalComma: boolean } {
   const delimiter = detectDelimiter(text);
   const rows: string[][] = [];
   let row: string[] = [];
@@ -91,6 +93,7 @@ function parseCsvText(text: string): { normalizedHeaders: string[]; rows: string
     field += char;
   }
 
+  if (inQuotes) throw new Error('The CSV contains an unfinished quoted field.');
   row.push(field.trim());
   if (row.some((cell) => cell.length > 0)) {
     rows.push(row);
@@ -102,7 +105,7 @@ function parseCsvText(text: string): { normalizedHeaders: string[]; rows: string
 
   const [headerRow, ...dataRows] = rows;
   const normalizedHeaders = headerRow.map(normalizeHeader);
-  return { normalizedHeaders, rows: dataRows };
+  return { normalizedHeaders, rows: dataRows, decimalComma: delimiter === ';' };
 }
 
 function findHeaderIndex(headers: string[], aliases: readonly string[]): number {
@@ -114,23 +117,29 @@ function findHeaderIndex(headers: string[], aliases: readonly string[]): number 
   return -1;
 }
 
-function parseNumericValue(value: string): number | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-
-  let normalized = trimmed
-    .replace(/^\((.*)\)$/, '-$1')
-    .replace(/[^\d,.\-]/g, '');
-
+function parseNumericValue(value: string, decimalComma = false): number | null {
+  let normalized = value.trim();
   if (!normalized) return null;
-
-  if (normalized.includes(',') && !normalized.includes('.')) {
-    normalized = normalized.replace(',', '.');
-  } else {
-    normalized = normalized.replace(/,/g, '');
-  }
-
-  const parsed = Number.parseFloat(normalized);
+  normalized = normalized.replace(/^\((.*)\)$/, '-$1')
+    .replace(/^[A-Za-z]{3}\s*|\s*[A-Za-z]{3}$/g, '')
+    .replace(/[$€£¥₹₩\s]/g, '');
+  if (!/^-?[\d.,]+$/.test(normalized)) return null;
+  const negative = normalized.startsWith('-');
+  normalized = normalized.replace(/^-/, '');
+  const comma = normalized.lastIndexOf(',');
+  const dot = normalized.lastIndexOf('.');
+  let decimal: ',' | '.' | null = null;
+  if (comma >= 0 && dot >= 0) decimal = comma > dot ? ',' : '.';
+  else if (comma >= 0) decimal = decimalComma || !/^\d{1,3}(,\d{3})+$/.test(normalized) ? ',' : null;
+  else if (dot >= 0) decimal = '.';
+  const group = decimal === ',' ? '.' : ',';
+  const parts = decimal ? normalized.split(decimal) : [normalized];
+  if (parts.length > 2 || (parts.length === 2 && !/^\d+$/.test(parts[1]))) return null;
+  const integer = parts[0];
+  const groupingPattern = group === ',' ? /^\d{1,3}(,\d{3})+$/ : /^\d{1,3}(\.\d{3})+$/;
+  if (!/^\d+$/.test(integer) && !groupingPattern.test(integer)) return null;
+  const digits = integer.split(group).join('');
+  const parsed = Number(`${negative ? '-' : ''}${digits}${parts.length === 2 ? `.${parts[1]}` : ''}`);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
@@ -201,7 +210,7 @@ function isUnsupportedTransaction(value: string): boolean {
 }
 
 export function importPortfolioCsv(text: string): PortfolioImportResult {
-  const { normalizedHeaders, rows } = parseCsvText(text);
+  const { normalizedHeaders, rows, decimalComma } = parseCsvText(text);
   const symbolIndex = findHeaderIndex(normalizedHeaders, HEADER_ALIASES.symbol);
   const sharesIndex = findHeaderIndex(normalizedHeaders, HEADER_ALIASES.shares);
   const avgCostIndex = findHeaderIndex(normalizedHeaders, HEADER_ALIASES.avgCost);
@@ -230,12 +239,12 @@ export function importPortfolioCsv(text: string): PortfolioImportResult {
     }
 
     const symbol = normalizeSymbol(row[symbolIndex] ?? '');
-    const shares = parseNumericValue(row[sharesIndex] ?? '');
-    const avgCost = parseNumericValue(row[avgCostIndex] ?? '');
+    const shares = parseNumericValue(row[sharesIndex] ?? '', decimalComma);
+    const avgCost = parseNumericValue(row[avgCostIndex] ?? '', decimalComma);
     const currency = currencyIndex === -1 ? undefined : normalizeCurrency(row[currencyIndex] ?? '');
     const purchaseDate = parseDateValue(row[purchaseDateIndex] ?? '');
 
-    if (!symbol || !shares || shares <= 0 || !avgCost || avgCost <= 0 || !purchaseDate) {
+    if (!symbol || !shares || shares <= 0 || !avgCost || avgCost <= 0 || !purchaseDate || !isValidPortfolioPurchaseDate(purchaseDate)) {
       skippedRows += 1;
       continue;
     }

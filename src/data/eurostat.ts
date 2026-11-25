@@ -31,11 +31,10 @@ export function normalizeEurostatSeries(payload: EurostatPayload, definition: Eu
   const validContract = matchesEurostatContract(payload, definition);
   const timeIndex = payload.dimension?.time?.category?.index ?? {};
   const series = validContract ? Object.entries(timeIndex)
-    .map(([period, index]) => ({ date: normalizeEurostatPeriod(period, definition.frequency), value: Number(payload.value?.[String(index)]) }))
-    .filter((point): point is { date: string; value: number } => Boolean(point.date) && Number.isFinite(point.value))
+    .map(([period, index]) => ({ date: normalizeEurostatPeriod(period, definition.frequency), value: payload.value?.[String(index)] }))
+    .filter((point): point is { date: string; value: number } => Boolean(point.date) && typeof point.value === 'number' && Number.isFinite(point.value))
     .filter((point) => Math.abs(point.value) <= definition.maxAbsValue)
-    .sort((left, right) => left.date.localeCompare(right.date))
-    .slice(-24) : [];
+    .sort((left, right) => left.date.localeCompare(right.date)) : [];
   const latest = series[series.length - 1];
   const previous = series[series.length - 2];
   return {

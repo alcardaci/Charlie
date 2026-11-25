@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { ArrowRightLeft, Plus, RefreshCw, X } from 'lucide-react';
 import { fetchForexPairs } from '../api/finance';
 import { useTerminalStore } from '../store/useTerminalStore';
 import { fmt, changeColor } from '../utils/formatters';
+import { parseCurrencyAmount } from '../utils/marketPanelDisplay';
 
 const CURRENCY_OPTIONS = [
   { code: 'AUD', label: 'Australian Dollar' },
@@ -76,11 +77,19 @@ export function ForexPanel() {
     return Array.from(unique.values());
   }, [displayedPairs, convertBase, convertQuote]);
 
-  const { data: quotes = [], isLoading, refetch, isFetching } = useQuery({
+  const { data: quotes = [], isLoading, refetch, isFetching, isError, dataUpdatedAt } = useQuery({
     queryKey: ['forex-custom', queryPairs],
-    queryFn: () => fetchForexPairs(queryPairs),
+    queryFn: async () => {
+      const result = await fetchForexPairs(queryPairs);
+      if (queryPairs.length && !result.length) throw new Error('No currency rates available');
+      return result;
+    },
     refetchInterval: 30000,
     staleTime: 15000,
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: keepPreviousData,
+    enabled: queryPairs.length > 0,
   });
 
   const quoteMap = useMemo(
@@ -89,11 +98,10 @@ export function ForexPanel() {
   );
 
   const converterQuote = convertBase === convertQuote ? null : quoteMap.get(pairKey(convertBase, convertQuote));
-  const parsedAmount = Number.parseFloat(amountInput.replace(/,/g, ''));
-  const safeAmount = Number.isFinite(parsedAmount) ? parsedAmount : 0;
-  const convertedAmount = convertBase === convertQuote
-    ? safeAmount
-    : (converterQuote ? safeAmount * converterQuote.rate : null);
+  const parsedAmount = parseCurrencyAmount(amountInput);
+  const convertedAmount = parsedAmount == null ? null : convertBase === convertQuote
+    ? parsedAmount
+    : (converterQuote && Number.isFinite(converterQuote.rate) && converterQuote.rate > 0 ? parsedAmount * converterQuote.rate : null);
 
   const addPair = () => {
     if (newBase === newQuote) return;
@@ -124,6 +132,7 @@ export function ForexPanel() {
           onClick={() => {
             void refetch();
           }}
+          disabled={isFetching}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-terminal-border text-terminal-muted hover:text-terminal-accent hover:border-terminal-accent/40 hover:bg-terminal-hover transition-colors text-xs"
         >
           <RefreshCw size={11} className={isFetching ? 'animate-spin' : ''} />
@@ -131,6 +140,8 @@ export function ForexPanel() {
         </button>
       </div>
 
+      {isError && <div role="status" className="rounded border border-terminal-border bg-terminal-panel p-3 text-xs text-terminal-muted">{quotes.length ? 'Rate refresh failed. Last received rates remain visible.' : 'Currency data is unavailable right now. Use Refresh to try again.'}</div>}
+      <div className="text-xs text-terminal-faint">{queryPairs.filter((pair) => quoteMap.has(pairKey(pair.base, pair.quote))).length}/{queryPairs.length} requested rates available · indicative public quotes, not transaction rates. {dataUpdatedAt ? `Checked ${new Date(dataUpdatedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}.` : ''}</div>
       <div className="grid grid-cols-1 xl:grid-cols-[1.15fr_0.95fr] gap-4">
         <div className="bg-terminal-panel border border-terminal-border rounded p-4 space-y-4">
           <div>
@@ -233,6 +244,8 @@ export function ForexPanel() {
             <label className="text-terminal-muted text-xs font-bold tracking-wider block mb-2">AMOUNT</label>
             <input
               value={amountInput}
+              aria-label="Amount to convert"
+              aria-invalid={parsedAmount == null}
               onChange={(event) => setAmountInput(event.target.value)}
               className="w-full bg-terminal-elevated border border-terminal-border rounded px-3 py-2 text-xs text-terminal-text placeholder-terminal-faint focus:outline-none focus:border-terminal-accent/50"
               placeholder="1000"
@@ -281,24 +294,24 @@ export function ForexPanel() {
           </div>
 
           <div className="rounded border border-terminal-border bg-terminal-elevated/60 p-4">
-            <div className="text-terminal-faint text-xs">Live rate</div>
+            <div className="text-terminal-faint text-xs">Latest available indicative rate</div>
             <div className="mt-1 text-terminal-text text-lg font-bold tabular-nums">
               {convertBase === convertQuote
                 ? `1 ${convertBase} = 1 ${convertQuote}`
                 : converterQuote
                   ? `1 ${convertBase} = ${fmt.price(converterQuote.rate, quoteDecimals(convertQuote))} ${convertQuote}`
-                  : 'Loading conversion rate...'}
+                  : isFetching ? 'Loading conversion rate…' : 'Conversion rate unavailable'}
             </div>
             <div className="mt-3 text-terminal-faint text-xs">Converted amount</div>
             <div className="mt-1 text-terminal-accent text-2xl font-bold tabular-nums">
-              {formatMoney(convertedAmount, convertQuote)}
+              {parsedAmount == null ? 'Enter a valid amount' : formatMoney(convertedAmount, convertQuote)}
             </div>
             <div className="mt-2 text-[11px] text-terminal-faint">
               {convertBase === convertQuote
                 ? 'Same-currency conversion uses a 1:1 rate.'
                 : converterQuote
                   ? `Using ${converterQuote.sourceSymbol?.includes('·') ? 'synthetic cross pricing' : 'direct market pricing'} for ${convertBase}/${convertQuote}.`
-                  : 'Waiting for market data...'}
+                  : isFetching ? 'Waiting for market data…' : 'No public quote was returned for this pair.'}
             </div>
           </div>
         </div>
@@ -311,7 +324,7 @@ export function ForexPanel() {
           ))}
         </div>
       ) : (
-        <div className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+        <div className="bg-terminal-panel border border-terminal-border rounded overflow-x-auto">
           <table className="data-table w-full">
             <thead>
               <tr>
@@ -349,7 +362,7 @@ export function ForexPanel() {
                         </span>
                       </div>
                     </td>
-                    <td className="text-terminal-muted hidden md:table-cell">{pair?.name ?? key}</td>
+                    <td className="text-terminal-muted hidden md:table-cell">{pair?.name ?? key}<div className="text-[10px] text-terminal-faint">{pair ? pair.sourceSymbol?.includes('·') ? 'Synthetic USD cross' : pair.sourceSymbol?.endsWith('=X') ? 'Direct market quote' : 'Derived inverse quote' : 'Rate unavailable'}</div></td>
                     <td className="tabular-nums font-bold text-terminal-text">
                       {pair ? fmt.price(pair.rate, decimals) : '—'}
                     </td>

@@ -1,3 +1,5 @@
+import { canonicalNewsLink } from '../utils/newsCoverage';
+import { fetchPublicJson } from '../utils/publicRequests';
 import {
   CalendarEvent,
   ChartInterval,
@@ -51,6 +53,7 @@ import {
   NewsItem,
   OpenAIHarness,
   PanelType,
+  PredictionForecastPage,
   PredictionForecastSnapshot,
   RegionalNewsCount,
   Quote,
@@ -73,6 +76,7 @@ import { getMacroSourcePlacement } from '../data/macroSourcePlacement';
 import { POLICY_SCHEDULE_EVENTS } from '../data/policyCalendar';
 import type { AIThemeDiscoveryResult, AIThemeGuidanceResult } from '../utils/themeDiscoveryEngine';
 import { sanitizePersistedCountryCounts } from '../utils/geopoliticalCache';
+import { collapseRateHistory } from '../utils/macroDisplay';
 
 const YF = '/api/yf';
 const FH = '/api/finnhub';
@@ -88,7 +92,7 @@ const GDELT = '/api/gdelt';
 const CONNECTIONS = '/api/connections';
 const SEC = '/api/sec';
 const FRED_MAX_CONCURRENT_REQUESTS = 4;
-const FRED_MAX_RETRIES = 3;
+const FRED_MAX_RETRIES = 2;
 const FRED_BASE_RETRY_DELAY_MS = 400;
 const FRED_RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
 
@@ -296,7 +300,7 @@ const COUNTRY_LOCATION_ALIASES: Record<string, string[]> = {
   spain: ['spain', 'spanish'],
   sweden: ['sweden', 'swedish'],
   turkey: ['turkey', 'turkish'],
-  ukraine: ['ukraine', 'ukrainian'],
+  ukraine: ['ukraine', 'ukrainian', 'kyiv', 'kiev'],
   russia: ['russia', 'russian', 'kremlin', 'moscow'],
   belarus: ['belarus', 'belarusian', 'minsk'],
   iran: ['iran', 'iranian', 'tehran'],
@@ -306,7 +310,7 @@ const COUNTRY_LOCATION_ALIASES: Record<string, string[]> = {
   yemen: ['yemen', 'yemeni', 'sanaa', 'houthi', 'houthis'],
   'saudi-arabia': ['saudi arabia', 'saudi'],
   'united-arab-emirates': ['united arab emirates', 'uae', 'emirati', 'dubai', 'abu dhabi'],
-  israel: ['israel', 'israeli', 'gaza', 'west bank', 'jerusalem'],
+  israel: ['israel', 'israeli', 'tel aviv', 'jerusalem'],
   palestine: ['palestine', 'palestinian', 'gaza', 'west bank'],
   egypt: ['egypt', 'egyptian'],
   sudan: ['sudan', 'sudanese'],
@@ -341,6 +345,7 @@ export interface GeopoliticalMapOptions {
   systemPrompt?: string;
   includeHotspotSummaries?: boolean;
   debugMode?: boolean;
+  signal?: AbortSignal;
 }
 
 interface GeopoliticalHeadlineAssessment {
@@ -386,6 +391,8 @@ export interface GeopoliticalHeadlineCandidateDataset {
   source: string;
   queryLabel: string;
   requestedCount: number;
+  failedSources?: string[];
+  fetchedAt?: number;
 }
 
 export interface GeopoliticalProgressAggregationOptions {
@@ -408,9 +415,8 @@ interface GeopoliticalPipelineDebugStats {
   extraction: {
     aiEnabled: boolean;
     aiReturnedEvents: number;
-    aiStories: number;
-    fallbackStories: number;
-    fallbackOnlyStories: number;
+    gdeltReviewedStories: number;
+    failedBatches: number;
   };
   final: {
     clusteredStories: number;
@@ -420,6 +426,8 @@ interface GeopoliticalPipelineDebugStats {
 }
 
 interface GdeltGeopoliticsHeadline {
+  collection?: 'DOC' | 'GKG';
+  cached?: boolean;
   title: string;
   link: string;
   publisher?: string;
@@ -439,7 +447,7 @@ let geopoliticalHeadlineAssessmentCache: Record<string, CachedValue<Geopolitical
 const GEOPOLITICS_MAP_CACHE_TTL_MS = 15 * 60_000;
 const GEOPOLITICS_MAP_CACHE_STORAGE_PREFIX = 'bterminal-geopolitics-map:';
 const GEOPOLITICAL_COUNTRY_SUMMARY_CACHE_STORAGE_PREFIX = 'bterminal-geopolitics-country-summary:';
-const GEOPOLITICAL_COUNTRY_SUMMARY_CACHE_VERSION = 'geopolitics-country-summary-v1';
+const GEOPOLITICAL_COUNTRY_SUMMARY_CACHE_VERSION = 'geopolitics-country-summary-v3-ai-reviewed';
 const GEOPOLITICAL_HEADLINE_ASSESSMENT_CACHE_STORAGE_PREFIX = 'bterminal-geopolitics-headline-assessment:';
 const GEOPOLITICAL_HEADLINE_ASSESSMENT_CACHE_VERSION = 'geopolitics-headline-assessment-v1';
 
@@ -1008,8 +1016,8 @@ export interface FinnhubEconomicEvent {
   unit: string;
 }
 
-const teleborsaQuoteCache = new Map<string, Promise<Quote | null>>();
-const teleborsaWorkbenchCache = new Map<string, Promise<CompanyWorkbench | null>>();
+const teleborsaQuoteCache = new Map<string, { expiresAt: number; promise: Promise<Quote | null> }>();
+const teleborsaWorkbenchCache = new Map<string, { expiresAt: number; promise: Promise<CompanyWorkbench | null> }>();
 
 function normalizeInstrumentType(value?: string | null): string {
   return (value ?? '').toLowerCase().replace(/[\s_-]+/g, '');
@@ -1124,37 +1132,33 @@ function isYahooFundQuote(quote?: Quote | null): boolean {
 async function requestTeleborsaQuote(symbol: string): Promise<Quote | null> {
   if (!looksLikeTeleborsaFundCandidate(symbol)) return null;
   const normalized = normalizeLookupSymbol(symbol).replace(/[^A-Z0-9]/g, '');
-  const res = await fetch(`${TMF}/quote/${encodeURIComponent(normalized)}`);
-  if (!res.ok) return null;
-  return res.json();
+  return fetchPublicJson<Quote>(`${TMF}/quote/${encodeURIComponent(normalized)}`, { cacheMs: 60_000 }).catch(() => null);
 }
 
 function fetchTeleborsaQuote(symbol: string): Promise<Quote | null> {
   const normalized = normalizeLookupSymbol(symbol).replace(/[^A-Z0-9]/g, '');
   if (!looksLikeTeleborsaFundCandidate(normalized)) return Promise.resolve(null);
   const cached = teleborsaQuoteCache.get(normalized);
-  if (cached) return cached;
+  if (cached && cached.expiresAt > Date.now()) return cached.promise;
 
   const request = requestTeleborsaQuote(normalized).catch(() => null);
-  teleborsaQuoteCache.set(normalized, request);
+  teleborsaQuoteCache.set(normalized, { expiresAt: Date.now() + 60_000, promise: request });
   return request;
 }
 
 async function requestTeleborsaWorkbench(symbol: string): Promise<CompanyWorkbench | null> {
   const normalized = normalizeLookupSymbol(symbol).replace(/[^A-Z0-9]/g, '');
-  const res = await fetch(`${TMF}/workbench/${encodeURIComponent(normalized)}`);
-  if (!res.ok) return null;
-  return res.json();
+  return fetchPublicJson<CompanyWorkbench>(`${TMF}/workbench/${encodeURIComponent(normalized)}`, { cacheMs: 5 * 60_000 }).catch(() => null);
 }
 
 function fetchTeleborsaWorkbench(symbol: string): Promise<CompanyWorkbench | null> {
   const normalized = normalizeLookupSymbol(symbol).replace(/[^A-Z0-9]/g, '');
   if (!looksLikeTeleborsaFundCandidate(normalized)) return Promise.resolve(null);
   const cached = teleborsaWorkbenchCache.get(normalized);
-  if (cached) return cached;
+  if (cached && cached.expiresAt > Date.now()) return cached.promise;
 
   const request = requestTeleborsaWorkbench(normalized).catch(() => null);
-  teleborsaWorkbenchCache.set(normalized, request);
+  teleborsaWorkbenchCache.set(normalized, { expiresAt: Date.now() + 5 * 60_000, promise: request });
   return request;
 }
 
@@ -1168,7 +1172,7 @@ async function fetchTeleborsaChartRows(symbol: string): Promise<Array<{
 }>> {
   const normalized = normalizeLookupSymbol(symbol).replace(/[^A-Z0-9]/g, '');
   if (!looksLikeTeleborsaFundCandidate(normalized)) return [];
-  const res = await fetch(`${TMF}/chart/${encodeURIComponent(normalized)}`);
+  const res = await fetch(`${TMF}/chart/${encodeURIComponent(normalized)}`, { signal: AbortSignal.timeout(12_000) });
   if (!res.ok) return [];
   return res.json();
 }
@@ -1178,7 +1182,7 @@ async function searchTeleborsaFunds(query: string): Promise<SearchResult[]> {
   if (!trimmed) return [];
   if (!shouldSearchTeleborsaFunds(trimmed)) return [];
   const params = new URLSearchParams({ q: trimmed });
-  const res = await fetch(`${TMF}/search?${params}`);
+  const res = await fetch(`${TMF}/search?${params}`, { signal: AbortSignal.timeout(8_000) });
   if (!res.ok) return [];
   return res.json();
 }
@@ -1356,9 +1360,8 @@ export async function fetchQuotes(symbols: string[]): Promise<Quote[]> {
   let yahooQuotes: Quote[] = [];
 
   try {
-    const res = await fetch(`${YF}/quotes?${params}`);
-    if (!res.ok) throw new Error(`Quote fetch failed: ${res.status}`);
-    yahooQuotes = ((await res.json()) as Quote[]).map((quote) => ({
+    const payload = await fetchPublicJson<Quote[]>(`${YF}/quotes?${params}`, { cacheMs: 15_000 });
+    yahooQuotes = payload.map((quote) => ({
       ...quote,
       dataSource: 'yahoo' as const,
     }));
@@ -1561,7 +1564,7 @@ function filterChartRowsByRange<T extends { date: string }>(rows: T[], range: Ch
 
   const cutoffTs = cutoff.getTime();
   const filtered = rows.filter((row) => new Date(row.date).getTime() >= cutoffTs);
-  return filtered.length ? filtered : rows;
+  return filtered;
 }
 
 function filterChartRowsByWindow<T extends { date: string }>(
@@ -1579,19 +1582,13 @@ function filterChartRowsByWindow<T extends { date: string }>(
   const clampedEnd = requestedEnd > availableEnd ? availableEnd : requestedEnd;
   const adjusted = clampedStart !== requestedStart || clampedEnd !== requestedEnd;
 
-  let filtered = rows.filter((row) => {
+  const filtered = rows.filter((row) => {
     const date = row.date.slice(0, 10);
     return date >= clampedStart && date <= clampedEnd;
   });
 
   if (!filtered.length) {
-    filtered = rows;
-    return {
-      rows: filtered,
-      actualStart: availableStart,
-      actualEnd: availableEnd,
-      adjusted: true,
-    };
+    return { rows: [], actualStart: null, actualEnd: null, adjusted: true };
   }
 
   return {
@@ -1658,16 +1655,12 @@ function normalizeChartRows(
 
 async function fetchSummary<T>(symbol: string, modules: string[]): Promise<T> {
   const params = new URLSearchParams({ modules: modules.join(',') });
-  const res = await fetch(`${YF}/summary/${encodeURIComponent(symbol)}?${params}`);
-  if (!res.ok) throw new Error(`Summary fetch failed: ${res.status}`);
-  return res.json();
+  return fetchPublicJson<T>(`${YF}/summary/${encodeURIComponent(symbol)}?${params}`, { cacheMs: 60_000 });
 }
 
 async function fetchInsights(symbol: string, reportsCount = 5): Promise<YahooInsightsResponse | null> {
   const params = new URLSearchParams({ reportsCount: String(reportsCount) });
-  const res = await fetch(`${YF}/insights/${encodeURIComponent(symbol)}?${params}`);
-  if (!res.ok) return null;
-  return res.json();
+  return fetchPublicJson<YahooInsightsResponse>(`${YF}/insights/${encodeURIComponent(symbol)}?${params}`, { cacheMs: 5 * 60_000 }).catch(() => null);
 }
 
 async function fetchFundamentals(
@@ -1681,10 +1674,7 @@ async function fetchFundamentals(
     module,
     period1,
   });
-  const res = await fetch(`${YF}/fundamentals/${encodeURIComponent(symbol)}?${params}`);
-  if (!res.ok) throw new Error(`Fundamentals fetch failed: ${res.status}`);
-  const data = (await res.json()) as FundamentalRecord[];
-  return data;
+  return fetchPublicJson<FundamentalRecord[]>(`${YF}/fundamentals/${encodeURIComponent(symbol)}?${params}`, { cacheMs: 5 * 60_000 });
 }
 
 export async function fetchChart(
@@ -1729,6 +1719,7 @@ export async function fetchChartWindow(
         : range;
 
       return {
+        currency: teleborsaQuote.currency,
         points: normalizeChartRows(teleborsaWindow.rows, normalizedRange, false),
         requestedStart,
         requestedEnd,
@@ -1738,28 +1729,7 @@ export async function fetchChartWindow(
       };
     }
 
-    const snapshotDate = new Date().toISOString();
-    const snapshotPoint = normalizeChartRows(
-      [{
-        date: snapshotDate,
-        open: teleborsaQuote.regularMarketOpen ?? teleborsaQuote.regularMarketPrice,
-        high: teleborsaQuote.regularMarketDayHigh ?? teleborsaQuote.regularMarketPrice,
-        low: teleborsaQuote.regularMarketDayLow ?? teleborsaQuote.regularMarketPrice,
-        close: teleborsaQuote.regularMarketPrice,
-        volume: teleborsaQuote.regularMarketVolume ?? 0,
-      }],
-      range,
-      false
-    );
-
-    return {
-      points: snapshotPoint,
-      requestedStart,
-      requestedEnd,
-      actualStart: snapshotDate.slice(0, 10),
-      actualEnd: snapshotDate.slice(0, 10),
-      adjusted: Boolean(customWindow),
-    };
+    return { currency: teleborsaQuote.currency, points: [], requestedStart, requestedEnd, actualStart: null, actualEnd: null, adjusted: false };
   }
 
   const params = new URLSearchParams({ interval });
@@ -1769,9 +1739,7 @@ export async function fetchChartWindow(
   } else {
     params.set('range', range);
   }
-  const res = await fetch(`${YF}/chart/${encodeURIComponent(symbol)}?${params}`);
-  if (!res.ok) throw new Error(`Chart fetch failed: ${res.status}`);
-  const data = await res.json();
+  const data = await fetchPublicJson<{ meta?: { currency?: string }; quotes?: Array<{ date: string; open: number | null; high: number | null; low: number | null; close: number | null; volume: number | null }> }>(`${YF}/chart/${encodeURIComponent(symbol)}?${params}`, { cacheMs: 30_000 });
 
   const quotes: Array<{
     date: string;
@@ -1782,27 +1750,6 @@ export async function fetchChartWindow(
     volume: number | null;
   }> = data.quotes ?? [];
 
-  if (customWindow && quotes.length === 0) {
-    const fallbackRes = await fetch(`${YF}/chart/${encodeURIComponent(symbol)}?${new URLSearchParams({ range: 'max', interval })}`);
-    if (!fallbackRes.ok) throw new Error(`Chart fetch failed: ${fallbackRes.status}`);
-    const fallbackData = await fallbackRes.json();
-    const fallbackQuotes: typeof quotes = fallbackData.quotes ?? [];
-    const fallbackStart = fallbackQuotes[0]?.date?.slice(0, 10) ?? null;
-    const fallbackEnd = fallbackQuotes[fallbackQuotes.length - 1]?.date?.slice(0, 10) ?? null;
-    const fallbackRange = fallbackStart && fallbackEnd
-      ? inferChartRangeFromWindow(fallbackStart, fallbackEnd)
-      : range;
-
-    return {
-      points: normalizeChartRows(fallbackQuotes, fallbackRange, true),
-      requestedStart,
-      requestedEnd,
-      actualStart: fallbackStart,
-      actualEnd: fallbackEnd,
-      adjusted: true,
-    };
-  }
-
   const actualStart = quotes[0]?.date?.slice(0, 10) ?? null;
   const actualEnd = quotes[quotes.length - 1]?.date?.slice(0, 10) ?? null;
   const normalizedRange = customWindow && actualStart && actualEnd
@@ -1810,6 +1757,7 @@ export async function fetchChartWindow(
     : range;
 
   return {
+    currency: data.meta?.currency,
     points: normalizeChartRows(quotes, normalizedRange, true),
     requestedStart,
     requestedEnd,
@@ -1840,9 +1788,7 @@ export async function fetchNews(query = '', count = 25, signal?: AbortSignal): P
     newsCount: String(count),
   });
 
-  const res = await fetch(`${YF}/search?${params}`, { signal });
-  if (!res.ok) return [];
-  const data = await res.json();
+  const data = await fetchPublicJson<{ news?: any[] }>(`${YF}/search?${params}`, { signal, timeoutMs: 8_000, cacheMs: 60_000 });
 
   const news: NewsItem[] = (data.news ?? []).map(
     (item: {
@@ -1875,7 +1821,7 @@ export async function fetchNews(query = '', count = 25, signal?: AbortSignal): P
     })
   );
 
-  return news.sort((a: NewsItem, b: NewsItem) => b.publishedAt - a.publishedAt);
+  return news.filter(item => typeof item.title === 'string' && item.title.trim() && /^https?:\/\//.test(item.link) && Number.isFinite(item.publishedAt) && item.publishedAt > 0).sort((a, b) => b.publishedAt - a.publishedAt);
 }
 
 export async function fetchNewsFeed(
@@ -1884,6 +1830,12 @@ export async function fetchNewsFeed(
   count = 25,
   signal?: AbortSignal,
 ): Promise<NewsItem[]> {
+  if (topicQuery === 'geopolitics') {
+    const dataset = await fetchGeopoliticalHeadlineCandidates(24, false, signal);
+    const articles = geoFilter === 'all' ? dataset.headlines : dataset.headlines.filter(item =>
+      collectCountryCodesFromText(item.title).some(code => COUNTRY_MONITOR_BY_CODE.get(code)?.region === geoFilter));
+    return articles.slice(0, count);
+  }
   const topicQueries = buildTopicFeedQueries(topicQuery);
 
   if (geoFilter === 'all') {
@@ -1913,11 +1865,12 @@ export async function searchNewsArchive(
   query: string,
   lookbackHours = 24,
   geoFilter: NewsGeoFilterKey = 'all',
-  count = 30
+  count = 30,
+  signal?: AbortSignal,
 ): Promise<NewsItem[]> {
   const trimmedQuery = query.trim();
   if (!trimmedQuery) {
-    return fetchNewsFeed('markets', geoFilter, count);
+    return fetchNewsFeed('markets', geoFilter, count, signal);
   }
 
   const lookbackStart = Date.now() - lookbackHours * 60 * 60 * 1000;
@@ -1931,8 +1884,8 @@ export async function searchNewsArchive(
       })();
 
   const merged = queries.length === 1
-    ? await fetchNews(queries[0], requestedCount)
-    : await fetchMergedNewsForQueries(queries, Math.max(12, Math.ceil(requestedCount / queries.length) + 8));
+    ? await fetchNews(queries[0], requestedCount, signal)
+    : await fetchMergedNewsForQueries(queries, Math.max(12, Math.ceil(requestedCount / queries.length) + 8), signal);
 
   return merged
     .filter((item) => item.publishedAt >= lookbackStart)
@@ -2014,7 +1967,7 @@ export async function fetchCountryNewsCounts(
 }
 
 export async function fetchGeopoliticalRiskSnapshot(): Promise<GeopoliticalRiskSnapshot> {
-  const res = await fetch(`${GPR}/snapshot`);
+  const res = await fetch(`${GPR}/snapshot`, { signal: AbortSignal.timeout(12_000) });
   if (!res.ok) {
     const payload = (await res.json().catch(() => null)) as { error?: string } | null;
     throw new Error(payload?.error ?? `Geopolitical risk fetch failed: ${res.status}`);
@@ -2025,23 +1978,32 @@ export async function fetchGeopoliticalRiskSnapshot(): Promise<GeopoliticalRiskS
 
 export async function fetchPredictionForecasts(limit = 6): Promise<PredictionForecastSnapshot> {
   const params = new URLSearchParams({
-    limit: String(Math.max(1, Math.min(12, Math.trunc(limit) || 6))),
+    limit: String(Math.max(1, Math.min(120, Math.trunc(limit) || 6))),
   });
-  const res = await fetch(`${POLYMARKET}/forecasts?${params}`);
-  if (!res.ok) {
-    const payload = (await res.json().catch(() => null)) as { error?: string } | null;
-    throw new Error(payload?.error ?? `Prediction forecast fetch failed: ${res.status}`);
-  }
+  const payload = await fetchPublicJson<PredictionForecastSnapshot>(`${POLYMARKET}/forecasts?${params}`, { cacheMs: 60_000 });
+  if (!Array.isArray(payload.forecasts)) throw new Error('Invalid prediction-market response');
+  return payload;
+}
 
-  return res.json();
+export async function fetchPredictionPage(cursor: string | null, signal?: AbortSignal): Promise<PredictionForecastPage> {
+  const params = new URLSearchParams({ view: 'browse' });
+  if (cursor) params.set('after', cursor);
+  const page = await fetchPublicJson<PredictionForecastPage>(`${POLYMARKET}/forecasts?${params}`, { signal });
+  if (!Array.isArray(page?.forecasts) || !(page.nextCursor === null || typeof page.nextCursor === 'string')) {
+    throw new Error('Invalid prediction-market page');
+  }
+  return page;
 }
 
 export async function searchSymbols(query: string): Promise<SearchResult[]> {
   const params = new URLSearchParams({ q: query, newsCount: '0' });
-  const res = await fetch(`${YF}/search?${params}`);
-  const teleborsaResults = await searchTeleborsaFunds(query);
-  if (!res.ok) return teleborsaResults;
-  const data = await res.json();
+  const [yahoo, fundResults] = await Promise.allSettled([
+    fetchPublicJson<{quotes?: SearchResult[]}>(`${YF}/search?${params}`, { timeoutMs: 8_000, cacheMs: 30_000 }),
+    searchTeleborsaFunds(query),
+  ]);
+  const teleborsaResults = fundResults.status === 'fulfilled' ? fundResults.value : [];
+  if (yahoo.status === 'rejected' && !teleborsaResults.length) throw yahoo.reason;
+  const data = yahoo.status === 'fulfilled' ? yahoo.value : {};
 
   const yahooResults = (data.quotes ?? [])
     .filter((quoteResult: { typeDisp?: string; quoteType?: string }) =>
@@ -2052,7 +2014,7 @@ export async function searchSymbols(query: string): Promise<SearchResult[]> {
     .slice(0, 8)
     .map((quoteResult: SearchResult) => ({
       ...quoteResult,
-      dataSource: 'yahoo',
+      dataSource: 'yahoo' as const,
     }));
 
   const teleborsaSymbols = new Set(teleborsaResults.map((result) => normalizeLookupSymbol(result.symbol)));
@@ -2127,13 +2089,7 @@ export async function generateTopicThemeGuidance(args: {
 }
 
 export async function fetchConnectionStatuses(): Promise<ConnectionStatusMap> {
-  const res = await fetch(`${CONNECTIONS}/status`);
-  if (!res.ok) {
-    const payload = (await res.json().catch(() => null)) as { error?: string } | null;
-    throw new Error(payload?.error ?? `Connection status fetch failed: ${res.status}`);
-  }
-
-  return res.json();
+  return fetchPublicJson<ConnectionStatusMap>(`${CONNECTIONS}/status`, { timeoutMs: 5_000 });
 }
 
 export async function storeConnectionSecret(
@@ -2268,80 +2224,63 @@ export async function streamPanelCompanion(
 }
 
 export async function fetchSentimentSnapshot(): Promise<MarketSentimentSnapshot> {
-  const quotes = await fetchQuotes([...SENTIMENT_SYMBOLS]);
-  const quoteMap = new Map(quotes.map((quote) => [quote.symbol, quote]));
-  const getPct = (symbol: string) => quoteMap.get(symbol)?.regularMarketChangePercent;
-  const getPrice = (symbol: string) => quoteMap.get(symbol)?.regularMarketPrice;
+  return buildMarketSentimentSnapshot(await fetchQuotes([...SENTIMENT_SYMBOLS]));
+}
 
-  // Transparent scoring model:
-  // - volatility rewards lower VIX and falling implied vol
-  // - breadth rewards equal-weight and small-cap participation
-  // - credit rewards high-yield outperformance over duration/quality
-  // - leadership rewards tech/cyclical leadership over defensive havens
-  const volatilityScore = averageNumbers([
-    scaleValue(getPrice('^VIX'), 12, 32, true),
-    scaleValue(getPct('^VIX'), -4, 4, true),
-  ]);
-  const breadthScore = clampNumber(
-    50 +
-      safeNumber(getPct('SPY')) * 8 +
-      (safeNumber(getPct('IWM')) - safeNumber(getPct('SPY'))) * 14 +
-      (safeNumber(getPct('RSP')) - safeNumber(getPct('SPY'))) * 14,
-    0,
-    100
-  );
-  const creditScore = clampNumber(
-    50 +
-      safeNumber(getPct('HYG')) * 10 +
-      (safeNumber(getPct('HYG')) - safeNumber(getPct('LQD'))) * 18 -
-      safeNumber(getPct('TLT')) * 6,
-    0,
-    100
-  );
-  const leadershipScore = clampNumber(
-    50 +
-      safeNumber(getPct('QQQ')) * 10 +
-      (safeNumber(getPct('QQQ')) - safeNumber(getPct('SPY'))) * 14 -
-      safeNumber(getPct('GLD')) * 6,
-    0,
-    100
-  );
+export function buildMarketSentimentSnapshot(quotes: Quote[]): MarketSentimentSnapshot {
+  const quoteMap = new Map(quotes.map(quote => [quote.symbol, quote]));
+  const vixQuote = quoteMap.get('^VIX');
+  const vixLevel = vixQuote?.regularMarketPrice;
+  const vixMove = sentimentDailyChange(vixQuote);
+  const spy = sentimentDailyChange(quoteMap.get('SPY'));
+  const iwm = sentimentDailyChange(quoteMap.get('IWM'));
+  const rsp = sentimentDailyChange(quoteMap.get('RSP'));
+  const hyg = sentimentDailyChange(quoteMap.get('HYG'));
+  const lqd = sentimentDailyChange(quoteMap.get('LQD'));
+  const tlt = sentimentDailyChange(quoteMap.get('TLT'));
+  const qqq = sentimentDailyChange(quoteMap.get('QQQ'));
+  const gld = sentimentDailyChange(quoteMap.get('GLD'));
 
-  const pillars: MarketSentimentPillar[] = [
+  const readings: Omit<MarketSentimentPillar, 'signal' | 'quoteTime'>[] = [
     {
       key: 'volatility',
       label: 'Volatility',
-      score: volatilityScore,
-      signal: scoreSignal(volatilityScore),
-      detail: `VIX ${formatSignedNumber(getPrice('^VIX'))} | ${formatSignedPercent(getPct('^VIX'))}`,
+      score: vixLevel != null && Number.isFinite(vixLevel) && vixLevel > 0 && vixMove != null
+        ? (clampNumber((32 - vixLevel) * 5, 0, 100) + clampNumber((4 - vixMove) * 12.5, 0, 100)) / 2
+        : null,
+      detail: `VIX ${formatSignedNumber(vixLevel)} · ${formatSignedPercent(vixMove)}`,
       symbols: ['^VIX'],
     },
     {
       key: 'breadth',
       label: 'Breadth',
-      score: breadthScore,
-      signal: scoreSignal(breadthScore),
-      detail: `IWM-SPY ${formatSpread(getPct('IWM'), getPct('SPY'))} | RSP-SPY ${formatSpread(getPct('RSP'), getPct('SPY'))}`,
+      score: spy != null && iwm != null && rsp != null
+        ? clampNumber(50 + spy * 8 + (iwm - spy) * 14 + (rsp - spy) * 14, 0, 100) : null,
+      detail: `IWM–SPY ${formatSpread(iwm, spy)} · RSP–SPY ${formatSpread(rsp, spy)}`,
       symbols: ['SPY', 'IWM', 'RSP'],
     },
     {
       key: 'credit',
       label: 'Credit',
-      score: creditScore,
-      signal: scoreSignal(creditScore),
-      detail: `HYG-LQD ${formatSpread(getPct('HYG'), getPct('LQD'))} | TLT ${formatSignedPercent(getPct('TLT'))}`,
+      score: hyg != null && lqd != null && tlt != null
+        ? clampNumber(50 + hyg * 10 + (hyg - lqd) * 18 - tlt * 6, 0, 100) : null,
+      detail: `HYG–LQD ${formatSpread(hyg, lqd)} · TLT ${formatSignedPercent(tlt)}`,
       symbols: ['HYG', 'LQD', 'TLT'],
     },
     {
       key: 'leadership',
       label: 'Leadership',
-      score: leadershipScore,
-      signal: scoreSignal(leadershipScore),
-      detail: `QQQ-SPY ${formatSpread(getPct('QQQ'), getPct('SPY'))} | GLD ${formatSignedPercent(getPct('GLD'))}`,
+      score: qqq != null && spy != null && gld != null
+        ? clampNumber(50 + qqq * 10 + (qqq - spy) * 14 - gld * 6, 0, 100) : null,
+      detail: `QQQ ${formatSignedPercent(qqq)} · QQQ–SPY ${formatSpread(qqq, spy)} · GLD ${formatSignedPercent(gld)}`,
       symbols: ['QQQ', 'SPY', 'GLD'],
     },
   ];
-
+  const pillars = readings.map(reading => {
+    const times = reading.symbols.map(symbol => sentimentQuoteTime(quoteMap.get(symbol)?.regularMarketTime));
+    const quoteTime = times.every((t): t is number => t != null) ? Math.min(...times) : null;
+    return { ...reading, quoteTime, signal: scoreSignal(reading.score) };
+  });
   const scores = pillars.map((pillar) => pillar.score).filter((score): score is number => score != null);
   const composite = scores.length ? parseFloat((scores.reduce((acc, score) => acc + score, 0) / scores.length).toFixed(1)) : null;
   const regime = sentimentRegime(composite);
@@ -2518,6 +2457,7 @@ export async function fetchCompanyFinancials(
     fetchFundamentals(symbol, periodType, 'balance-sheet', period1),
     fetchFundamentals(symbol, periodType, 'cash-flow', period1),
   ]);
+  if ([incomeRes, balanceRes, cashRes].every(result => result.status === 'rejected')) throw new Error('Financial statements temporarily unavailable');
 
   const incomeRecords = normalizeFundamentalRecords(incomeRes.status === 'fulfilled' ? incomeRes.value : []);
   const balanceRecords = normalizeFundamentalRecords(balanceRes.status === 'fulfilled' ? balanceRes.value : []);
@@ -2602,12 +2542,22 @@ export async function fetchMacroDashboard(countryCodes?: MacroCountryCode[]): Pr
     ? MACRO_COUNTRIES.filter((country) => countryCodes.includes(country.code))
     : MACRO_COUNTRIES;
 
+  const sourcePlacement = getMacroSourcePlacement(countryCodes);
+  const selectedCountryCode = countryCodes?.length === 1 ? countryCodes[0] : undefined;
+  const supplemental = Promise.all([
+    sourcePlacement.bls ? fetchBlsMacroData() : Promise.resolve(undefined),
+    sourcePlacement.oecdCli ? fetchOecdCliMacroData() : Promise.resolve(undefined),
+    sourcePlacement.oecdCountry && selectedCountryCode ? fetchOecdCountryMacroData(selectedCountryCode) : Promise.resolve(undefined),
+    sourcePlacement.eurostat ? fetchEurostatMacroData() : Promise.resolve(undefined),
+  ]);
+  const connections = await fetchConnectionStatuses().catch(() => null);
+  if (connections?.fred === false) configError = 'FRED is not configured. Free supplemental sources remain available.';
   const countries = await Promise.all(
     requestedCountries.map(async (country): Promise<MacroCountrySnapshot> => {
       const entries = await Promise.all(
         (Object.keys(MACRO_METRICS) as MacroMetricKey[]).map(async (metricKey) => {
           try {
-            const snapshot = await fetchMacroMetric(country.code, metricKey);
+            const snapshot = connections?.fred === false ? null : await fetchMacroMetric(country.code, metricKey, Boolean(selectedCountryCode));
             return [metricKey, snapshot] as const;
           } catch (error) {
             const fredError = getFredErrorMessage(error);
@@ -2627,18 +2577,9 @@ export async function fetchMacroDashboard(countryCodes?: MacroCountryCode[]): Pr
     })
   );
 
-  const hasAnyMetricData = countries.some((country) =>
-    (Object.keys(MACRO_METRICS) as MacroMetricKey[]).some((metricKey) => Boolean(country.values[metricKey]))
-  );
 
-  const sourcePlacement = getMacroSourcePlacement(countryCodes);
-  const selectedCountryCode = countryCodes?.length === 1 ? countryCodes[0] : undefined;
-  const [bls, oecd, oecdCountry, eurostat] = await Promise.all([
-    sourcePlacement.bls ? fetchBlsMacroData() : Promise.resolve(undefined),
-    sourcePlacement.oecdCli ? fetchOecdCliMacroData() : Promise.resolve(undefined),
-    sourcePlacement.oecdCountry && selectedCountryCode ? fetchOecdCountryMacroData(selectedCountryCode) : Promise.resolve(undefined),
-    sourcePlacement.eurostat ? fetchEurostatMacroData() : Promise.resolve(undefined),
-  ]);
+
+  const [bls, oecd, oecdCountry, eurostat] = await supplemental;
 
   const euroArea = countries.find((country) => country.country === 'EA');
   if (euroArea && eurostat) {
@@ -2648,6 +2589,9 @@ export async function fetchMacroDashboard(countryCodes?: MacroCountryCode[]): Pr
     }
   }
 
+  const hasAnyMetricData = countries.some((country) =>
+    (Object.keys(MACRO_METRICS) as MacroMetricKey[]).some((metricKey) => Boolean(country.values[metricKey]))
+  );
   return {
     configured: !configError || hasAnyMetricData,
     error: hasAnyMetricData ? undefined : configError,
@@ -2752,7 +2696,7 @@ export async function fetchBlsMacroData(signal?: AbortSignal): Promise<BlsMacroD
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({
         seriesid: BLS_SERIES.map((series) => series.id),
-        startyear: String(year - 3),
+        startyear: String(year - 5),
         endyear: String(year),
       }),
       signal,
@@ -2805,6 +2749,7 @@ export function normalizeBlsPoint(
 ): BlsIndicator['series'][number] | null {
   const year = String(row.year ?? '');
   const period = String(row.period ?? '');
+  if (row.value == null || String(row.value).trim() === '') return null;
   const value = Number(row.value);
   const month = /^M(0[1-9]|1[0-2])$/.exec(period)?.[1];
   const quarter = /^Q(0[1-4])$/.exec(period)?.[1];
@@ -2832,7 +2777,7 @@ export function normalizeBlsSeries(definition: BlsSeriesDefinition, rows: BlsApi
     .filter((point) => definition.transformation === 'derived-yoy-percent' || Math.abs(point.value) <= definition.maxAbsValue)
     .sort((left, right) => left.date.localeCompare(right.date));
 
-  if (definition.transformation !== 'derived-yoy-percent') return raw.slice(-24);
+  if (definition.transformation !== 'derived-yoy-percent') return raw;
   const byDate = new Map(raw.map((point) => [point.date, point]));
   return raw.flatMap((point) => {
     const previous = byDate.get(priorYearDate(point.date));
@@ -2840,7 +2785,7 @@ export function normalizeBlsSeries(definition: BlsSeriesDefinition, rows: BlsApi
     const value = ((point.value / previous.value) - 1) * 100;
     if (!Number.isFinite(value) || Math.abs(value) > definition.maxAbsValue) return [];
     return [{ ...point, value }];
-  }).slice(-24);
+  });
 }
 
 function priorYearDate(date: string): string {
@@ -2848,7 +2793,10 @@ function priorYearDate(date: string): string {
   return `${Number(year) - 1}-${month}-01`;
 }
 
-function buildBlsIndicator(definition: BlsSeriesDefinition, series: BlsIndicator['series']): BlsIndicator {
+export function buildBlsIndicator(definition: BlsSeriesDefinition, raw: BlsIndicator['series']): BlsIndicator {
+  // CES publishes payrolls in thousands. Convert once, before calculating changes or charting.
+  const payroll = definition.unit === 'thousand jobs';
+  const series = payroll ? raw.map(point => ({ ...point, value: Math.round(point.value * 1000) })) : raw;
   const latest = series[series.length - 1];
   const previous = series[series.length - 2];
   return {
@@ -2857,7 +2805,7 @@ function buildBlsIndicator(definition: BlsSeriesDefinition, series: BlsIndicator
     shortLabel: definition.shortLabel,
     family: definition.family,
     frequency: definition.frequency,
-    unit: definition.unit,
+    unit: payroll ? 'jobs' : definition.unit,
     seasonalAdjustment: definition.seasonalAdjustment,
     transformation: definition.transformation,
     value: latest?.value ?? null,
@@ -2925,11 +2873,13 @@ export async function fetchEconomicCalendar(from: string, to: string): Promise<F
   return data.economicCalendar ?? [];
 }
 
-async function fetchMacroMetric(countryCode: MacroCountryCode, metricKey: MacroMetricKey): Promise<MacroMetricSnapshot | null> {
+async function fetchMacroMetric(countryCode: MacroCountryCode, metricKey: MacroMetricKey, includeHistory: boolean): Promise<MacroMetricSnapshot | null> {
   const contract = getMacroSeriesContract(countryCode, metricKey);
-  const observations = await fetchFredObservations(contract.seriesId, contract.fredUnits);
+  const historyLimits = { daily: 1320, monthly: 62, quarterly: 42, annual: 22 };
+  const limit = includeHistory ? contract.rateHistoryObservations ?? historyLimits[contract.frequency] : 12;
+  const observations = await fetchFredObservations(contract.seriesId, contract.fredUnits, limit);
   const series = observations
-    .filter((observation) => observation.value !== '.')
+    .filter(observation => observation.value != null && String(observation.value).trim() !== '' && Number.isFinite(Date.parse(observation.date)))
     .map((observation) => ({
       date: observation.date,
       value: Number(observation.value),
@@ -2954,34 +2904,25 @@ async function fetchMacroMetric(countryCode: MacroCountryCode, metricKey: MacroM
     areaScope: contract.areaScope,
     frequency: contract.frequency,
     seriesId: contract.seriesId,
-    series: series.slice(-24),
+    chartType: contract.rateHistoryObservations ? 'step' : undefined,
+    series: contract.rateHistoryObservations ? collapseRateHistory(series) : series,
   };
 }
 
-async function fetchFredObservations(seriesId: string, units?: string): Promise<Array<{ date: string; value: string }>> {
+async function fetchFredObservations(seriesId: string, units?: string, limit = 60): Promise<Array<{ date: string; value: string }>> {
   const params = new URLSearchParams({
     series_id: seriesId,
     sort_order: 'desc',
-    limit: '60',
+    limit: String(limit),
   });
   if (units) params.set('units', units);
   const data = await fetchFredJson<FredObservationsResponse>(`/series/observations?${params}`);
-  return (data.observations ?? []).reverse();
+  return [...(data.observations ?? [])].reverse();
 }
 
 async function fetchFredReleaseDates(from: string, to: string): Promise<CalendarEvent[]> {
-  const catalog = await fetchFredJson<FredReleasesResponse>('/releases?limit=1000&order_by=name&sort_order=asc');
-  const releases = catalog.releases ?? [];
-
-  const matched = US_RELEASE_TARGETS.flatMap((target) => {
-    const release = releases.find((candidate) =>
-      target.matchers.every((matcher) => matcher.test(candidate.name))
-    ) ?? releases.find((candidate) =>
-      target.matchers.some((matcher) => matcher.test(candidate.name))
-    );
-
-    return release ? [{ target, release }] : [];
-  });
+  // Official release IDs; substring matching once mislabeled Debt/GDP releases as GDP.
+  const matched = US_RELEASE_TARGETS.map(target => ({ target, release: { id: target.releaseId, name: target.releaseName } }));
 
   const dateGroups = await Promise.all(
     matched.map(async ({ target, release }) => {
@@ -3008,20 +2949,36 @@ async function fetchFredReleaseDates(from: string, to: string): Promise<Calendar
   return dateGroups.flat();
 }
 
-async function fetchFredJson<T>(pathWithQuery: string): Promise<T> {
+let fredBlockedUntil = 0;
+const fredReads = new Map<string, { expiresAt: number; request: Promise<unknown> }>();
+function fetchFredJson<T>(pathWithQuery: string): Promise<T> {
+  const cached = fredReads.get(pathWithQuery);
+  if (cached && cached.expiresAt > Date.now()) return cached.request as Promise<T>;
+  const request = fetchFredJsonUncached<T>(pathWithQuery).catch(error => {
+    fredReads.delete(pathWithQuery);
+    throw error;
+  });
+  if (fredReads.size >= 200) fredReads.delete(fredReads.keys().next().value!);
+  fredReads.set(pathWithQuery, { expiresAt: Date.now() + 5 * 60_000, request });
+  return request;
+}
+
+async function fetchFredJsonUncached<T>(pathWithQuery: string): Promise<T> {
+  if (Date.now() < fredBlockedUntil) throw new Error('FRED is cooling down after an upstream error. Cached data remains available.');
   for (let attempt = 1; attempt <= FRED_MAX_RETRIES; attempt += 1) {
     let res: Response;
 
     try {
-      res = await withFredThrottle(() => fetch(`${FRED}${pathWithQuery}`));
+      res = await withFredThrottle(() => {
+        if (Date.now() < fredBlockedUntil) throw new Error('FRED is temporarily unavailable; retry later.');
+        return fetch(`${FRED}${pathWithQuery}`, { signal: AbortSignal.timeout(8_000) });
+      });
     } catch (error) {
-      if (attempt >= FRED_MAX_RETRIES) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`FRED request failed: ${message}`);
-      }
+      if (Date.now() < fredBlockedUntil) throw error;
+      // Do not let a stalled/offline provider drain every queued country read.
+      fredBlockedUntil = Date.now() + 5_000;
+      throw new Error(`FRED request failed: ${error instanceof Error ? error.message : String(error)}`);
 
-      await wait(getFredRetryDelayMs(attempt, null));
-      continue;
     }
 
     if (res.ok) {
@@ -3032,7 +2989,12 @@ async function fetchFredJson<T>(pathWithQuery: string): Promise<T> {
     const errorMessage = formatFredErrorMessage(res.status, text);
 
     if (attempt < FRED_MAX_RETRIES && FRED_RETRYABLE_STATUS_CODES.has(res.status)) {
-      await wait(getFredRetryDelayMs(attempt, res.headers.get('retry-after')));
+      const delay = getFredRetryDelayMs(attempt, res.headers.get('retry-after'));
+      if (res.status === 429 || delay > 2_000) {
+        fredBlockedUntil = Date.now() + Math.max(delay, 30_000);
+        throw new Error(errorMessage);
+      }
+      await wait(delay);
       continue;
     }
 
@@ -3185,9 +3147,8 @@ function createGeopoliticalPipelineDebugStats(lookbackHours: number, requestedCo
     extraction: {
       aiEnabled: false,
       aiReturnedEvents: 0,
-      aiStories: 0,
-      fallbackStories: 0,
-      fallbackOnlyStories: 0,
+      gdeltReviewedStories: 0,
+      failedBatches: 0,
     },
     final: {
       clusteredStories: 0,
@@ -3207,7 +3168,11 @@ async function fetchMergedNewsForQueries(
   searchCount: number,
   signal?: AbortSignal,
 ): Promise<NewsItem[]> {
-  const newsGroups = await Promise.all(queries.map((query) => fetchNews(query, searchCount, signal)));
+  const settled = await Promise.allSettled(queries.map(query => fetchNews(query, searchCount, signal)));
+  signal?.throwIfAborted();
+  const fulfilled = settled.filter((result): result is PromiseFulfilledResult<NewsItem[]> => result.status === 'fulfilled');
+  if (!fulfilled.length) throw (settled.find(result => result.status === 'rejected') as PromiseRejectedResult)?.reason ?? new Error('News feeds unavailable');
+  const newsGroups = fulfilled.map(result => result.value);
   return Array.from(
     new Map(
       newsGroups
@@ -3259,8 +3224,8 @@ async function fetchGeopoliticalMapDataset(
         gdeltFetched: debug.fetched.gdeltHeadlines,
         gdeltMapped: debug.fetched.gdeltWithCountryCodes,
         candidateHeadlines: debug.fetched.candidateHeadlines,
-        aiStories: debug.extraction.aiStories,
-        fallbackStories: debug.extraction.fallbackStories,
+        gdeltReviewedStories: debug.extraction.gdeltReviewedStories,
+        failedBatches: debug.extraction.failedBatches,
         finalClusteredStories: debug.final.clusteredStories,
       });
     }
@@ -3278,7 +3243,7 @@ async function fetchGeopoliticalMapDataset(
 
 function buildGeopoliticalMapCacheKey(lookbackHours: number, options: GeopoliticalMapOptions = {}): string {
   return JSON.stringify({
-    pipelineVersion: 'geopolitics-events-v14-headline-only-country-attribution',
+    pipelineVersion: 'geopolitics-events-v15-ai-reviewed-only',
     lookbackHours,
     enableAI: Boolean(options.enableAI && options.model?.trim()),
     model: options.model?.trim() ?? '',
@@ -3420,24 +3385,28 @@ function computeCountrySeverityScore(stories: NewsItem[]): number | null {
 
 async function fetchGeopoliticalHeadlines(
   lookbackHours: number,
-  pipelineDebug?: GeopoliticalPipelineDebugStats
+  pipelineDebug?: GeopoliticalPipelineDebugStats,
+  signal?: AbortSignal,
+  failedSources: string[] = [],
 ): Promise<NewsItem[]> {
-  const lookbackStart = Date.now() - lookbackHours * 60 * 60 * 1000;
   const requestedCount = resolveGeopoliticalHeadlineRequestCount(lookbackHours);
   if (pipelineDebug) {
     pipelineDebug.lookbackHours = lookbackHours;
     pipelineDebug.requestedCount = requestedCount;
   }
-  const [yahooHeadlines, gdeltHeadlines] = await Promise.all([
-    fetchGeopoliticalYahooHeadlines(lookbackHours),
-    fetchGeopoliticalGdeltHeadlines(lookbackHours, pipelineDebug),
+  const feeds = await Promise.allSettled([
+    fetchGeopoliticalYahooHeadlines(lookbackHours, signal),
+    fetchGeopoliticalGdeltHeadlines(lookbackHours, pipelineDebug, signal),
   ]);
+  signal?.throwIfAborted();
+  feeds.forEach((result, index) => { if (result.status === 'rejected') failedSources.push(index === 0 ? 'Yahoo Finance' : 'GDELT'); });
+  if (feeds.every(result => result.status === 'rejected')) throw new Error('News sources are temporarily unavailable. Retry shortly.');
+  const [yahooHeadlines, gdeltHeadlines] = feeds.map(result => result.status === 'fulfilled' ? result.value : []);
   if (pipelineDebug) {
     pipelineDebug.fetched.yahooHeadlines = yahooHeadlines.length;
   }
 
-  const deduped = dedupeGeopoliticalCandidateStories([...gdeltHeadlines, ...yahooHeadlines]);
-  const filtered = deduped.filter((item) => item.publishedAt >= lookbackStart);
+  const filtered = selectEventCandidates([...gdeltHeadlines, ...yahooHeadlines], lookbackHours);
   if (pipelineDebug) {
     pipelineDebug.fetched.candidateHeadlines = filtered.length;
   }
@@ -3447,11 +3416,13 @@ async function fetchGeopoliticalHeadlines(
 
 export async function fetchGeopoliticalHeadlineCandidates(
   lookbackHours: number,
-  debugMode = false
+  debugMode = false,
+  signal?: AbortSignal,
 ): Promise<GeopoliticalHeadlineCandidateDataset> {
   const requestedCount = resolveGeopoliticalHeadlineRequestCount(lookbackHours);
   const pipelineDebug = createGeopoliticalPipelineDebugStats(lookbackHours, requestedCount);
-  const headlines = await fetchGeopoliticalHeadlines(lookbackHours, pipelineDebug);
+  const failedSources: string[] = [];
+  const headlines = await fetchGeopoliticalHeadlines(lookbackHours, pipelineDebug, signal, failedSources);
   const source = formatGeopoliticalFeedSourceLabel(headlines);
   const queryLabel = buildTopicFeedQueries('geopolitics').join(' | ');
 
@@ -3479,31 +3450,54 @@ export async function fetchGeopoliticalHeadlineCandidates(
     source,
     queryLabel,
     requestedCount,
+    failedSources,
+    fetchedAt: Date.now(),
   };
 }
 
-export function rankGeopoliticalHeadlineCandidates(headlines: NewsItem[]): NewsItem[] {
-  if (!headlines.length) return [];
-
-  const latestAt = Math.max(...headlines.map((headline) => headline.publishedAt || 0));
-  const oldestAt = Math.min(...headlines.map((headline) => headline.publishedAt || latestAt));
-  const timeRange = Math.max(1, latestAt - oldestAt);
-
-  return [...headlines].sort((left, right) => {
-    const rightScore = scoreGeopoliticalHeadlineCandidate(right, latestAt, timeRange);
-    const leftScore = scoreGeopoliticalHeadlineCandidate(left, latestAt, timeRange);
-    if (rightScore !== leftScore) return rightScore - leftScore;
-    return right.publishedAt - left.publishedAt;
+export function selectEventCandidates(headlines: NewsItem[], hours: number, now = Date.now()): NewsItem[] {
+  const valid = headlines.flatMap(h => {
+    if (!h.title.trim() || h.publishedAt < now - hours * 3600000 || !Number.isFinite(h.publishedAt) || h.publishedAt > now) return [];
+    const link = canonicalNewsLink(h.link);
+    return link ? [{ ...h, link, severityScore: undefined }] : [];
   });
+  return dedupeGeopoliticalCandidateStories(valid).slice(0, resolveGeopoliticalHeadlineRequestCount(hours));
 }
 
-function scoreGeopoliticalHeadlineCandidate(headline: NewsItem, latestAt: number, timeRange: number): number {
-  const recencyScore = ((headline.publishedAt || 0) - (latestAt - timeRange)) / timeRange;
-  const severityScore = normalizeGeopoliticalSeverityScore(headline.severityScore ?? estimateHeadlineSeverityScore(headline.title));
-  const explicitCountryScore = collectCountryCodesFromText(headline.title).length > 0 ? 1 : 0;
-  const feedDiversityScore = headline.feedSource === 'gdelt' ? 0.2 : 0;
+function cachedHeadlineReviews(headlines: NewsItem[], options: GeopoliticalMapOptions) {
+  const assessments: GeopoliticalHeadlineAssessment[] = [];
+  const missingHeadlines: NewsItem[] = [];
+  for (const headline of headlines) {
+    const cached = readGeopoliticalHeadlineAssessmentCacheValue(headline, options);
+    if (!cached) missingHeadlines.push(headline);
+    else if (cached.accepted) assessments.push({ ...cached, link: headline.link });
+  }
+  return { assessments, missingHeadlines };
+}
 
-  return (recencyScore * 50) + (severityScore * 5) + (explicitCountryScore * 18) + feedDiversityScore;
+export function cachedGeopoliticalEvents(headlines: NewsItem[], options: GeopoliticalMapOptions): NewsItem[] {
+  if (!options.enableAI || !options.model?.trim()) return [];
+  return applyHeadlineAssessments(headlines, cachedHeadlineReviews(headlines, options).assessments);
+}
+
+export async function reviewGeopoliticalEvents(headlines: NewsItem[], hours: number, options: GeopoliticalMapOptions) {
+  const stories: NewsItem[] = [];
+  const batches = options.enableAI && options.model?.trim() ? chunkArray(headlines, 40) : [];
+  let failed = 0;
+  for (let i = 0; i < batches.length; i += 2) {
+    options.signal?.throwIfAborted();
+    const results = await Promise.all(batches.slice(i, i + 2).map(async batch => {
+      try {
+        return await classifyGeopoliticalHeadlineBatch(batch, hours, options);
+      } catch {
+        options.signal?.throwIfAborted();
+        failed++;
+        return cachedGeopoliticalEvents(batch, options);
+      }
+    }));
+    stories.push(...results.flat());
+  }
+  return { stories, failed, batches: batches.length };
 }
 
 export async function classifyGeopoliticalHeadlineBatch(
@@ -3512,29 +3506,7 @@ export async function classifyGeopoliticalHeadlineBatch(
   options: GeopoliticalMapOptions
 ): Promise<NewsItem[]> {
   if (!headlines.length || !options.enableAI || !options.model?.trim()) return [];
-
-  const cachedAssessments: GeopoliticalHeadlineAssessment[] = [];
-  const missingHeadlines: NewsItem[] = [];
-
-  headlines.forEach((headline) => {
-    const cached = readGeopoliticalHeadlineAssessmentCacheValue(headline, options);
-    if (!cached) {
-      missingHeadlines.push(headline);
-      return;
-    }
-
-    if (cached.accepted) {
-      cachedAssessments.push({
-        link: headline.link,
-        locationLabel: cached.locationLabel,
-        countryCodes: cached.countryCodes,
-        severityScore: cached.severityScore,
-        eventKey: cached.eventKey,
-        eventLabel: cached.eventLabel,
-      });
-    }
-  });
-
+  const { assessments: cachedAssessments, missingHeadlines } = cachedHeadlineReviews(headlines, options);
   const freshAssessments = missingHeadlines.length
     ? await extractGeopoliticalHeadlineAssessments(missingHeadlines, lookbackHours, options)
     : [];
@@ -3557,31 +3529,29 @@ export async function classifyGeopoliticalHeadlineBatch(
     );
   });
 
-  return applyHeadlineAssessments(headlines, [...cachedAssessments, ...freshAssessments], { skipLexicalGate: true });
+  return applyHeadlineAssessments(headlines, [...cachedAssessments, ...freshAssessments]);
 }
 
-async function fetchGeopoliticalYahooHeadlines(lookbackHours: number): Promise<NewsItem[]> {
+export async function fetchGeopoliticalYahooHeadlines(lookbackHours: number, signal?: AbortSignal): Promise<NewsItem[]> {
   const lookbackStart = Date.now() - lookbackHours * 60 * 60 * 1000;
   const perQueryCount = resolveGeopoliticalHeadlinePerQueryCount(lookbackHours);
-  const merged = await fetchMergedNewsForQueries([...GEOPOLITICAL_TOPIC_QUERIES], perQueryCount);
+  const merged = await fetchMergedNewsForQueries([...GEOPOLITICAL_TOPIC_QUERIES], perQueryCount, signal);
 
   return merged.filter((item) => item.publishedAt >= lookbackStart);
 }
 
-async function fetchGeopoliticalGdeltHeadlines(
+export async function fetchGeopoliticalGdeltHeadlines(
   lookbackHours: number,
-  pipelineDebug?: GeopoliticalPipelineDebugStats
+  pipelineDebug?: GeopoliticalPipelineDebugStats,
+  signal?: AbortSignal,
 ): Promise<NewsItem[]> {
   const limit = resolveGdeltGeopoliticalHeadlineRequestCount(lookbackHours);
   const params = new URLSearchParams({
     timeframeHours: String(Math.max(1, Math.min(720, Math.trunc(lookbackHours) || 24))),
     limit: String(limit),
   });
-  const res = await fetch(`${GDELT}/geopolitics?${params}`);
-  if (!res.ok) return [];
-
-  const payload = (await res.json().catch(() => [])) as GdeltGeopoliticsHeadline[] | null;
-  if (!Array.isArray(payload)) return [];
+  const payload = await fetchPublicJson<GdeltGeopoliticsHeadline[]>(`${GDELT}/geopolitics?${params}`, { signal, timeoutMs: 16_000, cacheMs: 60_000 });
+  if (!Array.isArray(payload)) throw new Error('Invalid GDELT headline response');
   if (pipelineDebug) {
     pipelineDebug.fetched.gdeltHeadlines = payload.length;
   }
@@ -3616,12 +3586,13 @@ async function fetchGeopoliticalGdeltHeadlines(
         link,
         publishedAt,
         feedSource: 'gdelt',
+        gdeltCollection: item.collection,
+        gdeltCached: item.cached,
         sourceCountry: sourceCountry || undefined,
         sourceCountryCode: sourceCountryInfo.sourceCountryCode ?? undefined,
         sourceCountryLabel: sourceCountryInfo.sourceCountryLabel ?? undefined,
         locationLabel,
         countryCodes: countryCodes.length ? countryCodes : undefined,
-        severityScore: estimateHeadlineSeverityScore(title),
         eventLabel: title,
       }];
     })
@@ -3659,54 +3630,16 @@ async function annotateGeopoliticalHeadlines(
   pipelineDebug?: GeopoliticalPipelineDebugStats
 ): Promise<{ stories: NewsItem[]; source: string }> {
   const feedSource = formatGeopoliticalFeedSourceLabel(headlines);
+  if (!options.enableAI || !options.model?.trim()) return { stories: [], source: feedSource };
+  const review = await reviewGeopoliticalEvents(headlines, lookbackHours, options);
   if (pipelineDebug) {
-    pipelineDebug.extraction.aiEnabled = Boolean(options.enableAI && options.model?.trim());
+    pipelineDebug.extraction.aiEnabled = true;
+    pipelineDebug.extraction.aiReturnedEvents = review.stories.length;
+    pipelineDebug.extraction.gdeltReviewedStories = review.stories.filter(story => story.feedSource === 'gdelt').length;
+    pipelineDebug.extraction.failedBatches = review.failed;
   }
-  if (!headlines.length) {
-    return {
-      stories: [],
-      source: `${feedSource} · AI headline extraction`,
-    };
-  }
-
-  if (options.enableAI && options.model?.trim()) {
-    try {
-      const assessments = await extractGeopoliticalHeadlineAssessments(headlines, lookbackHours, options);
-      const aiStories = applyHeadlineAssessments(headlines, assessments, { skipLexicalGate: true });
-      const aiMatchedLinks = new Set(aiStories.map((story) => canonicalizeStoryLink(story.link)));
-      const fallbackStories = applyHeadlineAssessments(headlines, fallbackHeadlineAssessments(headlines));
-      const fallbackOnlyStories = fallbackStories.filter((story) => !aiMatchedLinks.has(canonicalizeStoryLink(story.link)));
-      // Keep dedupe strict by link before clustering so increased recall does not inflate severity counts.
-      const stories = dedupeStories([...aiStories, ...fallbackOnlyStories]);
-      if (pipelineDebug) {
-        pipelineDebug.extraction.aiReturnedEvents = assessments.length;
-        pipelineDebug.extraction.aiStories = aiStories.filter((story) => story.feedSource === 'gdelt').length;
-        pipelineDebug.extraction.fallbackStories = fallbackStories.filter((story) => story.feedSource === 'gdelt').length;
-        pipelineDebug.extraction.fallbackOnlyStories = fallbackOnlyStories.filter((story) => story.feedSource === 'gdelt').length;
-      }
-      return {
-        stories,
-        source: fallbackOnlyStories.length > 0
-          ? `${feedSource} · AI extraction + fallback matcher`
-          : `${feedSource} · AI headline extraction`,
-      };
-    } catch (error) {
-      console.warn('[geopolitics-map] AI extraction failed, falling back to conservative headline matching.', error);
-    }
-  }
-
-  const fallbackStories = applyHeadlineAssessments(headlines, fallbackHeadlineAssessments(headlines));
-  if (pipelineDebug) {
-    pipelineDebug.extraction.aiReturnedEvents = 0;
-    pipelineDebug.extraction.aiStories = 0;
-    pipelineDebug.extraction.fallbackStories = fallbackStories.filter((story) => story.feedSource === 'gdelt').length;
-    pipelineDebug.extraction.fallbackOnlyStories = pipelineDebug.extraction.fallbackStories;
-  }
-
-  return {
-    stories: fallbackStories,
-    source: `${feedSource} · headline matcher`,
-  };
+  if (review.failed && review.failed === review.batches && !review.stories.length) throw new Error('OpenAI event review is unavailable.');
+  return { stories: review.stories, source: feedSource + (review.failed ? ' · partial OpenAI review' : ' · OpenAI event review') };
 }
 
 const GEOPOLITICAL_COUNTRY_SUMMARY_CHUNK_SIZE = 8;
@@ -3794,6 +3727,7 @@ async function extractGeopoliticalCountrySummaries(
   recordOpenAIDebugPayload('geopolitical-country-summaries', requestBody);
 
   const res = await fetch(`${OPENAI}/geopolitical-country-summaries`, {
+    signal: options.signal,
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(requestBody),
@@ -3830,10 +3764,11 @@ function applyCountryHotspotSummaries(
     const assessment = assessmentByCountryCode.get(country.countryCode.toUpperCase());
     const summary = typeof assessment?.summary === 'string' ? assessment.summary.trim() : '';
 
+    const cited = resolveCountrySummarySources(dedupedStories, assessment?.sourceLinks);
     return {
       ...country,
-      hotspotSummary: summary || undefined,
-      hotspotSummarySources: summary ? resolveCountrySummarySources(dedupedStories, assessment?.sourceLinks) : undefined,
+      hotspotSummary: cited.length ? summary || undefined : undefined,
+      hotspotSummarySources: cited,
     };
   });
 }
@@ -3866,7 +3801,8 @@ export async function fetchGeopoliticalCountrySummaries(
   countries: CountryNewsCount[],
   lookbackHours: number,
   model: string,
-  onChunkComplete?: (summariesByCountryCode: Record<string, GeopoliticalCountrySummaryRecord>) => void
+  onChunkComplete?: (summariesByCountryCode: Record<string, GeopoliticalCountrySummaryRecord>) => void,
+  signal?: AbortSignal,
 ): Promise<GeopoliticalCountrySummaryFetchResult> {
   const pendingCountries = countries.filter((country) => {
     if (country.count <= 0 || (country.stories ?? []).length === 0) return false;
@@ -3888,7 +3824,7 @@ export async function fetchGeopoliticalCountrySummaries(
   await runGeopoliticalCountrySummaryChunks(
     chunks,
     lookbackHours,
-    { model },
+    { model, signal },
     (assessments) => {
       const chunkSummaries = buildGeopoliticalCountrySummaryRecords(pendingCountries, lookbackHours, model, assessments);
       Object.assign(summariesByCountryCode, chunkSummaries);
@@ -3934,15 +3870,17 @@ function buildGeopoliticalCountrySummaryRecords(
       : [];
     const dedupedStories = dedupeStories(country.stories ?? []);
     const cacheKey = buildGeopoliticalCountrySummaryCacheKey(country, lookbackHours, model);
+    const cited = resolveCountrySummarySources(dedupedStories, sourceLinks);
+    if (!cited.length) return;
     const cacheValue: GeopoliticalCountrySummaryCacheValue = {
       hotspotSummary: summary,
-      sourceLinks,
+      sourceLinks: cited.map(item => item.link),
     };
     writeGeopoliticalCountrySummaryCacheValue(cacheKey, cacheValue);
 
     records[countryCode] = {
       ...cacheValue,
-      hotspotSummarySources: resolveCountrySummarySources(dedupedStories, sourceLinks),
+      hotspotSummarySources: cited,
     };
   });
 
@@ -3981,10 +3919,7 @@ function resolveCountrySummarySources(stories: NewsItem[], sourceLinks?: string[
       })
     : [];
 
-  const selectedSources = dedupeStories(mappedFromLinks).slice(0, GEOPOLITICAL_COUNTRY_SUMMARY_DISPLAY_SOURCE_LIMIT);
-  if (selectedSources.length > 0) return selectedSources;
-
-  return dedupedStories.slice(0, GEOPOLITICAL_COUNTRY_SUMMARY_DISPLAY_SOURCE_LIMIT);
+  return dedupeStories(mappedFromLinks).slice(0, GEOPOLITICAL_COUNTRY_SUMMARY_DISPLAY_SOURCE_LIMIT);
 }
 
 async function extractGeopoliticalHeadlineAssessments(
@@ -4013,6 +3948,7 @@ async function extractGeopoliticalHeadlineAssessments(
   recordOpenAIDebugPayload('geopolitical-events', requestBody);
 
   const res = await fetch(`${OPENAI}/geopolitical-events`, {
+    signal: options.signal,
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(requestBody),
@@ -4023,7 +3959,7 @@ async function extractGeopoliticalHeadlineAssessments(
     throw new Error(payload?.error ?? `Geopolitical headline extraction failed: ${res.status}`);
   }
 
-  if (!Array.isArray(payload?.events)) return [];
+  if (!Array.isArray(payload?.events)) throw new Error('Event analysis returned an incomplete response');
 
   return payload.events.flatMap((event): GeopoliticalHeadlineAssessment[] => {
     const headlineId = typeof event.link === 'string' ? event.link.trim() : '';
@@ -4039,8 +3975,7 @@ async function extractGeopoliticalHeadlineAssessments(
 
 function applyHeadlineAssessments(
   headlines: NewsItem[],
-  assessments: GeopoliticalHeadlineAssessment[],
-  options: { skipLexicalGate?: boolean } = {}
+  assessments: GeopoliticalHeadlineAssessment[]
 ): NewsItem[] {
   const assessmentByLink = new Map(
     assessments
@@ -4051,13 +3986,7 @@ function applyHeadlineAssessments(
   return headlines.flatMap((headline): NewsItem[] => {
     const assessment = assessmentByLink.get(canonicalizeStoryLink(headline.link));
     if (!assessment) return [];
-    if (!options.skipLexicalGate && isClearlyNonGeopoliticalHeadline(headline.title)) return [];
-
-    const countryCodes = resolveHeadlineCountryCodes({
-      ...headline,
-      countryCodes: assessment.countryCodes,
-      locationLabel: assessment.locationLabel,
-    });
+    const countryCodes = normalizeAssessmentCountryCodes(assessment.countryCodes, assessment.locationLabel);
     const severityScore = normalizeGeopoliticalSeverityScore(assessment.severityScore);
     if (!countryCodes.length || severityScore <= 0) return [];
 
@@ -4071,96 +4000,6 @@ function applyHeadlineAssessments(
     }];
   });
 }
-
-const GEOPOLITICAL_EXCLUSION_TERMS = [
-  'opinion',
-  'analysis',
-  'analyst',
-  'preview',
-  'commentary',
-  'interview',
-  'what to know',
-  'how to watch',
-  'report says',
-  'research note',
-  'column',
-  'editorial',
-  'live updates',
-  'live blog',
-  'ticker',
-  'morning news',
-  'week ahead',
-  'what we know',
-  'explainer',
-  'podcast',
-] as const;
-
-const GEOPOLITICAL_IMPACT_ONLY_TERMS = [
-  'oil',
-  'crude',
-  'gas prices',
-  'stocks',
-  'shares',
-  'bonds',
-  'investors',
-  'markets',
-  'earnings',
-  'company',
-  'companies',
-  'business',
-  'airline',
-  'airlines',
-  'freight',
-  'shipping disruption',
-  'supply chain disruption',
-  'travel advisory',
-  'flight',
-  'flights',
-  'outlook',
-  'forecast',
-] as const;
-
-const GEOPOLITICAL_HARD_EVENT_TERMS = [
-  'attack',
-  'airstrike',
-  'air strike',
-  'missile',
-  'drone',
-  'raid',
-  'troops',
-  'deployment',
-  'sanction',
-  'ceasefire',
-  'truce',
-  'protest',
-  'civil unrest',
-  'clash',
-  'war',
-  'invasion',
-  'military',
-  'coup',
-  'detain',
-  'detention',
-  'arrest',
-  'embargo',
-  'blockade',
-  'martial law',
-  'state of emergency',
-  'shell',
-  'bombard',
-  'hostage',
-  'expel',
-  'cross border',
-  'border clash',
-  'territorial dispute',
-  'border dispute',
-  'nuclear threat',
-  'nuclear site',
-  'nuclear facility',
-] as const;
-
-const GEOPOLITICAL_DIPLOMACY_ONLY_TERMS = ['talks', 'summit', 'meeting', 'warning', 'warns', 'comment', 'comments', 'urges', 'urge', 'calls for'] as const;
-const GEOPOLITICAL_LABOR_STRIKE_TERMS = ['worker', 'workers', 'union', 'dockworker', 'dockworkers', 'labor', 'port strike'] as const;
 
 function normalizeAssessmentCountryCodes(countryCodes?: string[], locationLabel?: string): string[] {
   const normalizedCodes = Array.from(
@@ -4186,17 +4025,6 @@ function normalizeAssessmentCountryCodes(countryCodes?: string[], locationLabel?
   }
 
   return [];
-}
-
-function resolveHeadlineCountryCodes(
-  headline: Pick<NewsItem, 'countryCodes' | 'locationLabel' | 'title'>
-): string[] {
-  const assessmentCountryCodes = normalizeAssessmentCountryCodes(headline.countryCodes, headline.locationLabel);
-  if (assessmentCountryCodes.length) {
-    return assessmentCountryCodes;
-  }
-
-  return collectCountryCodesFromText(headline.title);
 }
 
 function resolveSourceCountryMetadata(sourceCountry: string): {
@@ -4241,92 +4069,6 @@ function resolveCountryCodesFromSourceCountry(sourceCountry: string): string[] {
   if (directMatch) return [directMatch.countryCode];
 
   return collectCountryCodesFromText(sourceCountry);
-}
-
-function fallbackHeadlineAssessments(headlines: NewsItem[]): GeopoliticalHeadlineAssessment[] {
-  return headlines.flatMap((headline): GeopoliticalHeadlineAssessment[] => {
-    const title = headline.title.trim();
-    if (!title || !isLikelyGeopoliticalEventHeadline(title)) return [];
-
-    const fallbackCountryCodes = resolveHeadlineCountryCodes(headline);
-    if (!fallbackCountryCodes.length) return [];
-
-    const eventLabel = headline.eventLabel?.trim() || title;
-    const severityScore = normalizeGeopoliticalSeverityScore(headline.severityScore ?? estimateHeadlineSeverityScore(title));
-    if (severityScore <= 0) return [];
-
-    const resolvedLocationLabel = fallbackCountryCodes
-      .map((code) => COUNTRY_MONITOR_BY_CODE.get(code)?.label ?? code)
-      .join(', ');
-    if (!resolvedLocationLabel) return [];
-
-    return [{
-      link: headline.link,
-      locationLabel: resolvedLocationLabel,
-      countryCodes: fallbackCountryCodes,
-      severityScore,
-      eventKey: buildFallbackGeopoliticalEventKey({
-        ...headline,
-        title,
-        eventLabel,
-        locationLabel: resolvedLocationLabel,
-        countryCodes: fallbackCountryCodes,
-      }),
-      eventLabel,
-    }];
-  });
-}
-
-function isLikelyGeopoliticalEventHeadline(title: string): boolean {
-  const normalized = normalizeHeadlineForMatching(title);
-  if (GEOPOLITICAL_EXCLUSION_TERMS.some((term) => normalized.includes(term))) {
-    return false;
-  }
-
-  const hasHardEventTerm = GEOPOLITICAL_HARD_EVENT_TERMS.some((term) => normalized.includes(term));
-  const isLaborStrike = normalized.includes('strike') && GEOPOLITICAL_LABOR_STRIKE_TERMS.some((term) => normalized.includes(term));
-  if (isLaborStrike && !normalized.includes('missile strike') && !normalized.includes('air strike') && !normalized.includes('airstrike')) {
-    return false;
-  }
-  if (GEOPOLITICAL_IMPACT_ONLY_TERMS.some((term) => normalized.includes(term)) && !hasHardEventTerm) {
-    return false;
-  }
-  if (GEOPOLITICAL_DIPLOMACY_ONLY_TERMS.some((term) => normalized.includes(term)) && !hasHardEventTerm) {
-    return false;
-  }
-
-  return hasHardEventTerm;
-}
-
-function isClearlyNonGeopoliticalHeadline(title: string): boolean {
-  const normalized = normalizeHeadlineForMatching(title);
-  if (!normalized) return true;
-  if (GEOPOLITICAL_EXCLUSION_TERMS.some((term) => normalized.includes(term))) return true;
-
-  const hasHardEventTerm = GEOPOLITICAL_HARD_EVENT_TERMS.some((term) => normalized.includes(term));
-  const isLaborStrike = normalized.includes('strike') && GEOPOLITICAL_LABOR_STRIKE_TERMS.some((term) => normalized.includes(term));
-  if (isLaborStrike && !normalized.includes('missile strike') && !normalized.includes('air strike') && !normalized.includes('airstrike')) {
-    return true;
-  }
-  if (GEOPOLITICAL_IMPACT_ONLY_TERMS.some((term) => normalized.includes(term)) && !hasHardEventTerm) {
-    return true;
-  }
-  if (GEOPOLITICAL_DIPLOMACY_ONLY_TERMS.some((term) => normalized.includes(term)) && !hasHardEventTerm) {
-    return true;
-  }
-
-  return false;
-}
-
-function estimateHeadlineSeverityScore(title: string): number {
-  const normalized = normalizeHeadlineForMatching(title);
-  const highImpactTerms = ['war', 'invasion', 'airstrike', 'missile', 'drone', 'attack', 'coup', 'nuclear', 'blockade'];
-  if (highImpactTerms.some((term) => normalized.includes(term))) return 8;
-
-  const elevatedTerms = ['sanction', 'troops', 'border', 'ceasefire', 'raid', 'clash', 'protest', 'tariff', 'embargo', 'strike'];
-  if (elevatedTerms.some((term) => normalized.includes(term))) return 5;
-
-  return 2;
 }
 
 function normalizeGeopoliticalSeverityScore(value: number | string | null | undefined): number {
@@ -4509,21 +4251,15 @@ function buildGeopoliticalHeadlineAssessmentCacheKey(
   });
 }
 
+const COUNTRY_NAME_PATTERNS = COUNTRY_NEWS_MONITORS.map(country => ({
+  code: country.countryCode,
+  pattern: new RegExp(`\\b(?:${(COUNTRY_LOCATION_ALIASES[country.key] ?? [country.label]).map(alias => escapeRegex(normalizeHeadlineForMatching(alias))).join('|')})\\b`),
+}));
+
 function collectCountryCodesFromText(value: string): string[] {
-  const normalized = normalizeHeadlineForMatching(value);
-  return Array.from(
-    new Set(
-      COUNTRY_NEWS_MONITORS.flatMap((country) => {
-        const aliases = COUNTRY_LOCATION_ALIASES[country.key] ?? [country.label];
-        const matched = aliases.some((alias) => {
-          const normalizedAlias = normalizeHeadlineForMatching(alias);
-          if (!normalizedAlias) return false;
-          return new RegExp(`\\b${escapeRegex(normalizedAlias)}\\b`, 'i').test(normalized);
-        });
-        return matched ? [country.countryCode] : [];
-      })
-    )
-  );
+  const title = normalizeHeadlineForMatching(value);
+  return COUNTRY_NAME_PATTERNS.filter(({ code, pattern }) => pattern.test(title) || (code === 'US' && /\bUS(?:A)?\b/.test(value)))
+    .map(({ code }) => code);
 }
 
 function buildRegionalDatasetFromCountries(countries: CountryNewsCount[], source: string, query: string): RegionalNewsCount[] {
@@ -4642,7 +4378,7 @@ function mergeDuplicateNewsItems(existing: NewsItem, incoming: NewsItem): NewsIt
       || mergedCountryCodes.map((code) => COUNTRY_MONITOR_BY_CODE.get(code)?.label ?? code).join(', ')
       || undefined,
     countryCodes: mergedCountryCodes.length ? mergedCountryCodes : undefined,
-    severityScore: blendGeopoliticalSeverityScores(preferred.severityScore, fallback.severityScore),
+    severityScore: blendGeopoliticalSeverityScores(preferred.severityScore, fallback.severityScore) || undefined,
     eventKey: preferred.eventKey || fallback.eventKey,
     eventLabel: preferred.eventLabel || fallback.eventLabel,
   };
@@ -4651,16 +4387,16 @@ function mergeDuplicateNewsItems(existing: NewsItem, incoming: NewsItem): NewsIt
 function formatGeopoliticalFeedSourceLabel(headlines: NewsItem[]): string {
   const feedSources = new Set(headlines.map((headline) => headline.feedSource).filter(Boolean));
   const labels: string[] = [];
-  if (feedSources.has('gdelt')) labels.push('GDELT DOC 2.0');
+  if (feedSources.has('gdelt')) labels.push('GDELT');
   if (feedSources.has('yahoo-finance')) labels.push('Yahoo Finance News Feed');
-  return labels.join(' + ') || 'Yahoo Finance News Feed';
+  return labels.join(' + ') || 'No articles received';
 }
 
 function clusterGeopoliticalStories(stories: NewsItem[]): NewsItem[] {
   const clusters = new Map<string, NewsItem>();
 
   for (const story of stories
-    .filter((candidate) => Boolean(candidate.link && candidate.title) && !isClearlyNonGeopoliticalHeadline(candidate.title))
+    .filter((candidate) => Boolean(candidate.link && candidate.title && candidate.countryCodes?.length && (candidate.severityScore ?? 0) > 0))
     .sort((a, b) => b.publishedAt - a.publishedAt)
   ) {
     const clusterKey = resolveGeopoliticalStoryClusterKey(story, clusters);
@@ -4908,21 +4644,20 @@ function buildRegionalNewsQueries(regionRoots: string[], topicQuery: string): st
   );
 }
 
-function scaleValue(value: number | undefined, min: number, max: number, invert = false): number | null {
-  if (value == null || Number.isNaN(value)) return null;
-  const normalized = (value - min) / (max - min);
-  const score = invert ? 100 - normalized * 100 : normalized * 100;
-  return clampNumber(score, 0, 100);
+function sentimentDailyChange(quote: Quote | undefined): number | undefined {
+  if (!quote) return undefined;
+  const { regularMarketChangePercent, regularMarketPrice, regularMarketPreviousClose } = quote;
+  if (Number.isFinite(regularMarketChangePercent)) return regularMarketChangePercent;
+  if (!Number.isFinite(regularMarketPrice) || regularMarketPrice <= 0 ||
+      !Number.isFinite(regularMarketPreviousClose) || regularMarketPreviousClose <= 0) return undefined;
+  const change = 100 * (regularMarketPrice - regularMarketPreviousClose) / regularMarketPreviousClose;
+  return Number.isFinite(change) ? change : undefined;
 }
 
-function averageNumbers(values: Array<number | null>): number | null {
-  const filtered = values.filter((value): value is number => value != null && Number.isFinite(value));
-  if (!filtered.length) return null;
-  return parseFloat((filtered.reduce((acc, value) => acc + value, 0) / filtered.length).toFixed(1));
-}
-
-function safeNumber(value: number | undefined): number {
-  return value ?? 0;
+function sentimentQuoteTime(value: Quote['regularMarketTime']): number | null {
+  if (value == null) return null;
+  const time = typeof value === 'string' ? Date.parse(value) : value < 1e12 ? value * 1000 : value;
+  return time > 0 && Number.isFinite(new Date(time).getTime()) ? time : null;
 }
 
 function scoreSignal(score: number | null): MarketSentimentPillar['signal'] {
@@ -4933,7 +4668,7 @@ function scoreSignal(score: number | null): MarketSentimentPillar['signal'] {
 }
 
 function sentimentRegime(score: number | null): MarketSentimentSnapshot['regime'] {
-  if (score == null) return 'NEUTRAL';
+  if (score == null) return 'UNAVAILABLE';
   if (score >= 75) return 'RISK-ON';
   if (score >= 60) return 'BULLISH';
   if (score >= 45) return 'NEUTRAL';
@@ -4953,6 +4688,9 @@ function sentimentSummary(regime: MarketSentimentSnapshot['regime'], pillars: Ma
     return 'Sentiment is waiting for enough live market inputs.';
   }
 
+  const available = pillars.filter(pillar => pillar.score != null).length;
+  if (available < pillars.length) return `Based on ${available} of ${pillars.length} pillars with complete quote data.`;
+
   switch (regime) {
     case 'RISK-ON':
       return `${strongest.label} is leading and defensive signals remain subdued.`;
@@ -4970,19 +4708,19 @@ function sentimentSummary(regime: MarketSentimentSnapshot['regime'], pillars: Ma
 }
 
 function formatSignedPercent(value: number | undefined): string {
-  if (value == null || Number.isNaN(value)) return '--';
+  if (value == null || !Number.isFinite(value)) return '—';
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
 }
 
 function formatSignedNumber(value: number | undefined): string {
-  if (value == null || Number.isNaN(value)) return '--';
-  return value.toFixed(value < 10 ? 2 : 1);
+  if (value == null || !Number.isFinite(value) || value <= 0) return '—';
+  return value.toFixed(2);
 }
 
 function formatSpread(left: number | undefined, right: number | undefined): string {
-  if (left == null || right == null) return '--';
+  if (left == null || right == null) return '—';
   const spread = left - right;
-  return `${spread >= 0 ? '+' : ''}${spread.toFixed(2)} pts`;
+  return `${spread >= 0 ? '+' : ''}${spread.toFixed(2)} pp`;
 }
 
 function getFredErrorMessage(error: unknown): string | undefined {

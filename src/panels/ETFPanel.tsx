@@ -48,7 +48,7 @@ const ETF_GROUPS = [
       { symbol: 'SLV',  name: 'Silver' },
       { symbol: 'USO',  name: 'Crude Oil' },
       { symbol: 'UNG',  name: 'Natural Gas' },
-      { symbol: 'DJP',  name: 'Commodity ETF' },
+      { symbol: 'DJP',  name: 'Commodity ETN' },
     ],
   },
   {
@@ -68,11 +68,17 @@ const ALL_SYMBOLS = ETF_GROUPS.flatMap((g) => g.etfs.map((e) => e.symbol));
 export function ETFPanel() {
   const { setActivePanel } = useTerminalStore();
 
-  const { data: quotes = [], isLoading } = useQuery({
+  const { data: quotes = [], isLoading, isError, isFetching, dataUpdatedAt, refetch } = useQuery({
     queryKey: ['etf-quotes', ALL_SYMBOLS.join(',')],
-    queryFn: () => fetchQuotes(ALL_SYMBOLS),
+    queryFn: async () => {
+      const result = await fetchQuotes(ALL_SYMBOLS);
+      if (!result.length) throw new Error('No ETF quotes available');
+      return result;
+    },
     refetchInterval: 30000,
     staleTime: 15000,
+    retry: 1,
+    refetchOnWindowFocus: false,
   });
 
   const quoteMap = new Map(quotes.map((q) => [q.symbol, q]));
@@ -83,15 +89,15 @@ export function ETFPanel() {
       <div className="flex items-center justify-between px-4 py-2 panel-border-b bg-terminal-panel flex-shrink-0">
         <div>
           <span className="text-terminal-accent font-bold text-sm tracking-wider">ETF MONITOR</span>
-          <span className="text-terminal-faint text-xs ml-3">Exchange Traded Funds</span>
+          <span className="text-terminal-faint text-xs ml-3">Funds and commodity notes</span>
         </div>
-        {isLoading && (
-          <span className="text-terminal-faint text-xs animate-pulse">LOADING...</span>
-        )}
+        <button type="button" onClick={() => void refetch()} disabled={isFetching} className="text-terminal-muted text-xs hover:text-terminal-text disabled:opacity-50">{isFetching ? 'Refreshing…' : 'Refresh'}</button>
       </div>
 
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto p-3 space-y-4">
+        <div className="text-xs text-terminal-faint">{quotes.length}/{ALL_SYMBOLS.length} quotes available · prices in USD · regular-session change versus previous close. Public quotes may be delayed. {dataUpdatedAt ? `Checked ${new Date(dataUpdatedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}.` : ''}</div>
+        {isError && <div role="status" className="rounded border border-terminal-border p-3 text-xs text-terminal-muted">{quotes.length ? 'Refresh failed; last received quotes remain visible.' : 'ETF quotes are unavailable right now. Use Refresh to try again.'}</div>}
         {ETF_GROUPS.map((group) => (
           <div key={group.label}>
             {/* Group header */}
@@ -128,7 +134,7 @@ export function ETFPanel() {
                           </span>
                         </>
                       ) : (
-                        <span className="text-terminal-faint text-xs">—</span>
+                        <span className="text-terminal-faint text-xs">{isLoading ? 'Loading…' : 'Unavailable'}</span>
                       )}
                     </div>
                   </button>

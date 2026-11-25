@@ -1,7 +1,7 @@
 import type { MutableRefObject, ReactNode } from 'react';
 import { useRef, useState } from 'react';
 import { ComposableMap, Geographies, Geography, Marker, ZoomableGroup } from 'react-simple-maps';
-import { Globe2, Loader2, Minus, Plus, RefreshCw, Zap } from 'lucide-react';
+import { Globe2, Minus, Plus, Zap } from 'lucide-react';
 import type { CountryNewsCount, GeopoliticalScanStatus, NewsItem } from '../types';
 import worldCountries110m from '../data/worldCountries110m.json';
 import { fmt } from '../utils/formatters';
@@ -13,7 +13,7 @@ const ISO2_TO_NUM: Record<string, number> = {
   GB: 826, FR: 250, DE: 276, IT: 380, ES: 724, SE: 752,
   UA: 804, RU: 643, BY: 112, TR: 792,
   IR: 364, IQ: 368, SY: 760, LB: 422, YE: 887, SA: 682,
-  AE: 784, IL: 376, EG: 818, SD: 729, ET: 231, ZA: 710, NG: 566,
+  AE: 784, IL: 376, PS: 275, EG: 818, SD: 729, ET: 231, ZA: 710, NG: 566,
   AF: 4,   PK: 586, IN: 356, CN: 156, TW: 158, JP: 392,
   KR: 410, MM: 104, VN: 704, SG: 702, ID: 360, PH: 608, AU: 36,
 };
@@ -34,6 +34,9 @@ interface RegionalNewsMapProps {
   scanProgressLabel?: string;
   showHotspotsSection?: boolean;
   headerActions?: ReactNode;
+  sourceNote: string;
+  archiveMode: boolean;
+  analysisNote: string;
 }
 
 type ZoomMoveEvent = {
@@ -63,7 +66,7 @@ const COUNTRY_CENTROIDS: Record<string, [number, number]> = {
   CN: [ 104.2,  35.9], TW: [ 120.9,  23.7], JP: [ 138.0,  36.2],
   KR: [ 127.8,  36.5], MM: [  96.0,  19.0], VN: [ 108.3,  16.1],
   SG: [ 103.8,   1.4], ID: [ 113.9,  -0.8], PH: [ 122.9,  12.9],
-  AU: [ 133.8, -25.3],
+  AU: [ 133.8, -25.3], PS: [35.2, 31.9],
 };
 
 function countryCoords(countryCode: string, x: number, y: number): [number, number] {
@@ -126,12 +129,13 @@ function getSeverity(score: number): SeverityLevel {
   return 'low';
 }
 
-function formatUtcTimestamp() {
+function formatUtcTimestamp(timestamp: number) {
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return '';
   return new Intl.DateTimeFormat('en-GB', {
     weekday: 'short', day: '2-digit', month: 'short', year: 'numeric',
     hour: '2-digit', minute: '2-digit', second: '2-digit',
     hour12: false, timeZone: 'UTC',
-  }).format(new Date()).replace(',', '').toUpperCase() + ' UTC';
+  }).format(new Date(timestamp)).replace(',', '').toUpperCase() + ' UTC';
 }
 
 type SummarySourceEntry = {
@@ -205,6 +209,9 @@ export function RegionalNewsMap({
   scanProgressLabel,
   showHotspotsSection = true,
   headerActions,
+  sourceNote,
+  archiveMode,
+  analysisNote,
 }: RegionalNewsMapProps) {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1.1);
@@ -223,32 +230,10 @@ export function RegionalNewsMap({
   const totalEvents = new Set(
     activeCountries.flatMap((c) => (c.stories ?? []).map((s) => s.link))
   ).size;
-  const liveStamp = formatUtcTimestamp();
+  const assessmentStamp = formatUtcTimestamp(Math.max(0, ...countryData.map((country) => country.lastClassifiedAt ?? 0)));
   const isGeoView = topicLabel.trim().toLowerCase().includes('geo');
   const eventLabel = isGeoView ? 'EVENTS' : 'STORIES';
 
-  const sourceCounts = [...(activeCountries.length ? activeCountries : countryData)].reduce(
-    (acc, c) => { acc.set(c.source, (acc.get(c.source) ?? 0) + Math.max(c.count, 1)); return acc; },
-    new Map<string, number>()
-  );
-  const primarySource = [...sourceCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
-  const pipelineSourcesText = (activeCountries.length ? activeCountries : countryData)
-    .map((country) => country.source || '')
-    .join(' | ')
-    .toUpperCase();
-  const activeFeedSources = new Set(
-    (activeCountries.length ? activeCountries : countryData)
-      .flatMap((country) => (country.stories ?? []).flatMap((story) => story.feedSource ? [story.feedSource] : []))
-  );
-  const yahooActive = activeFeedSources.has('yahoo-finance') || pipelineSourcesText.includes('YAHOO');
-  const gdeltActive = activeFeedSources.has('gdelt') || pipelineSourcesText.includes('GDELT');
-  const feedStatusLabel = [
-    yahooActive ? 'YAHOO' : null,
-    gdeltActive ? 'GDELT' : null,
-  ].filter(Boolean).join(' + ') || 'YAHOO ONLY';
-  const feedStatusTone = gdeltActive
-    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
-    : 'border-terminal-accent/30 bg-terminal-accent/10 text-terminal-accent';
   const scanStatusTone = scanStatus === 'error'
     ? 'border-terminal-negative/35 bg-terminal-negative/10 text-terminal-negative'
     : scanStatus === 'complete'
@@ -266,7 +251,11 @@ export function RegionalNewsMap({
 
   function focusHotspot(key: string) {
     setSelectedKey(key);
-    hotspotRefs.current[key]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const row = hotspotRefs.current[key];
+    const list = row?.closest<HTMLElement>('[aria-label="Country hotspots"]');
+    if (row && list) {
+      list.scrollTo({ top: list.scrollTop + row.getBoundingClientRect().top - list.getBoundingClientRect().top, behavior: 'smooth' });
+    }
     onCountrySelect?.(key);
   }
 
@@ -274,131 +263,57 @@ export function RegionalNewsMap({
   // Empirically calibrated: 5.5 → ~5px screen, so ~12.4 → ~11px screen
   const markerFontSize = 12.4 / zoom;
   const markerStroke = 4.0 / zoom;
-  const firstLoadWarning = (
-    <div className="mx-4 mt-3 rounded border border-terminal-accent/35 bg-terminal-accent/10 px-3 py-2 text-[11px] text-terminal-accent">
-      First-time load warning: the global event map can take a little longer while feeds are fetched and hotspots are built.
-    </div>
-  );
-
-  if (isLoading) {
-    return (
-      <div className="flex h-full min-h-0 flex-col overflow-hidden rounded border border-terminal-border bg-terminal-panel">
-        <div className="flex items-center justify-between gap-3 px-4 py-2 panel-border-b bg-terminal-elevated/40">
-          <div className="flex items-center gap-2">
-            <Globe2 size={14} className="text-terminal-accent" />
-            <span className="text-terminal-accent text-sm font-bold tracking-wider">GLOBAL EVENT MAP</span>
-          </div>
-          <div className="text-[11px] text-terminal-faint">{timeframeLabel}</div>
-        </div>
-        <div className="flex min-h-0 flex-1 flex-col p-4">
-          {firstLoadWarning}
-          <div className="mt-4 flex min-h-0 flex-1 flex-col items-center justify-center gap-4 rounded-xl border border-terminal-border bg-[#050a0e]">
-            <Loader2 size={20} className="animate-spin text-terminal-accent" />
-            <div className="text-[11px] font-bold tracking-[0.24em] text-terminal-accent">SCANNING GLOBAL FEEDS</div>
-            <div className="max-w-xs text-center text-[11px] text-terminal-faint leading-relaxed">
-              Pulling live geopolitical headlines and matching them to countries.
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded border border-terminal-border bg-terminal-panel">
       {/* ─── Header ─── */}
-      <div className="flex items-center justify-between gap-3 px-4 py-2 panel-border-b bg-terminal-elevated/40">
+      <header className="news-card-header">
         <div className="flex items-center gap-2">
           <Globe2 size={14} className="text-terminal-accent" />
-          <span className="text-terminal-accent text-sm font-bold tracking-wider">GLOBAL EVENT MAP</span>
+          <h2 className="text-terminal-accent text-sm font-bold tracking-wider">GLOBAL EVENT MAP</h2>
         </div>
-        <div className="flex flex-wrap items-center justify-end gap-2 text-[11px] text-terminal-faint">
-          <span>{timeframeLabel}</span>
-          {scanStatusLabel ? (
-            <span className={`rounded border px-2 py-0.5 font-bold tracking-[0.18em] ${scanStatusTone}`}>
-              {scanStatusLabel.toUpperCase()}
-            </span>
-          ) : null}
-          {scanProgressLabel ? <span className="text-terminal-faint/70">{scanProgressLabel}</span> : null}
-          {showDebugSources && (
-            <>
-              <span className={`rounded border px-2 py-0.5 font-bold tracking-[0.18em] ${feedStatusTone}`}>
-                FEEDS · {feedStatusLabel}
+        {headerActions}
+      </header>
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="space-y-1 px-3 py-2 text-[10px] text-terminal-muted" role="status">
+          <div className="flex flex-wrap items-center gap-2 text-[11px] text-terminal-faint">
+            {scanStatusLabel && (
+              <span className={`rounded border px-2 py-0.5 font-bold tracking-[0.18em] ${scanStatusTone}`}>
+                {scanStatusLabel.toUpperCase()}
               </span>
-              {primarySource ? <span className="text-terminal-faint/70">SOURCE · {primarySource}</span> : null}
-            </>
-          )}
-          <span className="flex items-center gap-1">
-            <Zap size={10} className="text-terminal-accent" />
-            {totalEvents} {eventLabel}
-          </span>
-          <span>{activeCountries.length} COUNTRIES</span>
-          {headerActions}
+            )}
+            {scanProgressLabel && <span className="text-terminal-faint/70">{scanProgressLabel}</span>}
+            {showHotspotsSection && (
+              <>
+                <span className="flex items-center gap-1">
+                  <Zap size={10} className="text-terminal-accent" /> {totalEvents} {eventLabel}
+                </span>
+                <span>{activeCountries.length} COUNTRIES</span>
+              </>
+            )}
+          </div>
+          <div>{sourceNote}{archiveMode && <span title="GDELT archive coverage uses indexing times from recent quarter-hour batches."> · recent batches</span>}</div>
+          <div>{analysisNote}</div>
         </div>
-      </div>
-      <div className="flex min-h-0 flex-1 flex-col p-4">
-        {/* ─── Map container ─── */}
-        <div
-          className="relative min-h-0 flex-1 overflow-hidden rounded-xl"
-          style={{ background: '#050a0e' }}
-        >
-          {isRefreshing && (
-            <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#050a0e]/46 backdrop-blur-[1.5px]">
-              <div className="flex min-w-[220px] items-center gap-3 rounded-lg border border-terminal-accent/35 bg-black/78 px-4 py-3 shadow-[0_18px_48px_rgba(0,0,0,0.45)]">
-                <Loader2 size={16} className="animate-spin text-terminal-accent flex-shrink-0" />
-                <div>
-                  <div className="text-[10px] font-bold tracking-[0.22em] text-terminal-accent">UPDATING MAP</div>
-                  <div className="mt-1 text-[11px] text-terminal-faint">
-                    Loading {timeframeLabel} geopolitical events and hotspots.
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Top-left label */}
-          <div className="absolute left-3 top-3 z-10 flex items-center gap-2 rounded border border-white/8 bg-black/60 px-2.5 py-1.5 backdrop-blur-sm pointer-events-none">
-            <span className="text-[9px] font-bold tracking-[0.28em] text-terminal-text/80">GLOBAL SITUATION</span>
-            <span className="text-[9px] tracking-[0.18em] text-terminal-faint/60">
-              {isGeoView ? 'GEO EVENT MONITOR' : 'NEWS MONITOR'}
-            </span>
+        <div className="flex flex-wrap items-center justify-between gap-1 px-3 pb-2">
+          <div role="group" className="flex gap-0.5" aria-label={`Event lookback, currently ${timeframeLabel}`}>
+            {timeframeOptions.map(option => <button key={option.key} type="button" aria-pressed={option.key === activeTimeframeKey}
+              onClick={() => onTimeframeChange(option.key)} className={`rounded px-2 py-1 text-[10px] ${option.key === activeTimeframeKey ? 'bg-terminal-accent text-terminal-bg' : 'text-terminal-muted hover:bg-terminal-hover'}`}>{option.label}</button>)}
           </div>
-
-          {/* Top-right: timestamp + live badge */}
-          <div className="absolute right-3 top-3 z-10 flex items-center gap-2 rounded border border-white/8 bg-black/60 px-2.5 py-1.5 backdrop-blur-sm pointer-events-none">
-            <span className="text-[9px] tracking-[0.18em] text-terminal-faint/70">{liveStamp}</span>
-            <span className="flex items-center gap-1 rounded bg-terminal-accent/20 px-1.5 py-0.5 text-[9px] font-bold tracking-[0.2em] text-terminal-accent">
-              <span className="h-1.5 w-1.5 rounded-full bg-terminal-accent animate-pulse" />
-              LIVE
-            </span>
-          </div>
-
-          {/* Timeframe selector */}
-          <div className="absolute left-3 top-12 z-10 flex items-center gap-0.5 rounded border border-white/8 bg-black/65 p-1 backdrop-blur-sm">
-            {timeframeOptions.map((option) => (
-              <button
-                key={option.key}
-                onClick={() => onTimeframeChange(option.key)}
-                className={`rounded px-2.5 py-1 text-[9px] font-medium tracking-[0.2em] transition-colors ${
-                  option.key === activeTimeframeKey
-                    ? 'bg-terminal-accent text-terminal-bg'
-                    : 'text-terminal-faint/70 hover:bg-white/6 hover:text-terminal-text'
-                }`}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-
+          {assessmentStamp && <time className="text-[10px] text-terminal-faint" title="Last completed review">{assessmentStamp}</time>}
+        </div>
+        <div className={`relative mx-2 min-h-[8rem] overflow-hidden rounded bg-[#050a0e] ${showHotspotsSection ? 'h-[43%] shrink-0' : 'mb-2 flex-1'}`}>
+          {isLoading && <div role="status" className="pointer-events-none absolute left-2 top-2 z-10 rounded bg-black/75 px-2 py-1 text-[10px] text-terminal-muted">Fetching news feeds…</div>}
           {/* Zoom controls */}
-          <div className="absolute right-3 top-14 z-10 flex flex-col gap-1">
+          <div className="absolute right-2 top-2 z-10 flex flex-col gap-1">
             <button
+              aria-label="Zoom in event map"
               onClick={() => setZoom((z) => Math.min(z + 0.5, 8))}
               className="flex h-7 w-7 items-center justify-center rounded border border-white/12 bg-black/70 text-terminal-faint/70 hover:bg-black/90 hover:text-terminal-text transition-colors backdrop-blur-sm"
             >
               <Plus size={12} />
             </button>
             <button
+              aria-label="Zoom out event map"
               onClick={() => setZoom((z) => Math.max(z - 0.5, 0.8))}
               className="flex h-7 w-7 items-center justify-center rounded border border-white/12 bg-black/70 text-terminal-faint/70 hover:bg-black/90 hover:text-terminal-text transition-colors backdrop-blur-sm"
             >
@@ -406,6 +321,7 @@ export function RegionalNewsMap({
             </button>
             {zoom !== 1.1 && (
               <button
+                aria-label="Reset event map zoom"
                 onClick={() => { setZoom(1.1); setCenter([12, 20]); }}
                 className="flex h-7 w-7 items-center justify-center rounded border border-white/12 bg-black/70 text-terminal-faint/50 hover:text-terminal-text text-[8px] font-bold tracking-tight transition-colors backdrop-blur-sm"
               >
@@ -415,8 +331,8 @@ export function RegionalNewsMap({
           </div>
 
           {/* Legend */}
-          <div className="absolute bottom-3 left-3 z-10 flex items-center gap-2.5 rounded border border-white/8 bg-black/65 px-3 py-1.5 backdrop-blur-sm pointer-events-none">
-            <span className="text-[9px] font-bold tracking-[0.24em] text-terminal-faint/60">RISK</span>
+          {activeCountries.length > 0 && <div className="absolute bottom-3 left-3 z-10 flex items-center gap-2.5 rounded border border-white/8 bg-black/65 px-3 py-1.5 backdrop-blur-sm pointer-events-none">
+            <span className="text-[9px] font-bold tracking-[0.24em] text-terminal-faint/60">AI IMPACT</span>
             {(['low', 'medium', 'high', 'severe'] as SeverityLevel[]).map((level) => {
               const chip = SEVERITY_CHIP[level];
               return (
@@ -426,15 +342,8 @@ export function RegionalNewsMap({
                 </span>
               );
             })}
-          </div>
+          </div>}
 
-          {/* Active zone count */}
-          <div className="absolute bottom-3 right-3 z-10 rounded border border-white/8 bg-black/65 px-3 py-1.5 backdrop-blur-sm text-right pointer-events-none">
-            <div className="text-[9px] font-bold tracking-[0.22em] text-terminal-accent">{activeCountries.length} ACTIVE ZONES</div>
-            <div className="text-[10px] text-terminal-text tabular-nums">{totalEvents} {eventLabel.toLowerCase()}</div>
-          </div>
-
-          {/* ─── Choropleth Map ─── */}
           <ComposableMap
             projection="geoNaturalEarth1"
             projectionConfig={{ scale: 148, center: [12, 15] }}
@@ -471,6 +380,9 @@ export function RegionalNewsMap({
                         stroke={stroke}
                         strokeWidth={hasEvents ? 0.7 : 0.35}
                         tabIndex={hasEvents ? 0 : -1}
+                        role={hasEvents ? 'button' : undefined}
+                        aria-label={hasEvents ? `Show hotspots for ${data.label}` : undefined}
+                        onKeyDown={hasEvents ? (event: React.KeyboardEvent) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); focusHotspot(data.key); } } : undefined}
                         onClick={hasEvents ? () => focusHotspot(data.key) : undefined}
                         style={{
                           default: { fill, stroke, strokeWidth: hasEvents ? 0.7 : 0.35, outline: 'none' },
@@ -517,7 +429,7 @@ export function RegionalNewsMap({
                         }
                       }}
                     >
-                      <title>{country.label}: severity {severityScore}, {country.count} {isGeoView ? 'events' : 'stories'}</title>
+                      <title>{country.label}, AI-estimated impact {severityScore}/10, {country.count} {isGeoView ? 'events' : 'stories'}</title>
 
                       <circle
                         r={basePulseRadius * 0.66}
@@ -600,10 +512,10 @@ export function RegionalNewsMap({
         </div>
 
         {showHotspotsSection ? (
-          <div className="mt-4">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain" aria-label="Country hotspots">
             <CountryHotspotsSection
-              countryData={countryData}
-              topicLabel={topicLabel}
+              countries={activeCountries}
+              isGeoView={isGeoView}
               selectedKey={selectedKey}
               hotspotRefs={hotspotRefs}
             />
@@ -614,172 +526,45 @@ export function RegionalNewsMap({
   );
 }
 
-export function CountryHotspotsSection({
-  countryData,
-  topicLabel,
-  selectedKey = null,
-  hotspotRefs,
-}: {
-  countryData: CountryNewsCount[];
-  topicLabel: string;
-  selectedKey?: string | null;
-  hotspotRefs?: MutableRefObject<Record<string, HTMLDivElement | null>>;
+
+function CountryHotspotsSection({ countries, isGeoView, selectedKey, hotspotRefs }: {
+  countries: CountryNewsCount[];
+  isGeoView: boolean;
+  selectedKey: string | null;
+  hotspotRefs: MutableRefObject<Record<string, HTMLDivElement | null>>;
 }) {
-  const activeCountries = [...countryData]
-    .filter((c) => c.count > 0)
-    .sort((a, b) => {
-      const severityDiff = (b.severityScore ?? 0) - (a.severityScore ?? 0);
-      if (severityDiff !== 0) return severityDiff;
-      if (b.count !== a.count) return b.count - a.count;
-      return (b.latestAt ?? 0) - (a.latestAt ?? 0);
-    });
-  const isGeoView = topicLabel.trim().toLowerCase().includes('geo');
-  const eventLabel = isGeoView ? 'EVENTS' : 'STORIES';
-
+  const eventName = isGeoView ? 'event' : 'story';
   return (
-    <div className="overflow-hidden rounded border border-terminal-border bg-terminal-panel">
-      <div className="flex items-center justify-between gap-3 px-4 py-2 panel-border-b bg-terminal-elevated/40">
-        <div className="flex items-center gap-2">
-          <Globe2 size={14} className="text-terminal-accent" />
-          <div className="text-terminal-accent text-sm font-bold tracking-wider">COUNTRY HOTSPOTS</div>
-        </div>
-        <div className="text-right">
-          <div className="text-base font-bold text-terminal-accent tabular-nums">{activeCountries.length}</div>
-          <div className="text-[9px] font-bold tracking-[0.18em] text-terminal-faint/60">ACTIVE</div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 gap-3 p-4 xl:grid-cols-2">
-        {activeCountries.length === 0 ? (
-          <div className="rounded-lg border border-terminal-border/60 bg-terminal-bg px-4 py-5 text-center text-xs text-terminal-faint xl:col-span-2">
-            No country-specific {isGeoView ? 'events' : 'stories'} matched the current topic and timeframe.
+    <div className="px-3 py-2">
+      <h3 className="mb-1 text-[11px] font-bold tracking-wider text-terminal-accent">COUNTRY HOTSPOTS</h3>
+      {countries.length === 0 && <p className="py-2 text-xs text-terminal-muted">OpenAI found no country-specific events in the reviewed headlines.</p>}
+      {countries.map(country => {
+        const score = Math.round(country.severityScore ?? 0);
+        const tone = SEVERITY_CHIP[getSeverity(score)];
+        const sources = collectSummarySourceEntries(country.hotspotSummary ? country.hotspotSummarySources ?? [] : country.stories ?? []);
+        return (
+          <div key={country.key} ref={node => { hotspotRefs.current[country.key] = node; }}
+            className={`py-2.5 ${selectedKey === country.key ? 'bg-terminal-accent/5' : ''}`}>
+            <h4 className={`text-sm font-semibold ${selectedKey === country.key ? 'text-terminal-accent' : 'text-terminal-text'}`}>{country.label}</h4>
+            {country.hotspotSummary ? <p className="mt-1 text-xs leading-relaxed text-terminal-text">{country.hotspotSummary}</p>
+              : country.hotspotSummaryStatus === 'loading' ? <p className="mt-1 text-xs text-terminal-muted">Preparing summary…</p>
+              : country.hotspotSummaryStatus === 'error' ? <p className="mt-1 text-xs text-terminal-muted">Summary unavailable.</p> : null}
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-terminal-muted">
+              <span className="inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: tone.border }} />
+                AI-estimated impact {score}/10</span>
+              <span>{country.count} {country.count === 1 ? eventName : isGeoView ? 'events' : 'stories'}</span>
+              {!!country.latestAt && <span>{fmt.timeAgo(country.latestAt)}</span>}
+              {country.isPartial && <span>Partial coverage</span>}
+            </div>
+            {sources.length > 0 && <div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[11px] text-terminal-muted">
+              <span>Sources</span>
+              {sources.map(source => source.link
+                ? <a key={source.key} href={source.link} target="_blank" rel="noreferrer" className="underline decoration-terminal-border underline-offset-2 hover:text-terminal-accent">{source.label}</a>
+                : <span key={source.key}>{source.label}</span>)}
+            </div>}
           </div>
-        ) : (
-          activeCountries.map((country) => {
-            const severityScore = country.severityScore ?? 0;
-            const severityRatio = Math.min(1, Math.max(0, severityScore / 10));
-            const level = getSeverity(severityScore);
-            const chip = SEVERITY_CHIP[level];
-            const fillColor = getCountryFill(severityScore, 10);
-            const summarySourceEntries = collectSummarySourceEntries(country.hotspotSummarySources ?? country.stories ?? []);
-            const showSummaryLoading = country.hotspotSummaryStatus === 'loading' && !country.hotspotSummary;
-
-            return (
-              <div
-                key={country.key}
-                ref={(node) => {
-                  if (hotspotRefs) {
-                    hotspotRefs.current[country.key] = node;
-                  }
-                }}
-                className={`rounded-lg border bg-terminal-bg/75 px-3 py-3 scroll-mt-4 transition-all ${
-                  selectedKey === country.key
-                    ? 'border-terminal-accent/45 shadow-[0_0_18px_rgba(240,165,0,0.08)]'
-                    : 'border-terminal-border/70 hover:border-terminal-border'
-                }`}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span
-                        className="inline-flex h-2 w-2 rounded-sm flex-shrink-0"
-                        style={{ backgroundColor: chip.border, boxShadow: `0 0 8px ${chip.border}` }}
-                      />
-                      <span className="text-xs font-semibold text-terminal-text">{country.label}</span>
-                      <span className="text-[10px] font-bold tracking-[0.16em] text-terminal-faint/60">{country.shortLabel}</span>
-                      <span
-                        className="rounded px-1.5 py-0.5 text-[9px] font-bold tracking-[0.18em]"
-                        style={{ background: chip.bg, border: `1px solid ${chip.border}`, color: chip.text, opacity: 0.9 }}
-                      >
-                        {chip.label}
-                      </span>
-                      {country.isPartial ? (
-                        <span className="rounded border border-terminal-accent/35 bg-terminal-accent/10 px-1.5 py-0.5 text-[9px] font-bold tracking-[0.18em] text-terminal-accent">
-                          PARTIAL
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className="mt-1 text-[10px] text-terminal-faint/60">
-                      {country.latestAt ? fmt.timeAgo(country.latestAt) : `No recent ${isGeoView ? 'events' : 'stories'}`}
-                    </div>
-                  </div>
-                  <div className="flex items-end gap-3 text-right flex-shrink-0">
-                    <div>
-                      <div className="text-[9px] font-bold tracking-[0.18em] text-terminal-faint/60">SEVERITY</div>
-                      <div className="mt-0.5 text-2xl font-bold tabular-nums leading-none" style={{ color: chip.text }}>
-                        {Math.round(severityScore)}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-[9px] font-bold tracking-[0.16em] text-terminal-faint/60">{eventLabel}</div>
-                      <div className="mt-1 text-sm font-semibold tabular-nums text-terminal-text/85">
-                        {country.count}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mt-2.5">
-                  <div className="flex items-center justify-between text-[9px] font-medium tracking-[0.16em] text-terminal-faint/50 mb-1.5">
-                    <span>SEVERITY</span>
-                    <span className="tabular-nums">{chip.label} · {Math.round(severityScore)}/10</span>
-                  </div>
-                  <div className="h-1 overflow-hidden rounded-full bg-terminal-border/40">
-                    <div
-                      className="h-full rounded-full transition-all duration-500"
-                      style={{
-                        width: `${Math.max(8, severityRatio * 100)}%`,
-                        background: `linear-gradient(90deg, rgba(250,204,21,0.92), ${fillColor})`,
-                        boxShadow: `0 0 6px ${chip.border}50`,
-                      }}
-                    />
-                  </div>
-                </div>
-
-                {country.hotspotSummary ? (
-                  <div className="mt-3 rounded border border-terminal-border/60 bg-terminal-panel/45 px-2.5 py-2.5">
-                    <div className="text-[9px] font-bold tracking-[0.18em] text-terminal-faint/55">SUMMARY</div>
-                    <p className="mt-1.5 text-[11px] leading-relaxed text-terminal-text">
-                      {country.hotspotSummary}
-                    </p>
-                    {summarySourceEntries.length > 0 && (
-                      <div className="mt-2 text-[11px] leading-relaxed text-terminal-faint/85">
-                        <span className="font-semibold text-terminal-faint/70">Sources:</span>{' '}
-                        {summarySourceEntries.map((entry, index) => (
-                          <span key={entry.key}>
-                            {entry.link ? (
-                              <a
-                                href={entry.link}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="text-terminal-muted hover:text-terminal-accent transition-colors"
-                                title={entry.label}
-                              >
-                                {entry.label}
-                              </a>
-                            ) : (
-                              <span className="text-terminal-faint/80">{entry.label}</span>
-                            )}
-                            {index < summarySourceEntries.length - 1 ? ', ' : null}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ) : showSummaryLoading ? (
-                  <div className="mt-3 rounded border border-terminal-border/60 bg-terminal-panel/45 px-2.5 py-2.5">
-                    <div className="text-[9px] font-bold tracking-[0.18em] text-terminal-faint/55">SUMMARY</div>
-                    <div className="mt-1.5 inline-flex items-center gap-2 text-[11px] text-terminal-faint/85">
-                      <Loader2 size={12} className="animate-spin text-terminal-accent" />
-                      Generating summary...
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            );
-          })
-        )}
-      </div>
+        );
+      })}
     </div>
   );
 }

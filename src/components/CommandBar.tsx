@@ -51,13 +51,20 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
 
   const trimmedInput = input.trim();
   const searchMode = shouldUseSearch(input);
+  const [searchInput, setSearchInput] = useState('');
+  useEffect(() => {
+    const timer = setTimeout(() => setSearchInput(trimmedInput), 200);
+    return () => clearTimeout(timer);
+  }, [trimmedInput]);
 
-  const { data: searchResults } = useQuery({
-    queryKey: ['search', trimmedInput],
-    queryFn: () => searchSymbols(trimmedInput),
-    enabled: searchMode && trimmedInput.length >= 2,
+  const { data: matchedResults } = useQuery({
+    queryKey: ['search', searchInput],
+    queryFn: () => searchSymbols(searchInput),
+    enabled: searchMode && searchInput.length >= 2 && searchInput === trimmedInput,
     staleTime: 10000,
   });
+
+  const searchResults = searchInput === trimmedInput ? matchedResults : undefined;
 
   const openSearchResult = (symbol?: string) => {
     if (!symbol) return;
@@ -100,7 +107,6 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
 
   const panelLabel: Record<string, string> = {
     overview: 'MARKET OVERVIEW',
-    opportunities: 'OPPORTUNITY INTELLIGENCE',
     equity: `${activeSymbol} EQUITY`,
     chart: `${activeSymbol} CHART`,
     multiAsset: 'MULTI-ASSET WORKSPACE',
@@ -178,7 +184,7 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
             onKeyDown={handleKeyDown}
             onBlur={() => setTimeout(() => setShowSearch(false), 150)}
             onFocus={() => searchMode && trimmedInput.length >= 2 && setShowSearch(true)}
-            placeholder="AAPL or Microsoft  |  OPPS  |  NEWS  |  GEO  |  PRED"
+            placeholder="AAPL or Microsoft  |  NEWS  |  MACRO  |  PORT"
             className="cmd-input flex-1 bg-transparent text-terminal-text text-xs placeholder-terminal-faint min-w-0"
             spellCheck={false}
             autoCapitalize="characters"
@@ -282,10 +288,10 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
         <div className="hidden sm:flex items-center gap-1.5">
           <div className={`w-1.5 h-1.5 rounded-full ${open ? 'bg-terminal-positive' : 'bg-terminal-faint'}`} />
           <span className={`text-xs ${open ? 'text-terminal-positive' : 'text-terminal-muted'}`}>
-            {open ? 'OPEN' : 'CLOSED'}
+            {open ? 'REGULAR HOURS' : 'OUTSIDE HOURS'}
           </span>
         </div>
-        <span className="text-terminal-muted text-xs hidden lg:block">NYSE/NASDAQ</span>
+        <span className="text-terminal-muted text-xs hidden lg:block">US weekday schedule</span>
         <span className="hidden sm:block text-terminal-text font-mono text-xs tabular-nums">{clock}</span>
       </div>
     </div>

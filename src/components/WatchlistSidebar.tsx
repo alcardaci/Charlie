@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Plus, X, RefreshCw } from 'lucide-react';
 import { fetchQuotes, searchSymbols } from '../api/finance';
@@ -27,13 +27,20 @@ export function WatchlistSidebar({ className = '', mobile = false, onClose }: Wa
     enabled: watchlist.length > 0,
   });
 
-  // Live search suggestions while typing
-  const { data: suggestions = [] } = useQuery({
-    queryKey: ['wl-search', newSymbol],
-    queryFn: () => searchSymbols(newSymbol),
-    enabled: newSymbol.length >= 1,
+  const [searchInput, setSearchInput] = useState('');
+  useEffect(() => {
+    const timer = setTimeout(() => setSearchInput(newSymbol.trim()), 200);
+    return () => clearTimeout(timer);
+  }, [newSymbol]);
+  // Debounced public search; stale matches must not target the wrong symbol.
+  const { data: matches = [] } = useQuery({
+    queryKey: ['search', searchInput],
+    queryFn: () => searchSymbols(searchInput),
+    enabled: adding && searchInput.length >= 2 && searchInput === newSymbol.trim(),
     staleTime: 10000,
   });
+
+  const suggestions = searchInput === newSymbol.trim() ? matches : [];
 
   const quoteMap = new Map(quotes.map((q) => [q.symbol, q]));
 

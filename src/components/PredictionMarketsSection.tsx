@@ -1,17 +1,12 @@
-import { TrendingDown, TrendingUp } from 'lucide-react';
 import { PredictionForecast } from '../types';
 import { fmt } from '../utils/formatters';
-
-function formatPredictionProbability(value: number | null | undefined): string {
-  if (value === undefined || value === null || Number.isNaN(value)) return '--';
-  return `${Math.round(value * 100)}%`;
-}
+import { formatPredictionMove, formatPredictionProbability } from '../utils/marketPanelDisplay';
 
 function formatPredictionDate(value: string | null): string {
-  if (!value) return '--';
+  if (!value) return '—';
   const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return '--';
-  return parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  if (Number.isNaN(parsed.getTime())) return '—';
+  return parsed.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 export function PredictionMarketsSection({
@@ -68,7 +63,7 @@ export function PredictionMarketsSection({
       ) : predictions.length > 0 ? (
         <div className={gridClassName}>
           {predictions.map((forecast) => (
-            <PredictionForecastCard key={forecast.id} forecast={forecast} compact={compact} />
+            <PredictionForecastCard key={forecast.url ?? forecast.id} forecast={forecast} compact={compact} />
           ))}
         </div>
       ) : (
@@ -80,104 +75,61 @@ export function PredictionMarketsSection({
   );
 }
 
+function DailyMove({ change }: { change: number | null | undefined }) {
+  const color = change == null || change === 0 ? 'text-terminal-faint' : change > 0 ? 'text-terminal-positive' : 'text-terminal-negative';
+  return <span className={color}>{formatPredictionMove(change)}</span>;
+}
+
+function dollars(value: number | null): string {
+  return value == null ? '—' : '$' + fmt.volume(value);
+}
+
 function PredictionForecastCard({ forecast, compact }: { forecast: PredictionForecast; compact: boolean }) {
-  const yesWidth = Math.max(0, Math.min(100, (forecast.yesPrice ?? 0) * 100));
-  const noWidth = Math.max(0, Math.min(100, (forecast.noPrice ?? 0) * 100));
-
-  if (compact) {
-    return (
-      <div className="bg-terminal-panel border border-terminal-border rounded p-3">
-        <div className="flex items-center justify-between gap-2">
-          <span className="rounded border border-terminal-accent/30 bg-terminal-accent/10 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-terminal-accent">
-            {forecast.theme.toUpperCase()}
-          </span>
-          <span className="text-[10px] text-terminal-faint">{formatPredictionDate(forecast.endDate)}</span>
-        </div>
-
-        <div className="mt-2 min-h-[2.5rem] max-h-[2.5rem] overflow-hidden text-[13px] leading-snug text-terminal-text">
-          {forecast.question}
-        </div>
-
-        <div className="mt-2 flex items-center justify-between gap-2 text-[10px]">
-          <span className="text-terminal-positive">YES {formatPredictionProbability(forecast.yesPrice)}</span>
-          <span className="text-terminal-negative">NO {formatPredictionProbability(forecast.noPrice)}</span>
-        </div>
-
-        <div className="mt-2 flex overflow-hidden rounded-full bg-terminal-elevated h-1.5">
-          <div className="h-full bg-terminal-positive" style={{ width: `${yesWidth}%` }} />
-          <div className="h-full bg-terminal-negative" style={{ width: `${noWidth}%` }} />
-        </div>
-
-        <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-terminal-faint">
-          <span>
-            {forecast.leadingOutcome === 'Yes' ? 'Lean YES' : 'Lean NO'} {formatPredictionProbability(forecast.leadingProbability)}
-          </span>
-          <span>24H {fmt.volume(forecast.volume24hr)}</span>
-        </div>
-      </div>
-    );
-  }
-
+  const group = forecast.outcomeGroup;
+  const title = group ? forecast.eventTitle || forecast.question : forecast.question;
+  const metrics = group ?? forecast;
+  const shownOutcomes = group?.outcomes.slice(0, compact ? 2 : 3);
+  const scope = group ? 'Event' : 'Contract';
   return (
-    <div className="bg-terminal-panel border border-terminal-border rounded p-4">
-      <div className="flex items-center justify-between gap-3">
-        <span className="rounded border border-terminal-accent/30 bg-terminal-accent/10 px-2 py-0.5 text-[11px] font-bold tracking-wide text-terminal-accent">
-          {forecast.theme.toUpperCase()}
-        </span>
-        <span className="text-[11px] text-terminal-faint">By {formatPredictionDate(forecast.endDate)}</span>
+    <article aria-label={title} className={'flex min-w-0 flex-col gap-2 rounded border border-terminal-border bg-terminal-panel ' + (compact ? 'p-3' : 'p-4')}>
+      <div className="flex items-center justify-between gap-2 text-[10px]">
+        <span className="font-bold uppercase tracking-wide text-terminal-accent">{forecast.theme}</span>
+        <span className="text-terminal-faint">By {formatPredictionDate(group ? group.endDate : forecast.endDate)}</span>
       </div>
-
-      <div className="mt-3 min-h-[3.75rem] text-sm leading-snug text-terminal-text">
-        {forecast.question}
-      </div>
-
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        <div className="rounded border border-terminal-positive/20 bg-terminal-positive/5 px-3 py-2">
-          <div className="text-[11px] text-terminal-faint">YES</div>
-          <div className="mt-1 text-xl font-bold tabular-nums text-terminal-positive">
-            {formatPredictionProbability(forecast.yesPrice)}
+      <h3 className={'text-terminal-text leading-snug ' + (compact ? 'text-[13px]' : 'text-sm font-bold')}>{title}</h3>
+      {group && shownOutcomes ? (
+        <div className="space-y-1">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-baseline gap-x-3 gap-y-1 text-xs tabular-nums">
+            <span className="text-[10px] text-terminal-faint">Top {shownOutcomes.length} of {group.count} priced choices</span>
+            <span className="text-right text-[10px] text-terminal-faint">Price</span>
+            <span className="text-right text-[10px] text-terminal-faint">24h change</span>
+            {shownOutcomes.map((outcome, index) => (
+              <div className="contents" key={outcome.label + index}>
+                <span className="break-words text-terminal-text">{outcome.label}</span>
+                <span className="text-right font-bold text-terminal-text">{formatPredictionProbability(outcome.yesPrice)}</span>
+                <span className="text-right"><DailyMove change={outcome.yesChange24hr} /></span>
+              </div>
+            ))}
           </div>
         </div>
-        <div className="rounded border border-terminal-negative/20 bg-terminal-negative/5 px-3 py-2">
-          <div className="text-[11px] text-terminal-faint">NO</div>
-          <div className="mt-1 text-xl font-bold tabular-nums text-terminal-negative">
-            {formatPredictionProbability(forecast.noPrice)}
+      ) : (
+        <div className="space-y-2">
+          <div className="flex justify-between gap-3 text-xs font-bold tabular-nums">
+            <span className="text-terminal-positive">YES {formatPredictionProbability(forecast.yesPrice)}</span>
+            <span className="text-terminal-negative">NO {formatPredictionProbability(forecast.noPrice)}</span>
           </div>
+          <div aria-hidden="true" className="flex h-1.5 overflow-hidden rounded-full bg-terminal-elevated">
+            <div className="bg-terminal-positive" style={{ width: (forecast.yesPrice ?? 0) * 100 + '%' }} />
+            <div className="bg-terminal-negative" style={{ width: (forecast.noPrice ?? 0) * 100 + '%' }} />
+          </div>
+          <div className="text-[11px] text-terminal-faint">YES 24h change <DailyMove change={forecast.yesChange24hr} /></div>
         </div>
+      )}
+      <div className="mt-auto flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 pt-1 text-[10px] text-terminal-faint">
+        <span>{scope} 24h volume {dollars(metrics.volume24hr)}</span>
+        {!compact && <span>{scope} liquidity {dollars(metrics.liquidity)}</span>}
+        {forecast.url && <a className="text-terminal-accent hover:underline" href={forecast.url} target="_blank" rel="noreferrer">Open market</a>}
       </div>
-
-      <div className="mt-3 flex overflow-hidden rounded-full bg-terminal-elevated h-1.5">
-        <div className="h-full bg-terminal-positive" style={{ width: `${yesWidth}%` }} />
-        <div className="h-full bg-terminal-negative" style={{ width: `${noWidth}%` }} />
-      </div>
-
-      <div className="mt-3 flex items-center justify-between gap-3 text-[11px] text-terminal-faint">
-        <span>24H VOL {fmt.volume(forecast.volume24hr)}</span>
-        <span>LIQ {fmt.volume(forecast.liquidity)}</span>
-      </div>
-
-      <div className="mt-2 flex items-center justify-between gap-3 text-[11px]">
-        <span className="flex items-center gap-1 text-terminal-faint">
-          {forecast.leadingOutcome === 'Yes' ? (
-            <TrendingUp size={12} className="text-terminal-positive" />
-          ) : (
-            <TrendingDown size={12} className="text-terminal-negative" />
-          )}
-          <span>Implied lean <span className="text-terminal-text">{forecast.leadingOutcome.toUpperCase()} {formatPredictionProbability(forecast.leadingProbability)}</span></span>
-        </span>
-        {forecast.url ? (
-          <a
-            href={forecast.url}
-            target="_blank"
-            rel="noreferrer"
-            className="text-terminal-accent hover:underline"
-          >
-            OPEN MARKET
-          </a>
-        ) : (
-          <span className="text-terminal-faint">{forecast.source}</span>
-        )}
-      </div>
-    </div>
+    </article>
   );
 }

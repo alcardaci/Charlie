@@ -1,3 +1,5 @@
+import { selectPolymarketForecasts, type PolymarketEvent } from './src/data/polymarket'
+import { getGdeltNews } from './server/gdelt'
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
@@ -30,7 +32,7 @@ import {
   isSecRetryableStatus,
   resolveCikFromTicker,
 } from './src/data/sec'
-import type { SecCompanyData } from './src/types'
+import type { PredictionForecastPage, SecCompanyData } from './src/types'
 import type { SecTickerMapping } from './src/data/sec'
 import { selectSecEvidenceForTheme } from './src/utils/secOpportunityEvidence'
 import { EUROSTAT_PUBLIC_SERIES, EUROSTAT_SCHEMA_VERSION, EUROSTAT_SERIES } from './src/data/eurostatRegistry'
@@ -88,13 +90,6 @@ const TRADE_SIGNAL_QUERIES = [
 ] as const
 const TRADE_SIGNAL_QUERY_LABEL = 'Live headline radar for port strikes, closures, shipping disruptions, cargo delays, canal blockages, and rail shutdowns'
 
-// GDELT DOC 2.0 (free, no API key)
-const GDELT_DOC_URL = 'https://api.gdeltproject.org/api/v2/doc/doc'
-// GDELT DOC 2.0 caps query length at ~200 raw chars — keep to 7-8 high-signal terms
-const GDELT_TRADE_QUERY = '(shipping OR port OR cargo OR container OR logistics OR customs OR canal OR "supply chain" OR freight)'
-const GDELT_GEOPOLITICS_QUERY = '(conflict OR warfare OR invasion OR airstrike OR "missile attack" OR "border clash" OR sanctions OR ceasefire OR "civil unrest")'
-const GDELT_MAX_HEADLINES = 30
-const GDELT_TRADE_MAX_HEADLINES = 80
 const DEFAULT_GEOPOLITICS_COUNTRY_SUMMARY_SYSTEM_PROMPT = [
   'You produce concise country-level geopolitical hotspot summaries from supplied event headlines.',
   'Use only the provided country stories and preserve factual grounding with no invented details.',
@@ -251,12 +246,6 @@ const TOPIC_GUIDANCE_OUTPUT_FORMAT = {
   },
 }
 
-function hoursToGdeltTimespan(hours: number): string {
-  if (hours <= 72) return `${hours}h`
-  if (hours <= 168) return '1week'
-  return '1month'
-}
-
 // Maritime RSS feeds (free, no API key)
 const GCAPTAIN_RSS_URL = 'https://gcaptain.com/feed/'
 const MARITIME_EXEC_RSS_URL = 'https://maritime-executive.com/articles.rss'
@@ -333,7 +322,13 @@ async function getYF(forceFresh = false) {
   // v3 exports a constructor as `default.default` in ESM
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const Ctor: any = (mod as any).default?.default ?? (mod as any).default
-  yf = new Ctor({ suppressNotices: ['yahooSurvey', 'ripHistorical'] })
+  yf = new Ctor({
+    suppressNotices: ['yahooSurvey', 'ripHistorical'],
+    fetch: (input: RequestInfo | URL, init?: RequestInit) => fetch(input, {
+      ...init,
+      signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(8_000)]) : AbortSignal.timeout(8_000),
+    }),
+  })
   return yf
 }
 
@@ -475,6 +470,8 @@ function rangeToPeriods(range: string): { period1: string; period2: string } {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function sendJSON(res: any, data: unknown, status = 200) {
+  if (res.destroyed || res.writableEnded) return
+  if (res.headersSent) { res.destroy(); return }
   const body = JSON.stringify(data)
   res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' })
   res.end(body)
@@ -787,7 +784,7 @@ async function fetchOpenAIResponse(req: any, res: any, apiKey: string, body: unk
   res.once('close', abortForDisconnect)
 
   try {
-    return await fetch('https://api.openai.com/v1/responses', {
+    const response = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -796,6 +793,9 @@ async function fetchOpenAIResponse(req: any, res: any, apiKey: string, body: unk
       body: JSON.stringify(body),
       signal: controller.signal,
     })
+    // Keep timeout and disconnect handling alive until the non-streaming body completes.
+    const buffered = await response.arrayBuffer()
+    return new Response(buffered, { status: response.status, headers: response.headers })
   } catch (error) {
     if (timedOut) {
       throw new Error(`OpenAI request timed out after ${OPPORTUNITIES_OPENAI_TIMEOUT_MS / 1000} seconds.`)
@@ -1203,9 +1203,6 @@ type GdeltDocArticle = {
   language?: string
 }
 
-type GdeltDocResponse = { articles?: GdeltDocArticle[] }
-
-type GdeltRateLimitError = Error & { gdeltRateLimited: true }
 
 // ─── Maritime RSS types ──────────────────────────────────────────────────────
 
@@ -1592,90 +1589,6 @@ function liveTradeHeadlinesToGeoEvents(headlines: Array<{ title?: string | null;
   return features
 }
 
-async function fetchGdeltHeadlines(query: string, timespan: string, maxRecords = 25): Promise<GdeltDocArticle[]> {
-  const params = new URLSearchParams({
-    query,
-    mode: 'artlist',
-    timespan,
-    maxrecords: String(maxRecords),
-    sort: 'DateDesc',
-    format: 'json',
-  })
-  const url = `${GDELT_DOC_URL}?${params}`
-  const makeRateLimitError = (message: string): GdeltRateLimitError => {
-    const err = new Error(message) as GdeltRateLimitError
-    err.gdeltRateLimited = true
-    return err
-  }
-  const isRateLimitError = (error: unknown): error is GdeltRateLimitError =>
-    Boolean(error && typeof error === 'object' && (error as { gdeltRateLimited?: boolean }).gdeltRateLimited)
-
-  // GDELT can be slow to establish TLS from some networks; Node fetch often
-  // times out at connect-time before our AbortSignal kicks in. Try fetch first,
-  // then fall back to node:https with a longer socket timeout.
-  try {
-    const res = await fetch(url, {
-      headers: { Accept: 'application/json', 'User-Agent': 'Charlie/1.0' },
-      signal: AbortSignal.timeout(GDELT_FETCH_TIMEOUT_MS),
-    })
-    if (!res.ok) {
-      const body = await res.text().catch(() => '')
-      console.warn(`[vite-gdelt-doc] HTTP ${res.status}: ${body.slice(0, 200)}`)
-      if (res.status === 429) {
-        throw makeRateLimitError('GDELT rate-limited request (HTTP 429)')
-      }
-      return []
-    }
-    const data = (await res.json()) as GdeltDocResponse
-    const articles = Array.isArray(data.articles) ? data.articles : []
-    console.log(`[vite-gdelt-doc] Fetched ${articles.length} articles via fetch`)
-    return articles
-  } catch (err) {
-    if (isRateLimitError(err)) {
-      throw err
-    }
-    console.warn('[vite-gdelt-doc] fetch path failed, retrying via node:https:', err)
-  }
-
-  try {
-    const { default: https } = await import('node:https')
-    const body = await new Promise<string>((resolve, reject) => {
-      const req = https.get(url, {
-        headers: { Accept: 'application/json', 'User-Agent': 'Charlie/1.0' },
-      }, (res) => {
-        const statusCode = res.statusCode ?? 0
-        let raw = ''
-        res.setEncoding('utf8')
-        res.on('data', (chunk) => { raw += chunk })
-        res.on('end', () => {
-          if (statusCode < 200 || statusCode >= 300) {
-            if (statusCode === 429) {
-              reject(makeRateLimitError('GDELT rate-limited request (HTTP 429)'))
-              return
-            }
-            reject(new Error(`HTTP ${statusCode}: ${raw.slice(0, 200)}`))
-            return
-          }
-          resolve(raw)
-        })
-      })
-      req.setTimeout(GDELT_HTTPS_TIMEOUT_MS, () => req.destroy(new Error('GDELT https timeout')))
-      req.on('error', reject)
-    })
-
-    const data = JSON.parse(body) as GdeltDocResponse
-    const articles = Array.isArray(data.articles) ? data.articles : []
-    console.log(`[vite-gdelt-doc] Fetched ${articles.length} articles via node:https fallback`)
-    return articles
-  } catch (err) {
-    if (isRateLimitError(err)) {
-      throw err
-    }
-    console.warn('[vite-gdelt-doc] https fallback failed:', err)
-    return []
-  }
-}
-
 // ─── Maritime RSS helper functions ────────────────────────────────────────────
 
 function parseRssItems(xml: string, sourceName: string): RssFeedItem[] {
@@ -1751,123 +1664,9 @@ async function fetchRssFeed(url: string, sourceName: string): Promise<RssFeedIte
   }
 }
 
-// ─── GDELT module-level cache (shared across all limit variants, rate-limited) ─
-// GDELT DOC 2.0 allows 1 request per 5 seconds. Cache is keyed by query-scope + timespan
-// so different `limit` values reuse the same GDELT result without cross-query contamination.
-const _gdeltCache = new Map<string, { expiresAt: number; articles: GdeltDocArticle[] }>()
-const _gdeltPending = new Map<string, Promise<GdeltDocArticle[]>>()
-const _gdeltLastNonEmptyByCacheKey = new Map<string, GdeltDocArticle[]>()
-const _gdeltLastNonEmptyByQueryKey = new Map<string, GdeltDocArticle[]>()
-let _gdeltLastRequestAt = 0
-let _gdeltBlockedUntil = 0
-const GDELT_MIN_INTERVAL_MS = 6_000 // 6 s between requests (safely under GDELT's 1/5 s limit)
-const GDELT_RATE_LIMIT_COOLDOWN_MS = 60_000
-const GDELT_FETCH_TIMEOUT_MS = 12_000
-const GDELT_HTTPS_TIMEOUT_MS = 12_000
-const GDELT_ENDPOINT_BUDGET_MS = 8_000
 const TRADE_SIGNAL_BUDGET_MS = 6_000
 const PORTWATCH_ENDPOINT_BUDGET_MS = 8_000
 
-function gdeltCacheKey(queryKey: string, timespan: string): string {
-  return `${queryKey}:${timespan}`
-}
-
-async function getCachedGdeltArticles(
-  queryKey: string,
-  query: string,
-  timespan: string,
-  maxRecords: number,
-): Promise<GdeltDocArticle[]> {
-  const cacheKey = gdeltCacheKey(queryKey, timespan)
-  const cached = _gdeltCache.get(cacheKey)
-  const now = Date.now()
-  const staleByScope = cached?.articles ?? _gdeltLastNonEmptyByCacheKey.get(cacheKey) ?? []
-  const staleByQuery = _gdeltLastNonEmptyByQueryKey.get(queryKey) ?? []
-  // Serve fresh cache immediately
-  if (cached && cached.expiresAt > now) return cached.articles
-
-  if (now < _gdeltBlockedUntil) {
-    const remainingMs = _gdeltBlockedUntil - now
-    console.warn(`[vite-gdelt] In rate-limit cooldown for ${Math.ceil(remainingMs / 1000)}s; serving stale cache for ${queryKey}:${timespan}`)
-    return staleByScope.length > 0 ? staleByScope : staleByQuery
-  }
-
-  // Deduplicate concurrent requests for the same query+timespan scope
-  const inflight = _gdeltPending.get(cacheKey)
-  if (inflight) return inflight
-
-  // Rate-limit: if we're inside cooldown, prefer stale data. If there is no stale
-  // data at all, wait out cooldown once instead of returning deterministic empty.
-  const msUntilAllowed = GDELT_MIN_INTERVAL_MS - (now - _gdeltLastRequestAt)
-  const shouldWaitForQuota = msUntilAllowed > 0 && staleByScope.length === 0 && staleByQuery.length === 0
-  if (msUntilAllowed > 0) {
-    if (staleByScope.length > 0) {
-      console.log(`[vite-gdelt] Rate-limited (${Math.ceil(msUntilAllowed / 1000)}s), serving stale cache for ${queryKey}:${timespan}`)
-      return staleByScope
-    }
-    if (staleByQuery.length > 0) {
-      console.log(`[vite-gdelt] Rate-limited (${Math.ceil(msUntilAllowed / 1000)}s), serving cross-timespan stale cache for ${queryKey}:${timespan}`)
-      return staleByQuery
-    }
-    console.log(`[vite-gdelt] Waiting ${Math.ceil(msUntilAllowed / 1000)}s to respect GDELT quota for ${queryKey}:${timespan}`)
-  }
-
-  // Fire a background fetch — mark as in-flight so concurrent calls reuse it
-  const promise = (async () => {
-    try {
-      if (shouldWaitForQuota) {
-        await new Promise((resolve) => setTimeout(resolve, msUntilAllowed))
-      }
-
-      let articles: GdeltDocArticle[] = []
-      const isRateLimitError = (error: unknown): error is GdeltRateLimitError =>
-        Boolean(error && typeof error === 'object' && (error as { gdeltRateLimited?: boolean }).gdeltRateLimited)
-
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        if (attempt > 0) {
-          const retryDelayMs = 1_200 + attempt * 1_200
-          await new Promise((resolve) => setTimeout(resolve, retryDelayMs))
-        }
-        _gdeltLastRequestAt = Date.now()
-        try {
-          articles = await fetchGdeltHeadlines(query, timespan, maxRecords)
-        } catch (err) {
-          if (isRateLimitError(err)) {
-            _gdeltBlockedUntil = Date.now() + GDELT_RATE_LIMIT_COOLDOWN_MS
-            console.warn(`[vite-gdelt] Rate-limited by GDELT; pausing upstream calls for ${Math.ceil(GDELT_RATE_LIMIT_COOLDOWN_MS / 1000)}s`)
-            break
-          }
-          console.warn('[vite-gdelt-doc]', err)
-          continue
-        }
-        if (articles.length > 0) break
-      }
-
-      if (articles.length > 0) {
-        _gdeltLastNonEmptyByCacheKey.set(cacheKey, articles)
-        _gdeltLastNonEmptyByQueryKey.set(queryKey, articles)
-        _gdeltCache.set(cacheKey, { expiresAt: Date.now() + 5 * 60_000, articles })
-        return articles
-      }
-
-      const fallbackArticles = staleByScope.length > 0 ? staleByScope : staleByQuery
-      if (fallbackArticles.length > 0) {
-        console.log(`[vite-gdelt] Fresh fetch empty for ${queryKey}:${timespan}, serving last-known-good (${fallbackArticles.length})`)
-        _gdeltCache.set(cacheKey, { expiresAt: Date.now() + 90_000, articles: fallbackArticles })
-        return fallbackArticles
-      }
-
-      // If we still have nothing, keep empty cache very short so we retry soon.
-      _gdeltCache.set(cacheKey, { expiresAt: Date.now() + 20_000, articles: [] })
-      return []
-    } finally {
-      _gdeltPending.delete(cacheKey)
-    }
-  })()
-
-  _gdeltPending.set(cacheKey, promise)
-  return promise
-}
 
 // ─── AIS chokepoint monitor (module-level state) ──────────────────────────────
 
@@ -2453,361 +2252,25 @@ const ALERT_LEVEL_RANK: Record<'RED' | 'ORANGE' | 'YELLOW' | 'UNKNOWN', number> 
   UNKNOWN: 0,
 }
 
-type PolymarketTagResponse = {
-  label?: string | null
-  slug?: string | null
-}
-
-type PolymarketMarketResponse = {
-  id?: string | number
-  slug?: string | null
-  question?: string | null
-  outcomes?: unknown
-  outcomePrices?: unknown
-  volume?: unknown
-  volume24hr?: unknown
-  liquidity?: unknown
-  endDate?: string | null
-  active?: unknown
-  closed?: unknown
-  archived?: unknown
-  restricted?: unknown
-}
-
-type PolymarketEventResponse = {
-  id?: string | number
-  slug?: string | null
-  title?: string | null
-  category?: string | null
-  subcategory?: string | null
-  tags?: PolymarketTagResponse[] | null
-  markets?: PolymarketMarketResponse[] | null
-  volume?: unknown
-  volume24hr?: unknown
-  liquidity?: unknown
-  endDate?: string | null
-  active?: unknown
-  closed?: unknown
-  archived?: unknown
-  restricted?: unknown
-}
-
-type PolymarketForecast = {
-  id: string
-  question: string
-  eventTitle: string | null
-  theme: string
-  category: string | null
-  subcategory: string | null
-  tags: string[]
-  endDate: string | null
-  yesPrice: number | null
-  noPrice: number | null
-  leadingOutcome: string
-  leadingProbability: number | null
-  volume24hr: number | null
-  volume: number | null
-  liquidity: number | null
-  url: string | null
-  source: string
-}
-
-function coerceBoolean(value: unknown): boolean | null {
-  if (typeof value === 'boolean') return value
-  if (typeof value === 'number') return value !== 0
-  if (typeof value === 'string') {
-    const normalized = value.trim().toLowerCase()
-    if (['true', '1', 'yes'].includes(normalized)) return true
-    if (['false', '0', 'no'].includes(normalized)) return false
+async function fetchPolymarketSnapshot(cursor: string): Promise<PredictionForecastPage> {
+  const params = new URLSearchParams({
+    active: 'true', closed: 'false', archived: 'false', limit: '120', order: 'volume24hr', ascending: 'false',
+  })
+  if (cursor) params.set('after_cursor', cursor)
+  const response = await fetch(POLYMARKET_GAMMA_URL + '/events/keyset?' + params, {
+    signal: AbortSignal.timeout(8_000),
+    headers: { Accept: 'application/json', 'User-Agent': 'Charlie/1.0' },
+  })
+  if (!response.ok) throw new Error('Polymarket forecast fetch failed (' + response.status + ')')
+  const payload = await response.json() as { events?: PolymarketEvent[]; next_cursor?: unknown } | null
+  const events = payload?.events
+  if (!Array.isArray(events)) throw new Error('Invalid Polymarket events response')
+  return {
+    updatedAt: new Date().toISOString(),
+    source: 'Polymarket Gamma API',
+    forecasts: selectPolymarketForecasts(events, events.length),
+    nextCursor: typeof payload?.next_cursor === 'string' && payload.next_cursor && payload.next_cursor !== cursor ? payload.next_cursor : null,
   }
-
-  return null
-}
-
-function parsePolymarketArray(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value.map((entry) => String(entry ?? '').trim()).filter(Boolean)
-  }
-
-  if (typeof value !== 'string' || !value.trim()) return []
-
-  try {
-    const parsed = JSON.parse(value)
-    return Array.isArray(parsed)
-      ? parsed.map((entry) => String(entry ?? '').trim()).filter(Boolean)
-      : []
-  } catch {
-    return value.split(',').map((entry) => entry.trim()).filter(Boolean)
-  }
-}
-
-function isPastIsoTimestamp(value: string | null): boolean {
-  if (!value) return false
-  const timestamp = Date.parse(value)
-  return Number.isFinite(timestamp) && timestamp < Date.now()
-}
-
-function comparePolymarketForecasts(a: PolymarketForecast, b: PolymarketForecast): number {
-  const aPrimary = a.volume24hr ?? a.volume ?? 0
-  const bPrimary = b.volume24hr ?? b.volume ?? 0
-  if (bPrimary !== aPrimary) return bPrimary - aPrimary
-
-  const aSecondary = a.liquidity ?? 0
-  const bSecondary = b.liquidity ?? 0
-  if (bSecondary !== aSecondary) return bSecondary - aSecondary
-
-  return (b.leadingProbability ?? 0) - (a.leadingProbability ?? 0)
-}
-
-function classifyPolymarketTheme(text: string): string | null {
-  const normalized = text.toLowerCase()
-  const excludedKeywords = [
-    'sports',
-    'nba',
-    'nfl',
-    'mlb',
-    'nhl',
-    'ncaa',
-    'champions league',
-    'premier league',
-    'super bowl',
-    'formula 1',
-    'f1 ',
-    'ufc',
-    'boxing',
-    'tennis',
-    'golf',
-    'soccer',
-    'football',
-    'baseball',
-    'basketball',
-    'hockey',
-    'cricket',
-    'oscars',
-    'grammys',
-    'emmys',
-    'awards',
-    'music',
-    'culture',
-    'eurovision',
-    'survivor',
-    'big brother',
-    'love island',
-  ]
-
-  if (excludedKeywords.some((keyword) => normalized.includes(keyword))) {
-    return null
-  }
-
-  if ([
-    'bitcoin',
-    'btc',
-    'ethereum',
-    'eth',
-    'solana',
-    'crypto',
-    'token',
-    'stablecoin',
-    'memecoin',
-    'dogecoin',
-    'xrp',
-  ].some((keyword) => normalized.includes(keyword))) {
-    return 'Crypto'
-  }
-
-  if ([
-    'fed',
-    'fomc',
-    'cpi',
-    'pce',
-    'inflation',
-    'gdp',
-    'recession',
-    'payroll',
-    'jobs report',
-    'unemployment',
-    'rate cut',
-    'rate hike',
-    'treasury',
-    'yield',
-    'economy',
-  ].some((keyword) => normalized.includes(keyword))) {
-    return 'Macro'
-  }
-
-  if ([
-    'ukraine',
-    'russia',
-    'china',
-    'taiwan',
-    'israel',
-    'gaza',
-    'iran',
-    'tariff',
-    'ceasefire',
-    'war',
-    'sanction',
-    'nato',
-    'european union',
-    'geopolit',
-    'middle east',
-  ].some((keyword) => normalized.includes(keyword))) {
-    return 'Geopolitics'
-  }
-
-  if ([
-    'election',
-    'president',
-    'prime minister',
-    'congress',
-    'senate',
-    'house',
-    'governor',
-    'mayor',
-    'trump',
-    'biden',
-    'democrat',
-    'republican',
-    'parliament',
-    'politics',
-  ].some((keyword) => normalized.includes(keyword))) {
-    return 'Politics'
-  }
-
-  if ([
-    'nvidia',
-    'tesla',
-    'apple',
-    'microsoft',
-    'openai',
-    'earnings',
-    'ipo',
-    'ai ',
-    'artificial intelligence',
-    'company',
-    'stock',
-    'nasdaq',
-    's&p 500',
-  ].some((keyword) => normalized.includes(keyword))) {
-    return 'Business'
-  }
-
-  if (normalized.includes('crypto')) return 'Crypto'
-  if (normalized.includes('politic')) return 'Politics'
-  if (normalized.includes('world')) return 'Geopolitics'
-  if (normalized.includes('business') || normalized.includes('technology') || normalized.includes('finance')) return 'Business'
-
-  return 'Top market'
-}
-
-function selectPolymarketForecasts(events: PolymarketEventResponse[], limit: number): PolymarketForecast[] {
-  const candidates = events
-    .flatMap((event) => {
-      if (coerceBoolean(event.closed) === true || coerceBoolean(event.archived) === true) {
-        return []
-      }
-
-      const eventTitle = typeof event.title === 'string' && event.title.trim() ? event.title.trim() : null
-      const category = typeof event.category === 'string' && event.category.trim() ? event.category.trim() : null
-      const subcategory = typeof event.subcategory === 'string' && event.subcategory.trim() ? event.subcategory.trim() : null
-      const tags = Array.isArray(event.tags)
-        ? event.tags.flatMap((tag) => {
-            const label = typeof tag?.label === 'string' ? tag.label.trim() : ''
-            return label ? [label] : []
-          })
-        : []
-
-      return (Array.isArray(event.markets) ? event.markets : [])
-        .flatMap((market): PolymarketForecast[] => {
-          if (
-            coerceBoolean(market.active) === false ||
-            coerceBoolean(market.closed) === true ||
-            coerceBoolean(market.archived) === true
-          ) {
-            return []
-          }
-
-          const outcomes = parsePolymarketArray(market.outcomes)
-          const prices = parsePolymarketArray(market.outcomePrices).map((price) => toFiniteNumber(price))
-          if (outcomes.length !== 2 || prices.length !== 2) return []
-
-          const yesIndex = outcomes.findIndex((outcome) => outcome.toLowerCase() === 'yes')
-          const noIndex = outcomes.findIndex((outcome) => outcome.toLowerCase() === 'no')
-          if (yesIndex === -1 || noIndex === -1) return []
-
-          const question = typeof market.question === 'string' && market.question.trim()
-            ? market.question.trim()
-            : eventTitle
-          if (!question) return []
-
-          const theme = classifyPolymarketTheme([question, eventTitle, category, subcategory, ...tags].filter(Boolean).join(' | '))
-          if (!theme) return []
-
-          const yesPrice = prices[yesIndex]
-          const noPrice = prices[noIndex]
-          const leadingOutcome = (yesPrice ?? -1) >= (noPrice ?? -1) ? 'Yes' : 'No'
-          const leadingProbability = Math.max(yesPrice ?? 0, noPrice ?? 0) || null
-          const endDate = typeof market.endDate === 'string' && market.endDate.trim()
-            ? market.endDate.trim()
-            : typeof event.endDate === 'string' && event.endDate.trim()
-              ? event.endDate.trim()
-              : null
-          if (isPastIsoTimestamp(endDate)) return []
-          const slug = typeof event.slug === 'string' && event.slug.trim()
-            ? event.slug.trim()
-            : typeof market.slug === 'string' && market.slug.trim()
-              ? market.slug.trim()
-              : null
-
-          return [{
-            id: String(market.id ?? `${slug ?? question}`),
-            question,
-            eventTitle,
-            theme,
-            category,
-            subcategory,
-            tags,
-            endDate,
-            yesPrice,
-            noPrice,
-            leadingOutcome,
-            leadingProbability,
-            volume24hr: toFiniteNumber(market.volume24hr) ?? toFiniteNumber(event.volume24hr),
-            volume: toFiniteNumber(market.volume) ?? toFiniteNumber(event.volume),
-            liquidity: toFiniteNumber(market.liquidity) ?? toFiniteNumber(event.liquidity),
-            url: slug ? `https://polymarket.com/event/${slug}` : null,
-            source: 'Polymarket Gamma API',
-          }]
-        })
-        .sort(comparePolymarketForecasts)
-        .slice(0, 1)
-    })
-    .sort(comparePolymarketForecasts)
-
-  const deduped: PolymarketForecast[] = []
-  const seen = new Set<string>()
-
-  for (const candidate of candidates) {
-    const key = candidate.url ?? candidate.question.toLowerCase()
-    if (seen.has(key)) continue
-    seen.add(key)
-    deduped.push(candidate)
-  }
-
-  const selected: PolymarketForecast[] = []
-  for (const theme of ['Macro', 'Politics', 'Geopolitics', 'Crypto', 'Business']) {
-    const match = deduped.find((forecast) => forecast.theme === theme && !selected.some((entry) => entry.id === forecast.id))
-    if (match) selected.push(match)
-    if (selected.length >= limit) return selected.slice(0, limit)
-  }
-
-  for (const forecast of deduped) {
-    if (selected.some((entry) => entry.id === forecast.id)) continue
-    selected.push(forecast)
-    if (selected.length >= limit) break
-  }
-
-  return selected.slice(0, limit)
 }
 
 const APP_SUPPORT_DIR = join(homedir(), 'Library', 'Application Support', 'Charlie')
@@ -2849,10 +2312,20 @@ async function readLocalState(name: string): Promise<string | null> {
   }
 }
 
+const pendingStateChanges = new Map<string, Promise<void>>()
+function queueStateChange(name: string, change: () => Promise<void>): Promise<void> {
+  const prior = pendingStateChanges.get(name) ?? Promise.resolve()
+  const next = prior.catch(() => {}).then(change)
+  pendingStateChanges.set(name, next)
+  return next.finally(() => {
+    if (pendingStateChanges.get(name) === next) pendingStateChanges.delete(name)
+  })
+}
+
 async function writeLocalState(name: string, value: string): Promise<void> {
   await mkdir(LOCAL_STATE_DIR, { recursive: true })
   const file = localStateFile(name)
-  const tempFile = `${file}.tmp`
+  const tempFile = `${file}.${process.pid}.tmp`
   await writeFile(tempFile, JSON.stringify({ value, updatedAt: new Date().toISOString() }), 'utf8')
   await rename(tempFile, file)
 }
@@ -3072,6 +2545,7 @@ function registerLocalStateMiddleware(server: ViteDevServer | PreviewServer): vo
       if (!name) return sendError(res, 'state name required', 400)
 
       if (req.method === 'GET') {
+        await pendingStateChanges.get(name)?.catch(() => {})
         const value = await readLocalState(name)
         return sendJSON(res, { value })
       }
@@ -3080,12 +2554,12 @@ function registerLocalStateMiddleware(server: ViteDevServer | PreviewServer): vo
         const body = await readRequestBody(req)
         const payload = body ? (JSON.parse(body) as { value?: unknown }) : {}
         if (typeof payload.value !== 'string') return sendError(res, 'value must be a string', 400)
-        await writeLocalState(name, payload.value)
+        await queueStateChange(name, () => writeLocalState(name, payload.value!))
         return sendJSON(res, { ok: true })
       }
 
       if (req.method === 'DELETE') {
-        await deleteLocalState(name)
+        await queueStateChange(name, () => deleteLocalState(name))
         return sendJSON(res, { ok: true })
       }
 
@@ -3896,7 +3370,7 @@ function formatCompanionInput(args: {
 
 function marketDataMiddleware(): Plugin {
   const yahooQuoteCache = new Map<string, { expiresAt: number; staleUntil: number; payload: unknown[] }>()
-  const polymarketForecastCache = new Map<string, { expiresAt: number; payload: unknown }>()
+  const polymarketForecastCache = new Map<string, { expiresAt: number; request: Promise<PredictionForecastPage> }>()
   const secIdentityCache = new Map<string, SecCacheEntry<unknown>>()
   const secSubmissionsCache = new Map<string, SecCacheEntry<unknown>>()
   const secFactsCache = new Map<string, SecCacheEntry<unknown>>()
@@ -4304,54 +3778,25 @@ function marketDataMiddleware(): Plugin {
         if (url.pathname !== '/api/polymarket/forecasts') return next()
         if (req.method !== 'GET') return sendError(res, 'method not allowed', 405)
 
-        const limit = Math.max(1, Math.min(12, Number.parseInt(url.searchParams.get('limit') ?? '6', 10) || 6))
-        const cacheKey = String(limit)
-        const cached = polymarketForecastCache.get(cacheKey)
-        if (cached && cached.expiresAt > Date.now()) {
-          return sendJSON(res, cached.payload)
+        const browsing = url.searchParams.get('view') === 'browse'
+        const limit = Math.max(1, Math.min(120, Number.parseInt(url.searchParams.get('limit') ?? '6', 10) || 6))
+        const cursor = browsing ? url.searchParams.get('after') ?? '' : ''
+        // Overview and Predictions share the opening page. Further source pages are fetched on demand.
+        const now = Date.now()
+        for (const [key, entry] of polymarketForecastCache) {
+          if (entry.expiresAt <= now) polymarketForecastCache.delete(key)
         }
-
+        let cached = polymarketForecastCache.get(cursor)
+        if (!cached) {
+          cached = { expiresAt: now + 2 * 60_000, request: fetchPolymarketSnapshot(cursor) }
+          polymarketForecastCache.set(cursor, cached)
+        }
         try {
-          const upstreamParams = new URLSearchParams({
-            active: 'true',
-            closed: 'false',
-            archived: 'false',
-            limit: '120',
-            order: 'volume24hr',
-            ascending: 'false',
-          })
-
-          const response = await fetch(`${POLYMARKET_GAMMA_URL}/events?${upstreamParams.toString()}`, {
-            headers: {
-              Accept: 'application/json',
-              'User-Agent': 'Charlie/1.0',
-            },
-          })
-
-          const payload = await response.json().catch(() => null) as PolymarketEventResponse[] | { data?: PolymarketEventResponse[] } | null
-          const events = Array.isArray(payload)
-            ? payload
-            : Array.isArray(payload?.data)
-              ? payload.data
-              : []
-
-          if (!response.ok) {
-            throw new Error(`Polymarket forecast fetch failed (${response.status})`)
-          }
-
-          const body = {
-            updatedAt: new Date().toISOString(),
-            source: 'Polymarket Gamma API',
-            forecasts: selectPolymarketForecasts(events, limit),
-          }
-
-          polymarketForecastCache.set(cacheKey, {
-            expiresAt: Date.now() + 2 * 60_000,
-            payload: body,
-          })
-
-          return sendJSON(res, body)
+          const snapshot = await cached.request
+          if (browsing) return sendJSON(res, snapshot)
+          return sendJSON(res, { updatedAt: snapshot.updatedAt, source: snapshot.source, forecasts: snapshot.forecasts.slice(0, limit) })
         } catch (err) {
+          if (cached === polymarketForecastCache.get(cursor)) polymarketForecastCache.delete(cursor)
           const msg = err instanceof Error ? err.message : String(err)
           console.error('[vite-polymarket]', msg)
           return sendError(res, msg)
@@ -4373,48 +3818,7 @@ function marketDataMiddleware(): Plugin {
 
           const timeframeHours = clampPositiveInteger(url.searchParams.get('timeframeHours'), 24, 720, 1)
           const limit = clampPositiveInteger(url.searchParams.get('limit'), 80, 240, 10)
-          const gdeltTimespan = hoursToGdeltTimespan(timeframeHours)
-          const liveHeadlineCutoff = Date.now() - timeframeHours * 60 * 60 * 1000
-          const maxRecords = Math.max(limit, GDELT_MAX_HEADLINES)
-
-          const articles = await getCachedGdeltArticles(
-            'geopolitics',
-            GDELT_GEOPOLITICS_QUERY,
-            gdeltTimespan,
-            maxRecords,
-          )
-
-          const seenKeys = new Set<string>()
-          const payload = articles
-            .map((article) => {
-              const title = normalizeHeadlineText(article.title)
-              const link = canonicalizeUrl(article.url)
-              if (!title || !link) return null
-
-              const seenAt = parseGdeltSeenDate(article.seendate)
-              const publishedAt = seenAt ? Date.parse(seenAt) : 0
-              if (!Number.isFinite(publishedAt) || publishedAt < liveHeadlineCutoff) return null
-
-              const dedupeKey = `${title.toLowerCase().slice(0, 120)}|${link}`
-              if (seenKeys.has(dedupeKey)) return null
-              seenKeys.add(dedupeKey)
-
-              const sourceCountry = typeof article.sourcecountry === 'string' && article.sourcecountry.trim()
-                ? article.sourcecountry.trim()
-                : null
-
-              return {
-                title,
-                link,
-                publisher: normalizeHeadlineText(article.domain) ?? 'GDELT',
-                publishedAt,
-                sourceCountry,
-              }
-            })
-            .filter((item): item is NonNullable<typeof item> => item !== null)
-            .sort((left, right) => right.publishedAt - left.publishedAt)
-            .slice(0, limit)
-
+          const payload = await getGdeltNews(timeframeHours, limit)
           return sendJSON(res, payload)
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
@@ -4778,18 +4182,11 @@ function marketDataMiddleware(): Plugin {
               JSON.stringify(headlines, null, 2),
             ].join('\n')
 
-            const openAIResponse = await fetch('https://api.openai.com/v1/responses', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${apiKey}`,
-              },
-              body: JSON.stringify({
+            const openAIResponse = await fetchOpenAIResponse(req, res, apiKey, {
                 model,
                 instructions: systemPrompt,
                 input,
-              }),
-            })
+              })
 
             const responsePayload = await openAIResponse.json().catch(() => null)
             if (!openAIResponse.ok) {
@@ -4937,7 +4334,7 @@ function marketDataMiddleware(): Plugin {
               '- Avoid generic phrases like "developments remain event-driven". Describe the concrete events and what changed.',
               '- Include specific actors, locations, and actions from the provided story titles when available.',
               '- Mention the dominant event pattern and risk tone implied by the provided events.',
-              '- sourceLinks must contain 2 to 6 links from the SAME country story list that directly support the summary.',
+              '- Cite 1 to 6 exact links from this country’s story list that support the summary. If only one source supports it, cite that source.',
               '- sourceLinks should correspond to the exact stories whose headlines most directly support the summary text.',
               '- countryCode must match one of the provided country codes exactly.',
               '- Do not output markdown or additional keys.',
@@ -4946,18 +4343,11 @@ function marketDataMiddleware(): Plugin {
               JSON.stringify(countries, null, 2),
             ].join('\n')
 
-            const openAIResponse = await fetch('https://api.openai.com/v1/responses', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${apiKey}`,
-              },
-              body: JSON.stringify({
+            const openAIResponse = await fetchOpenAIResponse(req, res, apiKey, {
                 model,
                 instructions: DEFAULT_GEOPOLITICS_COUNTRY_SUMMARY_SYSTEM_PROMPT,
                 input,
-              }),
-            })
+              })
 
             const responsePayload = await openAIResponse.json().catch(() => null)
             if (!openAIResponse.ok) {
@@ -5543,18 +4933,11 @@ function marketDataMiddleware(): Plugin {
             .filter(Boolean)
             .join('\n\n')
 
-          const openAIResponse = await fetch('https://api.openai.com/v1/responses', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify({
+          const openAIResponse = await fetchOpenAIResponse(req, res, apiKey, {
               model,
               instructions,
               input: `Summarize this market overview snapshot for a professional terminal user using only the provided snapshot data.\n\n${JSON.stringify(snapshot, null, 2)}`,
-            }),
-          })
+            })
 
           const responsePayload = await openAIResponse.json().catch(() => null)
           if (!openAIResponse.ok) {
@@ -5600,6 +4983,9 @@ function marketDataMiddleware(): Plugin {
                 proxyRes.on('end', resolve)
               }
             )
+            const disconnect = () => { if (!res.writableEnded) proxyReq.destroy() }
+            res.once('close', disconnect)
+            proxyReq.once('close', () => res.removeListener('close', disconnect))
             proxyReq.on('error', reject)
           })
         } catch (err) {
@@ -5624,7 +5010,7 @@ function marketDataMiddleware(): Plugin {
           const { default: https } = await import('node:https')
           await new Promise<void>((resolve, reject) => {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const proxyReq = https.get(target, { headers: { 'User-Agent': 'Charlie/1.0', Accept: 'application/json' } }, (proxyRes: any) => {
+            const proxyReq = https.get(target, { signal: AbortSignal.timeout(7_000), headers: { 'User-Agent': 'Charlie/1.0', Accept: 'application/json' } }, (proxyRes: any) => {
               res.writeHead(proxyRes.statusCode ?? 200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
               proxyRes.pipe(res)
               proxyRes.on('end', resolve)
@@ -5651,7 +5037,7 @@ function marketDataMiddleware(): Plugin {
         } catch {
           return sendError(res, 'Unsupported OECD country contract', 404)
         }
-        const cacheKey = `oecd-country-v2:${country}`
+        const cacheKey = `oecd-country-v3:${country}`
         const cached = oecdCache.get(cacheKey)
         const age = cached ? Date.now() - cached.savedAt : Number.POSITIVE_INFINITY
         const refresh = async () => {
@@ -5660,7 +5046,7 @@ function marketDataMiddleware(): Plugin {
             const seriesKey = buildOecdKeiSeriesKey(country, metric)
             if (!seriesKey) return []
             const definition = OECD_COMPARABLE_SERIES[metric]
-            const year = new Date().getUTCFullYear() - 4
+            const year = new Date().getUTCFullYear() - 5
             const startPeriod = definition.frequency === 'quarterly' ? `${year}-Q1` : `${year}-01`
             const target = `https://sdmx.oecd.org/public/rest/data/${definition.dataset}/${seriesKey}?startPeriod=${startPeriod}&dimensionAtObservation=AllDimensions&format=jsondata`
             return [fetchOecdJson(target, new AbortController().signal).then((payload) => [metric, payload] as const)]
@@ -5696,11 +5082,11 @@ function marketDataMiddleware(): Plugin {
         const url = new URL(req.url ?? '/', 'http://localhost')
         if (url.pathname !== '/api/oecd/cli') return next()
         if (req.method !== 'GET') return sendError(res, 'method not allowed', 405)
-        const cacheKey = 'oecd-cli-v1'
+        const cacheKey = 'oecd-cli-v2'
         const cached = oecdCache.get(cacheKey)
         const age = cached ? Date.now() - cached.savedAt : Number.POSITIVE_INFINITY
         const refresh = async () => {
-          const year = new Date().getUTCFullYear() - 1
+          const year = new Date().getUTCFullYear() - 5
           const target = `https://sdmx.oecd.org/public/rest/data/OECD.SDD.STES,DSD_STES@DF_CLI,4.1/USA+DEU+FRA+ITA+GBR.M.LI...AA...H?startPeriod=${year}-01&dimensionAtObservation=AllDimensions&format=jsondata`
           const payload = await fetchOecdJson(target, new AbortController().signal)
           oecdCache.set(cacheKey, { savedAt: Date.now(), payload })
@@ -5733,7 +5119,7 @@ function marketDataMiddleware(): Plugin {
         const refresh = async () => {
           const definitions = EUROSTAT_PUBLIC_SERIES
           const entries = await Promise.allSettled(definitions.map(async (definition) => {
-            const query = new URLSearchParams({ ...definition.params, geo: 'EA21', lastTimePeriod: '24', lang: 'en', format: 'JSON' })
+            const query = new URLSearchParams({ ...definition.params, geo: 'EA21', lastTimePeriod: definition.frequency === 'quarterly' ? '22' : '62', lang: 'en', format: 'JSON' })
             return [definition.id, await fetchPublicStatsJson(`https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/${definition.dataset}?${query.toString()}`, new AbortController().signal)] as const
           }))
           const series: Record<string, unknown> = {}
@@ -5779,7 +5165,7 @@ function marketDataMiddleware(): Plugin {
           const { default: https } = await import('node:https')
           await new Promise<void>((resolve, reject) => {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const proxyReq = https.get(target, { headers: { 'User-Agent': 'Charlie/1.0', Accept: 'application/json' } }, (proxyRes: any) => {
+            const proxyReq = https.get(target, { signal: AbortSignal.timeout(7_000), headers: { 'User-Agent': 'Charlie/1.0', Accept: 'application/json' } }, (proxyRes: any) => {
               res.writeHead(proxyRes.statusCode ?? 200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
               proxyRes.pipe(res)
               proxyRes.on('end', resolve)

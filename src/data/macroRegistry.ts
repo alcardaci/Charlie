@@ -28,6 +28,7 @@ export interface MacroSeriesContract {
   frequency: MacroFrequency;
   areaScope: string;
   fredUnits?: 'pc1';
+  rateHistoryObservations?: number;
   maxAbsValue: number;
 }
 
@@ -85,6 +86,7 @@ export const FRED_SERIES_REGISTRY: Record<MacroCountryCode, Record<MacroMetricKe
       country: 'EA', metric: 'policyRate', source: 'FRED', seriesId: 'ECBMRRFR',
       sourceTitle: 'ECB Main Refinancing Operations Rate', sourceUrl: 'https://fred.stlouisfed.org/series/ECBMRRFR',
       displayLabel: 'ECB Policy Rate', shortLabel: 'Policy', unit: '%', frequency: 'daily', areaScope: 'Euro Area', maxAbsValue: 30,
+      rateHistoryObservations: 1830,
     },
     inflation: {
       country: 'EA', metric: 'inflation', source: 'FRED', seriesId: 'CP0000EZ19M086NEST',
@@ -340,21 +342,29 @@ export function isValidMacroMagnitude(contract: MacroSeriesContract, value: numb
 export const US_RELEASE_TARGETS = [
   {
     key: 'cpi',
+    releaseId: 10,
+    releaseName: 'Consumer Price Index',
     label: 'US CPI',
     matchers: [/consumer price index/i],
   },
   {
     key: 'jobs',
+    releaseId: 50,
+    releaseName: 'Employment Situation',
     label: 'US Jobs Report',
     matchers: [/employment situation/i],
   },
   {
     key: 'retail',
+    releaseId: 9,
+    releaseName: 'Advance Monthly Sales for Retail and Food Services',
     label: 'US Retail Sales',
     matchers: [/retail/i, /food services/i],
   },
   {
     key: 'gdp',
+    releaseId: 53,
+    releaseName: 'Gross Domestic Product',
     label: 'US GDP',
     matchers: [/gross domestic product/i],
   },

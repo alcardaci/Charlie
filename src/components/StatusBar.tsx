@@ -5,7 +5,7 @@ import { isMarketOpen } from '../utils/formatters';
 const SHORTCUTS = [
   { key: 'F1', label: 'OVERVIEW', command: 'HOME' },
   { key: 'F2', label: 'PORT', command: 'PORT' },
-  { key: 'F3', label: 'OPPS', command: 'OPPS' },
+  { key: 'F3', label: 'EQUITY', command: 'RESEARCH' },
   { key: 'F4', label: 'NEWS', command: 'NEWS' },
   { key: 'F5', label: 'MACRO', command: 'MACRO' },
   { key: 'F6', label: 'HEAT', command: 'HEAT' },
@@ -57,8 +57,8 @@ export function StatusBar() {
         <span className="text-terminal-faint">USD</span>
         <div className="flex items-center gap-1">
           <div className={`w-1.5 h-1.5 rounded-full ${open ? 'bg-terminal-positive animate-pulse' : 'bg-terminal-faint'}`} />
-          <span className={open ? 'text-terminal-positive' : 'text-terminal-faint'}>
-            {open ? 'NYSE · OPEN' : 'NYSE · CLOSED'}
+          <span title="Weekday New York schedule; holidays and early closes are not included." className={open ? 'text-terminal-positive' : 'text-terminal-faint'}>
+            {open ? 'US · SCHEDULED HOURS' : 'US · OUTSIDE HOURS'}
           </span>
         </div>
         <span className="text-terminal-faint">

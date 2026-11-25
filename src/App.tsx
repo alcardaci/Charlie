@@ -3,11 +3,11 @@ import { useEffect, useRef, useState } from 'react';
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { CommandBar } from './components/CommandBar';
 import { MarketTicker } from './components/MarketTicker';
+import { NewsTicker } from './components/NewsTicker';
 import { WatchlistSidebar } from './components/WatchlistSidebar';
 import { NewsPanel } from './components/NewsPanel';
 import { StatusBar } from './components/StatusBar';
 import { MainPanel } from './components/MainPanel';
-import { CharlieLivePlayer } from './components/CharlieLivePlayer';
 import { MobileNavigation } from './components/MobileNavigation';
 import { PanelCompanion } from './components/PanelCompanion';
 import { useTerminalStore } from './store/useTerminalStore';
@@ -17,8 +17,9 @@ const WATCHLIST_DESKTOP_WIDTH_REM = 11;
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      retry: 2,
+      retry: 1,
       retryDelay: 1000,
+      refetchOnWindowFocus: false,
       staleTime: 30000,
       gcTime: 600000,
     },
@@ -32,7 +33,7 @@ export default function App() {
   const sideNewsRef = useRef<HTMLDivElement | null>(null);
 
   // News panel is shown on the right side unless we're already in the news panel
-  const showSideNews = activePanel !== 'news' && activePanel !== 'geopolitics' && activePanel !== 'predictions' && activePanel !== 'opportunities';
+  const showSideNews = activePanel !== 'news' && activePanel !== 'geopolitics' && activePanel !== 'predictions';
 
   useEffect(() => {
     setMobileWatchlistOpen(false);
@@ -57,8 +58,8 @@ export default function App() {
         {/* Top bar */}
         <CommandBar onOpenWatchlist={() => setMobileWatchlistOpen(true)} />
 
-        {/* Market ticker strip */}
         <MarketTicker />
+        <NewsTicker />
 
         {/* Main content area */}
         <div className="relative flex min-h-0 flex-1 pb-14 md:pb-0">
@@ -94,11 +95,6 @@ export default function App() {
         {/* Status bar */}
         <div className="hidden md:block">
           <StatusBar />
-        </div>
-
-        {/* Global media widget */}
-        <div className="hidden md:block">
-          <CharlieLivePlayer />
         </div>
 
         <MobileNavigation onOpenWatchlist={() => setMobileWatchlistOpen(true)} />

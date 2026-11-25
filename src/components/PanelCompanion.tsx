@@ -52,7 +52,6 @@ type PanelMentionTrigger = {
 
 const PANEL_MENTION_OPTIONS: PanelMentionOption[] = [
   { panel: 'overview', token: 'overview', aliases: ['home', 'market'] },
-  { panel: 'opportunities', token: 'opportunities', aliases: ['opps', 'themes'] },
   { panel: 'news', token: 'news', aliases: ['headlines'] },
   { panel: 'macro', token: 'macro', aliases: ['rates', 'economy', 'yield'] },
   { panel: 'geopolitics', token: 'geopolitics', aliases: ['geo'] },
@@ -73,7 +72,6 @@ const PANEL_MENTION_LOOKUP = new Map(
 
 const PANEL_HINT_PATTERNS: Array<{ panel: PanelType; pattern: RegExp }> = [
   { panel: 'overview', pattern: /\b(home|overview|market overview)\b/i },
-  { panel: 'opportunities', pattern: /\b(opps|opportunities|themes|theme discovery)\b/i },
   { panel: 'news', pattern: /\b(news|headlines|headline feed)\b/i },
   { panel: 'macro', pattern: /\b(macro|yield|economic|economy|rates)\b/i },
   { panel: 'geopolitics', pattern: /\b(geo|geopolitics|geopolitical|hotspots)\b/i },
@@ -229,6 +227,8 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
     openAISettings,
     watchlist,
     portfolio,
+    portfolioDisplayCurrency,
+    macroCountry,
     forexPairs,
     debugMode,
     companionOpen,
@@ -467,6 +467,8 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
           activeSymbol,
           watchlist,
           portfolio,
+          portfolioDisplayCurrency,
+          macroCountry,
           forexPairs,
         },
         renderedTextByPanel,

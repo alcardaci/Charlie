@@ -1,37 +1,90 @@
-import { useQuery } from '@tanstack/react-query';
-import { fetchPredictionForecasts } from '../api/finance';
+import { useMemo, useState } from 'react';
+import { useInfiniteQuery } from '@tanstack/react-query';
+import { fetchPredictionPage } from '../api/finance';
 import { PredictionMarketsSection } from '../components/PredictionMarketsSection';
+import { predictionRowsFromPages } from '../utils/marketPanelDisplay';
+
+const cardsPerBatch = 12;
 
 export function PredictionPanel() {
-  const { data: predictionSnapshot, isLoading } = useQuery({
-    queryKey: ['prediction-markets-panel', 12],
-    queryFn: () => fetchPredictionForecasts(12),
-    refetchInterval: 2 * 60 * 1000,
-    staleTime: 60 * 1000,
+  const [visibleCount, setVisibleCount] = useState(cardsPerBatch);
+  const [scanning, setScanning] = useState(false);
+  const {
+    data, isLoading, isError, isFetching, isFetchNextPageError, isRefetchError,
+    hasNextPage, fetchNextPage, refetch,
+  } = useInfiniteQuery({
+    queryKey: ['prediction-market-pages'],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam, signal }) => fetchPredictionPage(pageParam, signal),
+    getNextPageParam: (last, _pages, _param, params) =>
+      last.nextCursor && !params.includes(last.nextCursor) ? last.nextCursor : undefined,
+    refetchInterval: query => visibleCount <= cardsPerBatch && (query.state.data?.pages.length ?? 0) <= 1 ? 2 * 60_000 : false,
+    staleTime: 60_000,
     retry: 1,
+    refetchOnWindowFocus: false,
   });
+  const forecasts = useMemo(() => predictionRowsFromPages(data?.pages ?? []), [data]);
+  const displayed = forecasts.slice(0, visibleCount);
+  const remaining = forecasts.length - displayed.length;
+  const updatedAt = data?.pages[0]?.updatedAt;
+
+  async function showMore() {
+    if (remaining > 0) {
+      setVisibleCount(displayed.length + Math.min(cardsPerBatch, remaining));
+      return;
+    }
+    if (!hasNextPage || isFetching || scanning) return;
+    setScanning(true);
+    try {
+      // A raw source page can contain only sports, expired contracts or previously seen events.
+      // Continue through a few such pages per click, keeping the already-read cards in place.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const result = await fetchNextPage({ cancelRefetch: false });
+        if (result.isFetchNextPageError || !result.data) return;
+        const count = predictionRowsFromPages(result.data.pages).length;
+        if (count > displayed.length) {
+          setVisibleCount(Math.min(count, displayed.length + cardsPerBatch));
+          return;
+        }
+        if (!result.hasNextPage) return;
+      }
+    } finally {
+      setScanning(false);
+    }
+  }
 
   return (
     <div className="h-full overflow-y-auto p-4 space-y-4">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
         <div>
           <h1 className="text-terminal-accent font-bold text-sm tracking-wider">PREDICTION MARKETS</h1>
-          <p className="text-xs text-terminal-faint mt-1">
-            Polymarket forecasts across macro, politics, geopolitics, crypto, and business themes.
+          <p className="mt-1 text-xs text-terminal-muted">
+            Selected from Polymarket’s busiest open events. Contested outcomes with recent trading appear first.
           </p>
         </div>
-        <div className="text-xs text-terminal-faint">
-          Read-only Polymarket forecast feed
-          {predictionSnapshot?.updatedAt ? ` | Updated ${new Date(predictionSnapshot.updatedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}` : ''}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-terminal-muted sm:shrink-0 sm:flex-col sm:items-end">
+          <button type="button" disabled={isFetching || scanning} onClick={() => void refetch()} className="rounded border border-terminal-border px-3 py-1 text-terminal-muted hover:text-terminal-text disabled:opacity-50">{isFetching && !scanning ? 'Refreshing…' : 'Refresh'}</button>
+          {updatedAt && <div>{data && data.pages.length > 1 ? 'First page checked ' : 'Feed checked '}{new Date(updatedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>}
         </div>
       </div>
-
-      <PredictionMarketsSection
-        predictions={predictionSnapshot?.forecasts ?? []}
-        loading={isLoading}
-        updatedAt={predictionSnapshot?.updatedAt ?? null}
-        showHeader={false}
-      />
+      <p className="text-xs text-terminal-muted">Single-winner events show the leading choices together. Daily changes are in percentage points.</p>
+      {isError && !data && <p role="status" className="text-xs text-terminal-muted">The public Polymarket feed is unavailable. Use Refresh to try again.</p>}
+      {isRefetchError && data && <p role="status" className="text-xs text-terminal-muted">Refresh failed. Previously received prices remain visible.</p>}
+      {isLoading || displayed.length > 0 ? (
+        <PredictionMarketsSection predictions={displayed} loading={isLoading} showHeader={false} />
+      ) : data && (
+        <p className="text-xs text-terminal-muted">No eligible open markets in the events checked so far.</p>
+      )}
+      {data && (
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-2 text-xs">
+          <span role="status" className="text-terminal-muted">Showing {displayed.length} of {forecasts.length} loaded events</span>
+          {isFetchNextPageError && <span role="status" className="text-terminal-muted">More events could not be loaded. Your current cards are still available.</span>}
+          {(remaining > 0 || hasNextPage) && <button type="button" onClick={() => void showMore()} disabled={scanning || (isFetching && !remaining)}
+            className="rounded border border-terminal-border px-3 py-1.5 text-terminal-accent hover:border-terminal-accent disabled:opacity-50">
+            {scanning ? 'Finding more events…' : remaining > 0 ? 'Show ' + Math.min(cardsPerBatch, remaining) + ' more' : isFetchNextPageError ? 'Retry more events' : 'Load more events'}
+          </button>}
+        </div>
+      )}
     </div>
   );
 }

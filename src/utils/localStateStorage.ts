@@ -24,7 +24,6 @@ function isValidPersistedTerminalState(value: string): boolean {
 function clearInvalidBrowserState(name: string): void {
   if (typeof window === 'undefined') return;
   window.localStorage.removeItem(name);
-  void removeStateFromDisk(name);
 }
 
 function maybeWarnLocalStatePersistence(action: 'write' | 'delete', name: string, error: unknown): void {
@@ -36,19 +35,40 @@ function maybeWarnLocalStatePersistence(action: 'write' | 'delete', name: string
   console.warn(`[local-state] unable to ${action} persisted state for "${name}": ${message}`);
 }
 
-async function mirrorStateToDisk(name: string, value: string): Promise<void> {
-  if (typeof window === 'undefined') return;
+const mirrorWrites = new Map<string, Promise<void>>();
+const pendingKey = (name: string) => `${name}:pending-write`;
 
-  try {
-    await fetch(localStateUrl(name), {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ value }),
-    });
-  } catch (error) {
-    // Keep localStorage as the primary online cache if the local file endpoint is unavailable.
-    maybeWarnLocalStatePersistence('write', name, error);
+function mirrorStateToDisk(name: string): Promise<void> {
+  const running = mirrorWrites.get(name);
+  if (running) return running;
+  const sync = async () => {
+    try {
+      while (window.localStorage.getItem(pendingKey(name))) {
+        const value = window.localStorage.getItem(name);
+        if (value == null) break;
+        const response = await fetch(localStateUrl(name), {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value }),
+        });
+        if (!response.ok) throw new Error(`Save returned ${response.status}`);
+        if (window.localStorage.getItem(name) === value) window.localStorage.removeItem(pendingKey(name));
+      }
+    } catch (error) {
+      maybeWarnLocalStatePersistence('write', name, error);
+    } finally {
+      mirrorWrites.delete(name);
+    }
+  };
+  const request = sync();
+  mirrorWrites.set(name, request);
+  return request;
+}
+
+function rememberState(name: string, value: string): void {
+  if (window.localStorage.getItem(name) !== value) {
+    window.localStorage.setItem(pendingKey(name), '1');
+    window.localStorage.setItem(name, value);
   }
+  if (window.localStorage.getItem(pendingKey(name))) void mirrorStateToDisk(name);
 }
 
 async function removeStateFromDisk(name: string): Promise<void> {
@@ -80,8 +100,7 @@ export const terminalStateStorage: StateStorage = {
           clearInvalidBrowserState(legacyKey);
           continue;
         }
-        window.localStorage.setItem(name, legacy);
-        void mirrorStateToDisk(name, legacy);
+        rememberState(name, legacy);
         return legacy;
       }
     }
@@ -90,19 +109,27 @@ export const terminalStateStorage: StateStorage = {
   },
   setItem: (name, value) => {
     if (typeof window === 'undefined') return;
-    window.localStorage.setItem(name, value);
-    void mirrorStateToDisk(name, value);
+    rememberState(name, value);
   },
   removeItem: (name) => {
     if (typeof window === 'undefined') return;
     window.localStorage.removeItem(name);
-    void removeStateFromDisk(name);
+    window.localStorage.removeItem(pendingKey(name));
+    void (mirrorWrites.get(name) ?? Promise.resolve()).then(() => {
+      if (window.localStorage.getItem(name) == null) return removeStateFromDisk(name);
+    });
   },
 };
 
 export async function hydrateLocalStateCache(name = TERMINAL_STORAGE_KEY): Promise<void> {
   if (typeof window === 'undefined') return;
 
+  const local = window.localStorage.getItem(name);
+  if (local && isValidPersistedTerminalState(local) && window.localStorage.getItem(pendingKey(name))) {
+    // The app may have closed between saving the layout locally and acknowledging the disk write.
+    void mirrorStateToDisk(name);
+    return;
+  }
   for (const candidate of [name, ...LEGACY_TERMINAL_STORAGE_KEYS]) {
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), LOCAL_STATE_BOOTSTRAP_TIMEOUT_MS);
@@ -126,7 +153,8 @@ export async function hydrateLocalStateCache(name = TERMINAL_STORAGE_KEY): Promi
 
         window.localStorage.setItem(name, payload.value);
         if (candidate !== name) {
-          void mirrorStateToDisk(name, payload.value);
+          window.localStorage.setItem(pendingKey(name), '1');
+          void mirrorStateToDisk(name);
         }
         return;
       }

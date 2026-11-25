@@ -11,6 +11,16 @@ const CATEGORY_COLORS: Record<CalendarEvent['category'], string> = {
   geopolitical: 'text-red-400',
 };
 
+type CategoryFilter = 'all' | CalendarEvent['category'];
+
+const CATEGORY_FILTERS: Array<{ value: CategoryFilter; label: string }> = [
+  { value: 'all', label: 'All' },
+  { value: 'economic', label: 'Economic' },
+  { value: 'earnings', label: 'Earnings' },
+  { value: 'policy', label: 'Policy' },
+  { value: 'geopolitical', label: 'Geopolitical' },
+];
+
 const IMPORTANCE_COLORS: Record<CalendarEvent['importance'], string> = {
   high: 'bg-terminal-accent/20 border-terminal-accent/60',
   medium: 'bg-terminal-accent/10 border-terminal-accent/40',
@@ -18,11 +28,12 @@ const IMPORTANCE_COLORS: Record<CalendarEvent['importance'], string> = {
 };
 
 function toYmd(date: Date): string {
-  return date.toISOString().slice(0, 10);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
 export function EventsCalendar() {
   const [month, setMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+  const [category, setCategory] = useState<CategoryFilter>('all');
 
   const from = toYmd(new Date(month.getFullYear(), month.getMonth(), 1));
   const to = toYmd(new Date(month.getFullYear(), month.getMonth() + 1, 0));
@@ -38,6 +49,8 @@ export function EventsCalendar() {
   });
 
   const events = data?.events ?? [];
+  const filteredEvents = category === 'all' ? events : events.filter((event) => event.category === category);
+  const categoryLabel = CATEGORY_FILTERS.find((filter) => filter.value === category)!.label;
   const monthName = month.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 
   return (
@@ -45,14 +58,28 @@ export function EventsCalendar() {
       <div className="flex items-center justify-between px-3 py-1.5 panel-border-b flex-shrink-0">
         <span className="text-terminal-accent text-xs font-bold tracking-wider">EVENTS</span>
         <div className="flex items-center gap-1">
-          <button onClick={() => setMonth((value) => new Date(value.getFullYear(), value.getMonth() - 1, 1))} className="p-0.5 text-terminal-faint hover:text-terminal-muted">
+          <button type="button" aria-label="Previous month" onClick={() => setMonth((value) => new Date(value.getFullYear(), value.getMonth() - 1, 1))} className="p-0.5 text-terminal-faint hover:text-terminal-muted">
             <ChevronLeft size={10} />
           </button>
           <span className="text-terminal-text text-xs font-mono w-28 text-center">{monthName}</span>
-          <button onClick={() => setMonth((value) => new Date(value.getFullYear(), value.getMonth() + 1, 1))} className="p-0.5 text-terminal-faint hover:text-terminal-muted">
+          <button type="button" aria-label="Next month" onClick={() => setMonth((value) => new Date(value.getFullYear(), value.getMonth() + 1, 1))} className="p-0.5 text-terminal-faint hover:text-terminal-muted">
             <ChevronRight size={10} />
           </button>
         </div>
+      </div>
+
+      <div className="px-3 py-2 panel-border-b flex flex-wrap items-center justify-between gap-2 flex-shrink-0">
+        <label className="flex items-center gap-2 text-terminal-muted text-xs">
+          <span>Event category</span>
+          <select
+            value={category}
+            onChange={(event) => setCategory(event.target.value as CategoryFilter)}
+            className="bg-terminal-elevated border border-terminal-border rounded px-2 py-1 text-terminal-text text-xs focus:outline-none focus:border-terminal-accent"
+          >
+            {CATEGORY_FILTERS.map((filter) => <option key={filter.value} value={filter.value}>{filter.label}</option>)}
+          </select>
+        </label>
+        {!isLoading && data && <span aria-live="polite" className="text-terminal-faint text-xs">{filteredEvents.length} of {events.length} events</span>}
       </div>
 
       <div className="px-2 py-1.5 border-b border-terminal-border/40 flex-shrink-0">
@@ -84,9 +111,13 @@ export function EventsCalendar() {
           <div className="p-4 text-center text-terminal-faint text-xs">
             No scheduled events this month
           </div>
+        ) : filteredEvents.length === 0 ? (
+          <div role="status" className="p-4 text-center text-terminal-faint text-xs">
+            No {categoryLabel.toLowerCase()} events this month. Choose All to see other categories.
+          </div>
         ) : (
           <div className="divide-y divide-terminal-border/40">
-            {events.map((event, index) => {
+            {filteredEvents.map((event, index) => {
               const eventDate = new Date(`${event.date}T00:00:00`);
               const isToday = eventDate.toDateString() === today.toDateString();
               const isPast = eventDate < today && !isToday;

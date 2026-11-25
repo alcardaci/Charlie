@@ -42,3 +42,11 @@ const productivity = BLS_SERIES.find((series) => series.id === 'PRS85006092');
 assert(productivity, 'Productivity contract should exist');
 assert(normalizeBlsSeries(productivity, [{ year: '2026', period: 'Q01', value: '500' }]).length === 0, 'BLS values outside the explicit family magnitude must be rejected');
 console.log('BLS fixture checks passed');
+
+const { buildBlsIndicator } = await import('../../src/api/finance');
+const payroll = BLS_SERIES.find(s => s.id === 'CES0000000001')!;
+const fullCounts = buildBlsIndicator(payroll, normalizeBlsSeries(payroll, [
+  {year:'2026',period:'M02',value:'159293'}, {year:'2026',period:'M01',value:'159128'},
+]));
+assert(fullCounts.unit === 'jobs' && fullCounts.value === 159293000 && fullCounts.change === 165000 &&
+  fullCounts.series[0].value === 159128000, 'Headlines, deltas and plotted payrolls must agree in individual jobs');

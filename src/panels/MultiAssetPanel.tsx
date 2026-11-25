@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Plus, X } from 'lucide-react';
+import { PanelBoundary } from '../components/PanelBoundary';
 import { ChartPanel } from './ChartPanel';
 import { EquityPanel } from './EquityPanel';
 import { useTerminalStore, type MultiAssetTile, type MultiAssetView } from '../store/useTerminalStore';
@@ -133,11 +134,13 @@ function MultiAssetTileCard({
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden">
+        <PanelBoundary key={`${tile.symbol}-${tile.view}`}>
         {tile.view === 'chart' ? (
           <ChartPanel symbol={tile.symbol} embedded onSwitchView={onViewChange} />
         ) : (
           <EquityPanel symbol={tile.symbol} embedded onSwitchView={onViewChange} />
         )}
+        </PanelBoundary>
       </div>
     </section>
   );

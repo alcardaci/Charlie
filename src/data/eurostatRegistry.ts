@@ -91,4 +91,4 @@ export const EUROSTAT_SERIES: readonly EurostatSeriesDefinition[] = [
 
 export const EUROSTAT_DETAIL_SERIES = EUROSTAT_SERIES.filter((definition) => definition.placement === 'detail');
 export const EUROSTAT_PUBLIC_SERIES = EUROSTAT_SERIES.filter((definition) => definition.publicApi);
-export const EUROSTAT_SCHEMA_VERSION = 3;
+export const EUROSTAT_SCHEMA_VERSION = 4;

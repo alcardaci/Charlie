@@ -82,7 +82,7 @@ function embedUrlFor(videoId: string) {
   return `https://www.youtube.com/embed/${videoId}?${params.toString()}`;
 }
 
-export function CharlieLivePlayer() {
+export function CharlieLivePlayer({ embedded }: { embedded: boolean }) {
   const [isExpanded, setIsExpanded] = useState(
     () => (typeof window === 'undefined' ? true : window.innerWidth >= 768)
   );
@@ -96,8 +96,8 @@ export function CharlieLivePlayer() {
 
   return (
     <>
-      {!isExpanded && (
-        <div className="fixed bottom-8 right-3 z-40 sm:right-4">
+      {!embedded && !isExpanded && (
+        <div className="fixed bottom-16 right-3 z-40 md:bottom-8 sm:right-4">
           <button
             onClick={() => setIsExpanded(true)}
             className="flex items-center gap-2 rounded-full border border-terminal-border bg-terminal-panel/95 px-3 py-2 text-xs text-terminal-text shadow-[0_8px_24px_rgba(0,0,0,0.35)] backdrop-blur-sm transition-colors hover:border-terminal-accent/50 hover:bg-terminal-hover"
@@ -114,13 +114,11 @@ export function CharlieLivePlayer() {
       )}
 
       <div
-        aria-hidden={!isExpanded}
-        className={`fixed bottom-8 right-3 z-30 w-[min(92vw,360px)] sm:right-4 transition-all duration-200 ${
-          isExpanded ? 'opacity-100 translate-y-0 pointer-events-auto' : 'opacity-0 translate-y-4 pointer-events-none'
-        }`}
+        aria-hidden={!embedded && !isExpanded}
+        className={embedded ? 'h-full' : `fixed bottom-16 right-3 z-30 w-[min(92vw,360px)] md:bottom-8 sm:right-4 ${isExpanded ? '' : 'invisible pointer-events-none'}`}
       >
-        <div className="overflow-hidden rounded-lg border border-terminal-border bg-terminal-panel/95 shadow-[0_18px_48px_rgba(0,0,0,0.45)] backdrop-blur-sm">
-        <div className="flex items-center justify-between gap-2 border-b border-terminal-border px-3 py-2">
+        <div className={`flex flex-col overflow-hidden rounded border border-terminal-border bg-terminal-panel ${embedded ? 'h-full' : 'shadow-2xl'}`}>
+        <header className={embedded ? 'news-card-header' : 'flex items-center justify-between gap-2 border-b border-terminal-border px-3 py-2'}>
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-[11px] font-bold tracking-[0.18em] text-terminal-accent">
               <span className="h-1.5 w-1.5 rounded-full bg-terminal-negative animate-pulse" />
@@ -139,15 +137,15 @@ export function CharlieLivePlayer() {
             >
               <ExternalLink size={12} />
             </a>
-            <button
+            {!embedded && <button
               onClick={() => setIsExpanded(false)}
               className="rounded border border-terminal-border p-1.5 text-terminal-faint transition-colors hover:border-terminal-accent/40 hover:text-terminal-accent hover:bg-terminal-hover"
               title="Minimize player"
             >
               <Minimize2 size={12} />
-            </button>
+            </button>}
           </div>
-        </div>
+        </header>
 
         <div className="flex items-center gap-2 border-b border-terminal-border px-3 py-2">
           <span className="text-[10px] tracking-[0.18em] text-terminal-faint">CHANNEL</span>
@@ -181,7 +179,7 @@ export function CharlieLivePlayer() {
           </button>
         </div>
 
-        <div className="aspect-video bg-black">
+        <div className={embedded ? "min-h-0 flex-1 bg-black" : "aspect-video bg-black"}>
           <iframe
             className="h-full w-full"
             src={embedUrlFor(selectedChannel.videoId)}
