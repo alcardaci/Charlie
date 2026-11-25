@@ -43,6 +43,13 @@ const INDICATORS = ['MA20', 'MA50', 'MA200'] as const;
 const MA_KEYS: Record<string, 'sma20' | 'sma50' | 'sma200'> = { MA20: 'sma20', MA50: 'sma50', MA200: 'sma200' };
 
 type PriceSeries = ISeriesApi<'Candlestick'> | ISeriesApi<'Bar'> | ISeriesApi<'Line'> | ISeriesApi<'Area'>;
+type ChartPalette = ReturnType<typeof getThemePalette>;
+
+const movingAverageStyles = {
+  MA20: { ink: 'text', lineStyle: LineStyle.Dashed, legendStyle: 'dashed' },
+  MA50: { ink: 'accent', lineStyle: LineStyle.Solid, legendStyle: 'solid' },
+  MA200: { ink: 'purple', lineStyle: LineStyle.SparseDotted, legendStyle: 'dotted' },
+} as const;
 
 function chartTime(point: ChartPoint): Time {
   return Math.floor(point.timestamp / 1000) as Time;
@@ -94,26 +101,23 @@ function shouldShowYearInAxis(range: ChartRange | null, customStart?: string | n
   return days > 366;
 }
 
-function createPriceSeries(chart: IChartApi, chartStyle: ChartStyle, palette: ReturnType<typeof getThemePalette>): PriceSeries {
+function createPriceSeries(chart: IChartApi, chartStyle: ChartStyle): PriceSeries {
   switch (chartStyle) {
     case 'ohlc':
       return chart.addBarSeries({
-        upColor: palette.positive,
-        downColor: palette.negative,
         openVisible: true,
         thinBars: false,
       });
     case 'line':
       return chart.addLineSeries({
-        color: palette.blue,
+        lineStyle: LineStyle.Dotted,
         lineWidth: 2,
         priceLineVisible: true,
         crosshairMarkerVisible: false,
       });
     case 'area':
       return chart.addAreaSeries({
-        lineColor: palette.blue,
-        topColor: palette.blueDim,
+        lineStyle: LineStyle.Dotted,
         bottomColor: 'transparent',
         lineWidth: 2,
         priceLineVisible: true,
@@ -121,18 +125,24 @@ function createPriceSeries(chart: IChartApi, chartStyle: ChartStyle, palette: Re
       });
     case 'candlestick':
     default:
-      return chart.addCandlestickSeries({
-        upColor: palette.positive,
-        downColor: palette.negative,
-        borderUpColor: palette.positive,
-        borderDownColor: palette.negative,
-        wickUpColor: palette.positive,
-        wickDownColor: palette.negative,
-      });
+      return chart.addCandlestickSeries();
   }
 }
 
-function setPriceSeriesData(data: ChartPoint[], chartStyle: ChartStyle, series: PriceSeries | null) {
+function priceColors(chartStyle: ChartStyle, palette: ChartPalette) {
+  switch (chartStyle) {
+    case 'line': return { color: palette.text };
+    case 'area': return { lineColor: palette.text, topColor: palette.chartGrid };
+    case 'ohlc': return { upColor: palette.positive, downColor: palette.negative };
+    case 'candlestick': return {
+      upColor: palette.positive, downColor: palette.negative,
+      borderUpColor: palette.positive, borderDownColor: palette.negative,
+      wickUpColor: palette.positive, wickDownColor: palette.negative,
+    };
+  }
+}
+
+function setPriceSeriesData(data: ChartPoint[], chartStyle: ChartStyle, series: PriceSeries | null, flatColor: string) {
   if (!series) return;
 
   if (chartStyle === 'candlestick') {
@@ -143,6 +153,7 @@ function setPriceSeriesData(data: ChartPoint[], chartStyle: ChartStyle, series: 
         high: point.high,
         low: point.low,
         close: point.close,
+        ...(point.close === point.open && { color: flatColor, borderColor: flatColor, wickColor: flatColor }),
       }))
     );
     return;
@@ -156,6 +167,7 @@ function setPriceSeriesData(data: ChartPoint[], chartStyle: ChartStyle, series: 
         high: point.high,
         low: point.low,
         close: point.close,
+        ...(point.close === point.open && { color: flatColor }),
       }))
     );
     return;
@@ -185,8 +197,7 @@ function applyData(
   priceSeries: PriceSeries | null,
   volumeSeries: ISeriesApi<'Histogram'> | null,
   maMap: Map<string, ISeriesApi<'Line'>>,
-  chart: IChartApi | null,
-  palette: ReturnType<typeof getThemePalette>
+  palette: ChartPalette
 ) {
   if (!priceSeries || !volumeSeries) return;
   if (!data.length) {
@@ -196,13 +207,13 @@ function applyData(
     return;
   }
 
-  setPriceSeriesData(data, chartStyle, priceSeries);
+  setPriceSeriesData(data, chartStyle, priceSeries, palette.faint);
 
   volumeSeries.setData(
     data.map((point) => ({
       time: chartTime(point),
       value: point.volume,
-      color: point.close >= point.open ? palette.positiveDim : palette.negativeDim,
+      color: point.close > point.open ? palette.positiveDim : point.close < point.open ? palette.negativeDim : palette.faint,
     }))
   );
 
@@ -217,8 +228,6 @@ function applyData(
         }))
     );
   });
-
-  chart?.timeScale().fitContent();
 }
 
 type ChartPanelProps = {
@@ -240,10 +249,9 @@ export function ChartPanel({ symbol, embedded = false, onOpenParallel, onSwitchV
     setChartStyle,
   } = useTerminalStore();
   const selectedSymbol = (symbol ?? activeSymbol).toUpperCase();
-  const { mode, accent } = useTheme();
+  const { mode } = useTheme();
   const inWatchlist = watchlist.includes(selectedSymbol);
-  const themePalette = getThemePalette();
-  const maColors: Record<string, string> = { MA20: themePalette.blue, MA50: themePalette.accent, MA200: themePalette.purple };
+  const themePalette = useMemo(() => getThemePalette(), [mode]);
 
   const [tfIdx, setTfIdx] = useState(5);
   const [activeIndicators, setActiveIndicators] = useState<Set<string>>(new Set(['MA20', 'MA50']));
@@ -263,13 +271,15 @@ export function ChartPanel({ symbol, embedded = false, onOpenParallel, onSwitchV
   const priceSeriesRef = useRef<PriceSeries | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
   const maSeriesRef = useRef<Map<string, ISeriesApi<'Line'>>>(new Map());
-  const chartDataRef = useRef<ChartPoint[]>([]);
 
   const tf = tfIdx >= 0 ? TIMEFRAMES[tfIdx] : null;
   const chartInterval = customAppliedRange
     ? chooseCustomInterval(customAppliedRange.start, customAppliedRange.end)
     : (tf?.interval ?? '1d');
   const showYearInAxis = shouldShowYearInAxis(tf?.range ?? null, customAppliedRange?.start, customAppliedRange?.end);
+  const chartConfig = useMemo(() => ({
+    symbol: selectedSymbol, tf, activeIndicators, chartStyle, showYearInAxis,
+  }), [selectedSymbol, tf, activeIndicators, chartStyle, showYearInAxis]);
 
   const { data: quote } = useQuery({
     queryKey: ['quote-chart', selectedSymbol],
@@ -299,8 +309,6 @@ export function ChartPanel({ symbol, embedded = false, onOpenParallel, onSwitchV
     retry: 1,
   });
   const chartData = useMemo(() => prepareChartPoints(chartResult?.points ?? []), [chartResult?.points]);
-
-  chartDataRef.current = chartData;
 
   const customAdjustmentNotice = useMemo(() => {
     if (!customAppliedRange || !chartResult?.adjusted || !chartResult.actualStart || !chartResult.actualEnd) return null;
@@ -345,45 +353,42 @@ export function ChartPanel({ symbol, embedded = false, onOpenParallel, onSwitchV
     chartInstanceRef.current?.remove();
     chartInstanceRef.current = null;
 
+    const { tf, activeIndicators, chartStyle, showYearInAxis } = chartConfig;
     const intradayTimeScale = Boolean(tf && (tf.range === '1d' || tf.range === '5d'));
     const chart = createChart(chartRef.current, {
       width: chartRef.current.clientWidth,
       height: chartRef.current.clientHeight,
       layout: {
-        background: { type: ColorType.Solid, color: themePalette.bg },
-        textColor: themePalette.muted,
         fontSize: 11,
-        fontFamily: "'JetBrains Mono', monospace",
+        fontFamily: getComputedStyle(chartRef.current).fontFamily,
       },
       localization: {
         locale: typeof navigator !== 'undefined' ? navigator.language : 'en-US',
         timeFormatter: (time: Time) => formatChartLocalTime(time, intradayTimeScale, showYearInAxis),
       },
       grid: {
-        vertLines: { color: themePalette.chartGrid, style: LineStyle.Dashed },
-        horzLines: { color: themePalette.chartGrid, style: LineStyle.Dashed },
+        vertLines: { style: LineStyle.Dotted },
+        horzLines: { style: LineStyle.Dotted },
       },
       crosshair: {
         mode: CrosshairMode.Normal,
-        vertLine: { color: themePalette.accent, width: 1, style: LineStyle.Dashed, labelBackgroundColor: themePalette.accent },
-        horzLine: { color: themePalette.accent, width: 1, style: LineStyle.Dashed, labelBackgroundColor: themePalette.accent },
+        vertLine: { width: 1, style: LineStyle.Dashed },
+        horzLine: { width: 1, style: LineStyle.Dashed },
       },
       timeScale: {
-        borderColor: themePalette.border,
         timeVisible: true,
         secondsVisible: false,
         tickMarkFormatter: (time: Time, _type: TickMarkType, _locale: string) => formatChartLocalTime(time, intradayTimeScale, showYearInAxis),
       },
-      rightPriceScale: { autoScale: true, borderColor: themePalette.border, scaleMargins: { top: 0.1, bottom: 0.25 } },
+      rightPriceScale: { autoScale: true, scaleMargins: { top: 0.1, bottom: 0.25 } },
       handleScroll: true,
       handleScale: true,
     });
 
     chartInstanceRef.current = chart;
-    priceSeriesRef.current = createPriceSeries(chart, chartStyle, themePalette);
+    priceSeriesRef.current = createPriceSeries(chart, chartStyle);
 
     volumeSeriesRef.current = chart.addHistogramSeries({
-      color: themePalette.positiveDim,
       priceFormat: { type: 'volume' },
       priceScaleId: 'volume',
     });
@@ -395,7 +400,7 @@ export function ChartPanel({ symbol, embedded = false, onOpenParallel, onSwitchV
       maMap.set(
         indicator,
         chart.addLineSeries({
-          color: maColors[indicator],
+          lineStyle: movingAverageStyles[indicator].lineStyle,
           lineWidth: 1,
           priceLineVisible: false,
           crosshairMarkerVisible: false,
@@ -404,8 +409,6 @@ export function ChartPanel({ symbol, embedded = false, onOpenParallel, onSwitchV
       );
     });
     maSeriesRef.current = maMap;
-
-    applyData(chartDataRef.current, chartStyle, priceSeriesRef.current, volumeSeriesRef.current, maMap, chart, themePalette);
 
     const observer = new ResizeObserver(() => {
       if (!chartRef.current) return;
@@ -421,11 +424,31 @@ export function ChartPanel({ symbol, embedded = false, onOpenParallel, onSwitchV
       maSeriesRef.current = new Map();
       chartInstanceRef.current = null;
     };
-  }, [selectedSymbol, tfIdx, activeIndicators, chartStyle, mode, accent, showYearInAxis]);
+  }, [chartConfig]);
 
   useEffect(() => {
-    applyData(chartData, chartStyle, priceSeriesRef.current, volumeSeriesRef.current, maSeriesRef.current, chartInstanceRef.current, themePalette);
-  }, [chartData, chartStyle, mode, accent]);
+    const crosshairColors = { color: themePalette.accent, labelBackgroundColor: themePalette.accent };
+    chartInstanceRef.current?.applyOptions({
+      layout: { background: { type: ColorType.Solid, color: themePalette.panel }, textColor: themePalette.muted },
+      grid: { vertLines: { color: themePalette.chartGrid }, horzLines: { color: themePalette.chartGrid } },
+      crosshair: { vertLine: crosshairColors, horzLine: crosshairColors },
+      timeScale: { borderColor: themePalette.border },
+      rightPriceScale: { borderColor: themePalette.border },
+    });
+    priceSeriesRef.current?.applyOptions(priceColors(chartConfig.chartStyle, themePalette));
+    volumeSeriesRef.current?.applyOptions({ color: themePalette.positiveDim });
+    for (const indicator of INDICATORS) {
+      maSeriesRef.current.get(indicator)?.applyOptions({ color: themePalette[movingAverageStyles[indicator].ink] });
+    }
+  }, [chartConfig, themePalette]);
+
+  useEffect(() => {
+    applyData(chartData, chartConfig.chartStyle, priceSeriesRef.current, volumeSeriesRef.current, maSeriesRef.current, themePalette);
+  }, [chartData, chartConfig, themePalette]);
+
+  useEffect(() => {
+    if (chartData.length) chartInstanceRef.current?.timeScale().fitContent();
+  }, [chartData, chartConfig]);
 
   const timeframePriceMove = useMemo(() => {
     if (!chartData.length) return null;
@@ -445,23 +468,26 @@ export function ChartPanel({ symbol, embedded = false, onOpenParallel, onSwitchV
   const displayedChange = timeframePriceMove ? timeframePriceMove.change : quote?.regularMarketChange ?? null;
   const displayedChangePct = timeframePriceMove ? timeframePriceMove.changePct : quote?.regularMarketChangePercent ?? null;
   const chgColor = changeColor(displayedChangePct);
+  const SymbolHeading = embedded ? 'div' : 'h1';
 
   return (
     <div className="h-full flex flex-col">
-      <div className="flex items-center justify-between gap-3 px-3 py-2 panel-border-b bg-terminal-panel flex-shrink-0 flex-wrap">
+      <div className="instrument-section flex items-center justify-between gap-3 px-3 py-2 panel-border-b bg-terminal-panel flex-shrink-0 flex-wrap">
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => {
-              if (onSwitchView) {
-                onSwitchView('research');
-                return;
-              }
-              setActivePanel('equity', selectedSymbol);
-            }}
-            className="text-terminal-accent font-bold text-sm hover:underline"
-          >
-            {selectedSymbol}
-          </button>
+          <SymbolHeading className="workspace-title">
+            <button
+              onClick={() => {
+                if (onSwitchView) {
+                  onSwitchView('research');
+                  return;
+                }
+                setActivePanel('equity', selectedSymbol);
+              }}
+              className="hover:text-terminal-accent hover:underline"
+            >
+              {selectedSymbol}
+            </button>
+          </SymbolHeading>
           {displayedPrice !== null && (
             <div className="flex items-center gap-2 text-xs">
               <span className="text-terminal-text tabular-nums font-bold">
@@ -579,7 +605,7 @@ export function ChartPanel({ symbol, embedded = false, onOpenParallel, onSwitchV
         )}
         {INDICATORS.filter((indicator) => activeIndicators.has(indicator)).map((indicator) => (
           <div key={indicator} className="flex items-center gap-1.5 text-xs">
-            <div className="w-4 h-0.5 rounded" style={{ backgroundColor: maColors[indicator] }} />
+            <span aria-hidden="true" className="w-4 border-t-2" style={{ borderColor: themePalette[movingAverageStyles[indicator].ink], borderTopStyle: movingAverageStyles[indicator].legendStyle }} />
             <span className="text-terminal-faint">{indicator}</span>
           </div>
         ))}
@@ -589,7 +615,7 @@ export function ChartPanel({ symbol, embedded = false, onOpenParallel, onSwitchV
       </div>
 
       {customPickerOpen && (
-        <div className="panel-border-b bg-terminal-panel px-3 py-3">
+        <div className="instrument-section panel-border-b bg-terminal-panel px-3 py-3">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="text-xs text-terminal-faint">
@@ -657,7 +683,7 @@ export function ChartPanel({ symbol, embedded = false, onOpenParallel, onSwitchV
           </div>
         )}
         {!isLoading && !chartData.length && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-4 text-center bg-terminal-bg">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-4 text-center" style={{ backgroundColor: themePalette.panel }}>
             <div className="text-terminal-muted text-sm" role="status">{isError ? 'Price history could not be loaded.' : 'No price history is available for this symbol and date range.'}</div>
             <button onClick={() => void refetch()} disabled={isFetching} className="rounded border border-terminal-border px-3 py-1.5 text-xs text-terminal-accent hover:bg-terminal-hover disabled:opacity-50">RETRY</button>
           </div>

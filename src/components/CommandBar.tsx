@@ -132,7 +132,7 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
 
   return (
     <div
-      className={`relative flex flex-wrap items-center gap-2 bg-terminal-panel px-3 py-2 panel-border-b flex-shrink-0 md:h-10 md:flex-nowrap md:gap-0 md:py-0 ${isElectronDesktop ? 'md:pl-24' : ''}`}
+      className={`command-bar relative flex flex-wrap items-center gap-2 bg-terminal-panel px-3 py-2 panel-border-b flex-shrink-0 md:h-10 md:flex-nowrap md:gap-0 md:py-0 ${isElectronDesktop ? 'md:pl-24' : ''}`}
       style={electronDragStyle}
     >
       {/* Logo — click to return to Market Overview */}
@@ -143,8 +143,7 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
           title="Market Overview"
           style={electronNoDragStyle}
         >
-          <span className="text-terminal-accent font-bold text-base tracking-wider">C</span>
-          <span className="text-terminal-text font-bold text-sm tracking-widest">HARLIE</span>
+          <span className="charlie-wordmark">CHARLIE</span>
           {appVersion && (
             <span className="hidden sm:inline text-terminal-faint font-mono text-[10px] tracking-wider">{appVersion}</span>
           )}
@@ -152,17 +151,17 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
         <div className="hidden md:block h-4 w-px bg-terminal-border" />
       </div>
 
-      {/* Back button */}
-      {navHistory.length > 0 && (
-        <button
-          onClick={goBack}
-          className="flex items-center gap-1 px-2 py-1 text-xs text-terminal-muted hover:text-terminal-accent border border-terminal-border hover:border-terminal-accent/50 rounded transition-colors flex-shrink-0 md:mr-3"
-          title="Go back"
-          style={electronNoDragStyle}
-        >
-          ← BACK
-        </button>
-      )}
+      {/* Reserve the Back button's space in the wrapping mobile toolbar. */}
+      <button
+        onClick={goBack}
+        disabled={!navHistory.length}
+        aria-hidden={!navHistory.length || undefined}
+        className={`flex items-center gap-1 px-2 py-1 text-xs text-terminal-muted hover:text-terminal-accent border border-terminal-border hover:border-terminal-accent/50 rounded transition-colors flex-shrink-0 md:mr-3 ${navHistory.length ? '' : 'invisible md:hidden'}`}
+        title="Go back"
+        style={electronNoDragStyle}
+      >
+        ← BACK
+      </button>
 
       {/* Context label */}
       <div className="order-2 basis-full text-terminal-muted text-[11px] flex-shrink-0 md:order-none md:basis-auto md:mr-3 md:text-xs">
@@ -171,7 +170,7 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
 
       {/* Command input */}
       <div className="order-3 w-full relative md:order-none md:flex-1 md:w-auto" style={electronNoDragStyle}>
-        <div className="flex items-center bg-terminal-elevated border border-terminal-border rounded px-2 h-7">
+        <div className="command-field flex items-center bg-terminal-elevated border border-terminal-border rounded px-2 h-7">
           <span className="text-terminal-accent mr-2 text-xs flex-shrink-0">⟩</span>
           <input
             ref={inputRef}
@@ -250,8 +249,8 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
           onClick={toggleCompanionOpen}
           className={`flex items-center gap-1.5 rounded border px-2.5 py-1 text-xs font-semibold tracking-wide transition-colors ${
             companionOpen
-              ? 'border-cyan-400/60 bg-cyan-400/15 text-cyan-200 shadow-[0_0_16px_rgba(34,211,238,0.14)]'
-              : 'border-cyan-400/35 bg-cyan-400/10 text-cyan-200 hover:border-cyan-300/60 hover:bg-cyan-400/15'
+              ? 'border-terminal-accent/70 bg-terminal-accent/20 text-terminal-accent'
+              : 'border-terminal-accent/50 bg-terminal-accent/10 text-terminal-accent hover:border-terminal-accent/70 hover:bg-terminal-accent/15'
           }`}
           title={companionOpen ? 'Close AI companion' : 'Open AI companion'}
           aria-label={companionOpen ? 'Close AI companion' : 'Open AI companion'}
@@ -283,7 +282,7 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
           style={electronNoDragStyle}
         >
           {mode === 'dark' ? <Moon size={12} /> : <Sun size={12} />}
-          <span className="hidden lg:inline">{mode === 'dark' ? 'DARK' : 'LIGHT'}</span>
+          <span className="hidden w-[5ch] text-center lg:inline-block">{mode === 'dark' ? 'DARK' : 'LIGHT'}</span>
         </button>
         <div className="hidden sm:flex items-center gap-1.5">
           <div className={`w-1.5 h-1.5 rounded-full ${open ? 'bg-terminal-positive' : 'bg-terminal-faint'}`} />

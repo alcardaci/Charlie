@@ -46,7 +46,7 @@ export function StatusBar() {
             onClick={() => executeCommand(command)}
             className="flex items-center gap-0 px-2 h-full hover:bg-terminal-hover transition-colors border-r border-terminal-border/40 flex-shrink-0"
           >
-            <span className="text-terminal-bg bg-terminal-accent/80 px-1 rounded-sm text-xs font-bold mr-1">{key}</span>
+            <span className="text-terminal-on-accent bg-terminal-accent px-1 rounded-sm text-xs font-bold mr-1">{key}</span>
             <span className="text-terminal-muted">{label}</span>
           </button>
         ))}

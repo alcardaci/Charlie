@@ -19,7 +19,7 @@ export function EarlySignalCard({
   const evidencedCompanies = signal.beneficiaries.flatMap((beneficiary) => beneficiary.companies);
 
   return (
-    <article className="border-b border-terminal-border py-5 first:pt-1 last:border-0" aria-labelledby={headingId}>
+    <article className="instrument-section border-b border-terminal-border py-5 first:pt-1 last:border-0" aria-labelledby={headingId}>
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 max-w-4xl">
           <div className="flex flex-wrap items-center gap-2">

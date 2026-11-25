@@ -33,7 +33,7 @@ export function PredictionMarketsSection({
     <div>
       {showHeader && (
         <div className="flex items-center justify-between gap-3 mb-2">
-          <div className="text-terminal-muted text-xs font-bold tracking-wider">PREDICTION MARKETS</div>
+          <div className="instrument-heading text-terminal-muted text-xs font-bold tracking-wider">PREDICTION MARKETS</div>
           <div className="flex items-center gap-2">
             {onOpenPanel && compact && (
               <button
@@ -67,7 +67,7 @@ export function PredictionMarketsSection({
           ))}
         </div>
       ) : (
-        <div className="bg-terminal-panel border border-terminal-border rounded p-4 text-terminal-faint text-xs">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-4 text-terminal-faint text-xs">
           Polymarket forecasts are temporarily unavailable.
         </div>
       )}
@@ -91,7 +91,7 @@ function PredictionForecastCard({ forecast, compact }: { forecast: PredictionFor
   const shownOutcomes = group?.outcomes.slice(0, compact ? 2 : 3);
   const scope = group ? 'Event' : 'Contract';
   return (
-    <article aria-label={title} className={'flex min-w-0 flex-col gap-2 rounded border border-terminal-border bg-terminal-panel ' + (compact ? 'p-3' : 'p-4')}>
+    <article aria-label={title} className={'instrument-card flex min-w-0 flex-col gap-2 rounded border border-terminal-border bg-terminal-panel ' + (compact ? 'p-3' : 'p-4')}>
       <div className="flex items-center justify-between gap-2 text-[10px]">
         <span className="font-bold uppercase tracking-wide text-terminal-accent">{forecast.theme}</span>
         <span className="text-terminal-faint">By {formatPredictionDate(group ? group.endDate : forecast.endDate)}</span>
@@ -118,7 +118,7 @@ function PredictionForecastCard({ forecast, compact }: { forecast: PredictionFor
             <span className="text-terminal-positive">YES {formatPredictionProbability(forecast.yesPrice)}</span>
             <span className="text-terminal-negative">NO {formatPredictionProbability(forecast.noPrice)}</span>
           </div>
-          <div aria-hidden="true" className="flex h-1.5 overflow-hidden rounded-full bg-terminal-elevated">
+          <div aria-hidden="true" className="instrument-meter flex h-1.5 overflow-hidden rounded-full bg-terminal-elevated">
             <div className="bg-terminal-positive" style={{ width: (forecast.yesPrice ?? 0) * 100 + '%' }} />
             <div className="bg-terminal-negative" style={{ width: (forecast.noPrice ?? 0) * 100 + '%' }} />
           </div>

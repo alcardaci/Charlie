@@ -49,7 +49,7 @@ export default function App() {
               onClick={() => setMobileWatchlistOpen(false)}
               aria-label="Close watchlist"
             />
-            <div className="fixed inset-y-0 left-0 z-50 w-[min(88vw,22rem)] border-r border-terminal-border bg-terminal-panel shadow-2xl md:hidden">
+            <div className="instrument-section fixed inset-y-0 left-0 z-50 w-[min(88vw,22rem)] border-r border-terminal-border bg-terminal-panel shadow-2xl md:hidden">
               <WatchlistSidebar mobile className="h-full" onClose={() => setMobileWatchlistOpen(false)} />
             </div>
           </>

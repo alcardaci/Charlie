@@ -1,5 +1,5 @@
 import { quoteCurrencyUnit } from '../utils/portfolioValuation';
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   BarChart2,
@@ -99,6 +99,7 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
   if (isLoading) return <LoadingState symbol={selectedSymbol} />;
   if (!workbench) return <ErrorState symbol={selectedSymbol} onRetry={() => { void refetch(); }} />;
 
+  const SymbolHeading = embedded ? 'span' : 'h1';
   const isFund = workbench.instrumentKind === 'fund';
   const tabs = isFund ? FUND_TABS : EQUITY_TABS;
   const { quote } = workbench;
@@ -126,11 +127,11 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
     <div className="h-full flex flex-col overflow-hidden">
       {error && <div role="status" className="px-4 py-2 text-xs text-terminal-negative">Refresh failed. Showing the last available research data. <button className="underline" onClick={() => { void refetch(); }}>Retry</button></div>}
       {financialsError && tab === 'financials' && <div role="alert" className="px-4 py-2 text-xs text-terminal-negative">Financial statements could not be refreshed. Available SEC filings remain separate from these estimates.</div>}
-      <div className="bg-terminal-panel panel-border-b px-3 sm:px-4 py-3 flex-shrink-0">
+      <div className="instrument-section bg-terminal-panel panel-border-b px-3 sm:px-4 py-3 flex-shrink-0">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between lg:gap-4">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2 mb-0.5">
-              <span className="text-terminal-accent font-bold text-xl sm:text-2xl tracking-wider">{quote.symbol}</span>
+              <SymbolHeading className="workspace-title">{quote.symbol}</SymbolHeading>
               <span className="text-terminal-muted text-[11px] sm:text-xs bg-terminal-elevated px-2 py-0.5 rounded">
                 {workbench.instrumentLabel}
               </span>
@@ -139,9 +140,9 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
               {!isFund && sectorQuote && sectorEtf && (
                 <button
                   onClick={() => setActivePanel('equity', sectorEtf)}
-                  className="text-terminal-blue text-[11px] sm:text-xs hover:underline"
+                  className="text-terminal-accent text-[11px] sm:text-xs hover:underline"
                 >
-                  {sectorEtf} {fmt.pct(sectorQuote.regularMarketChangePercent)}
+                  {sectorEtf} <span className={changeColor(sectorQuote.regularMarketChangePercent)}>{fmt.pct(sectorQuote.regularMarketChangePercent)}</span>
                 </button>
               )}
             </div>
@@ -193,7 +194,7 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
 
         <div className="mt-3 flex flex-col sm:flex-row sm:items-end gap-3 sm:gap-4">
           <div>
-            <div className="text-terminal-text font-bold tabular-nums" style={{ fontSize: 'clamp(1.75rem, 6vw, 2rem)', lineHeight: 1 }}>
+            <div className="instrument-value text-terminal-text font-bold tabular-nums" style={{ fontSize: 'clamp(1.75rem, 6vw, 2rem)', lineHeight: 1 }}>
               {fmt.price(quote.regularMarketPrice)}
             </div>
             <div className={`flex flex-wrap items-center gap-2 mt-1 ${chgColor}`}>
@@ -302,13 +303,13 @@ function OverviewTab({
   const { quote, profile, calendar, analysis, sectorContext } = workbench;
 
   return (
-    <div className="p-3 sm:p-4 space-y-4">
+    <div className="section-stack p-3 sm:p-4 space-y-4">
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
         <MetricRow label="Market Cap" value={quote.marketCap == null ? '—' : quote.currency ? formatCompactCurrency(quote.marketCap, quoteCurrencyUnit(quote.currency).currency) : fmt.number(quote.marketCap, 0)} />
         <MetricRow label="P/E Ratio (TTM)" value={fmt.number(quote.trailingPE)} />
         <MetricRow label="P/E Ratio (Fwd)" value={fmt.number(quote.forwardPE)} />
-        <MetricRow label="Revenue Growth" value={formatRatio(analysis.revenueGrowth)} />
-        <MetricRow label="Earnings Growth" value={formatRatio(analysis.earningsGrowth)} />
+        <MetricRow label="Revenue Growth" value={formatRatio(analysis.revenueGrowth)} change={analysis.revenueGrowth} />
+        <MetricRow label="Earnings Growth" value={formatRatio(analysis.earningsGrowth)} change={analysis.earningsGrowth} />
         <MetricRow label="ROE" value={formatRatio(analysis.returnOnEquity)} />
         <MetricRow label="Volume" value={fmt.volume(quote.regularMarketVolume)} />
         <MetricRow label="Avg Volume" value={fmt.volume(quote.averageVolume)} />
@@ -321,11 +322,11 @@ function OverviewTab({
       <SecMetricsCard data={secData} loading={loadingSec} />
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-        <div className="xl:col-span-2 bg-terminal-panel border border-terminal-border rounded p-4">
+        <div className="xl:col-span-2 instrument-card bg-terminal-panel border border-terminal-border rounded p-4">
           <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">COMPANY PROFILE</div>
           <div className="flex items-center gap-2 flex-wrap text-xs text-terminal-muted mb-3">
             {profile.website && (
-              <a href={profile.website} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-terminal-blue hover:underline">
+              <a href={profile.website} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-terminal-accent hover:underline">
                 <Globe size={11} />
                 {profile.website.replace(/^https?:\/\//, '')}
               </a>
@@ -342,7 +343,7 @@ function OverviewTab({
           <p className="text-terminal-text text-xs leading-relaxed">{profile.longBusinessSummary ?? 'No live company description available.'}</p>
         </div>
 
-        <div className="bg-terminal-panel border border-terminal-border rounded p-4">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-4">
           <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">SECTOR CONTEXT</div>
           <div className="space-y-3 text-xs">
             <div>
@@ -369,7 +370,7 @@ function OverviewTab({
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <div className="bg-terminal-panel border border-terminal-border rounded p-4">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-4">
           <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">CALENDAR & FORECASTS</div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
             <InfoStat label="Next Earnings" value={formatDate(calendar?.earningsDate)} />
@@ -381,7 +382,7 @@ function OverviewTab({
           </div>
         </div>
 
-        <div className="bg-terminal-panel border border-terminal-border rounded p-4">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-4">
           <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">EXECUTIVE TEAM</div>
           {profile.officers.length === 0 ? (
             <div className="text-terminal-faint text-xs">No live executive data available.</div>
@@ -422,7 +423,7 @@ function secStatusLabel(status: SecCompanyData['status']): string {
 
 function SecMetricsCard({ data, loading }: { data?: SecCompanyData; loading: boolean }) {
   return (
-    <div className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+    <div className="instrument-card bg-terminal-panel border border-terminal-border rounded overflow-hidden">
       <div className="px-4 py-2 panel-border-b flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Landmark size={12} className="text-terminal-accent" />
@@ -449,7 +450,7 @@ function SecMetricsCard({ data, loading }: { data?: SecCompanyData; loading: boo
             {SEC_METRIC_ORDER.map((metric) => {
               const observation = data.metrics[metric];
               return (
-                <div key={metric} className="bg-terminal-elevated border border-terminal-border rounded p-2">
+                <div key={metric} className="instrument-section bg-terminal-elevated border border-terminal-border rounded p-2">
                   <div className="text-terminal-faint text-[10px]">{observation?.label ?? metric}</div>
                   <div className="text-terminal-text text-sm font-bold tabular-nums mt-1">
                     {formatSecObservation(observation)}
@@ -489,7 +490,7 @@ function UnifiedFilingsCard({
   const hasSecStatus = Boolean(data && data.status !== 'ready' && data.status !== 'unsupported');
 
   return (
-    <div className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+    <div className="instrument-card bg-terminal-panel border border-terminal-border rounded overflow-hidden">
       <div className="px-4 py-2 panel-border-b flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <FileText size={12} className="text-terminal-accent" />
@@ -546,7 +547,7 @@ function FinancialsTab({
   currency: string;
 }) {
   return (
-    <div className="p-3 sm:p-4 space-y-4">
+    <div className="section-stack p-3 sm:p-4 space-y-4">
       {loading ? (
         <div className="space-y-3">
           {Array.from({ length: 4 }).map((_, index) => (
@@ -576,7 +577,7 @@ function FinancialsTab({
           </div>
 
           {financials.sections.map((section) => (
-            <div key={section.key} className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+            <div key={section.key} className="instrument-card bg-terminal-panel border border-terminal-border rounded overflow-hidden">
               <div className="px-4 py-2 panel-border-b">
                 <span className="text-terminal-muted text-xs font-bold tracking-wider">{section.label}</span>
               </div>
@@ -616,7 +617,7 @@ function AnalysisTab({ workbench }: { workbench: CompanyWorkbench }) {
   const { analysis, quote } = workbench;
 
   return (
-    <div className="p-3 sm:p-4 space-y-4">
+    <div className="section-stack p-3 sm:p-4 space-y-4">
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
         <MetricRow label="Target Low" value={formatCompactCurrency(analysis.targetLowPrice, quote.currency)} />
         <MetricRow label="Target Mean" value={formatCompactCurrency(analysis.targetMeanPrice, quote.currency)} />
@@ -627,7 +628,7 @@ function AnalysisTab({ workbench }: { workbench: CompanyWorkbench }) {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <div className="bg-terminal-panel border border-terminal-border rounded p-4">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-4">
           <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">RECOMMENDATION TREND</div>
           {analysis.recommendationTrend.length === 0 ? (
             <div className="text-terminal-faint text-xs">No live analyst distribution available.</div>
@@ -653,7 +654,7 @@ function AnalysisTab({ workbench }: { workbench: CompanyWorkbench }) {
                       {segments.map((segment) => (
                         <div
                           key={segment.label}
-                          className={segment.className}
+                          className={`instrument-meter ${segment.className}`}
                           style={{ width: `${total ? (segment.value / total) * 100 : 0}%` }}
                           title={`${segment.label}: ${segment.value}`}
                         />
@@ -671,14 +672,14 @@ function AnalysisTab({ workbench }: { workbench: CompanyWorkbench }) {
           )}
         </div>
 
-        <div className="bg-terminal-panel border border-terminal-border rounded p-4">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-4">
           <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">TECHNICAL OUTLOOK</div>
           {analysis.technicalOutlooks.length === 0 ? (
             <div className="text-terminal-faint text-xs">No live technical outlook is available.</div>
           ) : (
             <div className="space-y-3">
               {analysis.technicalOutlooks.map((outlook) => (
-                <div key={outlook.label} className="bg-terminal-elevated border border-terminal-border rounded p-3">
+                <div key={outlook.label} className="instrument-section bg-terminal-elevated border border-terminal-border rounded p-3">
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-terminal-text font-bold">{outlook.label}</span>
                     <span className={outlook.direction === 'Bullish' ? 'text-terminal-positive' : outlook.direction === 'Bearish' ? 'text-terminal-negative' : 'text-terminal-accent'}>
@@ -698,7 +699,7 @@ function AnalysisTab({ workbench }: { workbench: CompanyWorkbench }) {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <div className="bg-terminal-panel border border-terminal-border rounded p-4">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-4">
           <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">EARNINGS & REVENUE TREND</div>
           {analysis.earningsTrend.length === 0 ? (
             <div className="text-terminal-faint text-xs">No live estimate trend is available.</div>
@@ -730,7 +731,7 @@ function AnalysisTab({ workbench }: { workbench: CompanyWorkbench }) {
           )}
         </div>
 
-        <div className="bg-terminal-panel border border-terminal-border rounded p-4">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-4">
           <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">COMPANY VS SECTOR SNAPSHOT</div>
           {analysis.snapshotScores.length === 0 ? (
             <div className="text-terminal-faint text-xs">No live sector snapshot is available.</div>
@@ -744,10 +745,10 @@ function AnalysisTab({ workbench }: { workbench: CompanyWorkbench }) {
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <div className="h-1.5 bg-terminal-elevated rounded-full overflow-hidden">
-                      <div className="h-full bg-terminal-accent rounded-full" style={{ width: `${Math.min(100, (score.company ?? 0) * 10)}%` }} />
+                      <div className="instrument-meter h-full bg-terminal-accent rounded-full" style={{ width: `${Math.min(100, (score.company ?? 0) * 10)}%` }} />
                     </div>
                     <div className="h-1.5 bg-terminal-elevated rounded-full overflow-hidden">
-                      <div className="h-full bg-terminal-blue rounded-full" style={{ width: `${Math.min(100, (score.sector ?? 0) * 10)}%` }} />
+                      <div className="instrument-meter h-full bg-terminal-blue rounded-full" style={{ width: `${Math.min(100, (score.sector ?? 0) * 10)}%` }} />
                     </div>
                   </div>
                 </div>
@@ -758,7 +759,7 @@ function AnalysisTab({ workbench }: { workbench: CompanyWorkbench }) {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <div className="bg-terminal-panel border border-terminal-border rounded p-4">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-4">
           <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">SIGNIFICANT DEVELOPMENTS</div>
           {analysis.developments.length === 0 ? (
             <div className="text-terminal-faint text-xs">No live development feed is available.</div>
@@ -774,7 +775,7 @@ function AnalysisTab({ workbench }: { workbench: CompanyWorkbench }) {
           )}
         </div>
 
-        <div className="bg-terminal-panel border border-terminal-border rounded p-4">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-4">
           <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">RESEARCH REPORTS</div>
           {analysis.reports.length === 0 ? (
             <div className="text-terminal-faint text-xs">No live research reports are available.</div>
@@ -805,7 +806,7 @@ function OwnershipTab({ workbench, secData, loadingSec }: { workbench: CompanyWo
   const { ownership, filings, calendar, quote } = workbench;
 
   return (
-    <div className="p-3 sm:p-4 space-y-4">
+    <div className="section-stack p-3 sm:p-4 space-y-4">
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
         <MetricRow label="Insiders Held" value={formatRatio(ownership.insidersPercentHeld)} />
         <MetricRow label="Institutions Held" value={formatRatio(ownership.institutionsPercentHeld)} />
@@ -816,7 +817,7 @@ function OwnershipTab({ workbench, secData, loadingSec }: { workbench: CompanyWo
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <div className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded overflow-hidden">
           <div className="px-4 py-2 panel-border-b flex items-center gap-2">
             <Landmark size={12} className="text-terminal-accent" />
             <span className="text-terminal-muted text-xs font-bold tracking-wider">TOP INSTITUTIONAL HOLDERS</span>
@@ -847,7 +848,7 @@ function OwnershipTab({ workbench, secData, loadingSec }: { workbench: CompanyWo
           )}
         </div>
 
-        <div className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded overflow-hidden">
           <div className="px-4 py-2 panel-border-b flex items-center gap-2">
             <Users size={12} className="text-terminal-accent" />
             <span className="text-terminal-muted text-xs font-bold tracking-wider">INSIDER ACTIVITY</span>
@@ -891,7 +892,7 @@ function FundOverviewTab({ workbench }: { workbench: CompanyWorkbench }) {
   }
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="section-stack p-4 space-y-4">
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
         <MetricRow label="NAV" value={fund.navPrice != null ? fmt.price(fund.navPrice) : fmt.price(quote.regularMarketPrice)} />
         <MetricRow label="Net Assets" value={formatCompactCurrency(fund.netAssets, quote.currency)} />
@@ -899,20 +900,20 @@ function FundOverviewTab({ workbench }: { workbench: CompanyWorkbench }) {
         <MetricRow label="Family" value={fund.family ?? '--'} />
         <MetricRow label="Net Expense" value={formatPercentValue(fund.netExpenseRatio, 'auto')} />
         <MetricRow label="Yield" value={formatPercentValue(fund.yield, 'auto')} />
-        <MetricRow label="YTD Return" value={formatPercentValue(fund.ytdReturn, 'auto')} />
-        <MetricRow label="1Y Return" value={formatPercentValue(fund.oneYearReturn, 'points')} />
-        <MetricRow label="3Y Return" value={formatPercentValue(fund.threeYearReturn, 'points')} />
-        <MetricRow label="5Y Return" value={formatPercentValue(fund.fiveYearReturn, 'points')} />
+        <MetricRow label="YTD Return" value={formatPercentValue(fund.ytdReturn, 'auto')} change={fund.ytdReturn} />
+        <MetricRow label="1Y Return" value={formatPercentValue(fund.oneYearReturn, 'points')} change={fund.oneYearReturn} />
+        <MetricRow label="3Y Return" value={formatPercentValue(fund.threeYearReturn, 'points')} change={fund.threeYearReturn} />
+        <MetricRow label="5Y Return" value={formatPercentValue(fund.fiveYearReturn, 'points')} change={fund.fiveYearReturn} />
         <MetricRow label="Risk Rating" value={fund.riskRating != null ? fmt.number(fund.riskRating, 0) : '--'} />
         <MetricRow label="Return Rating" value={fund.returnRating != null ? fmt.number(fund.returnRating, 0) : '--'} />
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-        <div className="xl:col-span-2 bg-terminal-panel border border-terminal-border rounded p-4">
+        <div className="xl:col-span-2 instrument-card bg-terminal-panel border border-terminal-border rounded p-4">
           <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">FUND PROFILE</div>
           <div className="flex items-center gap-2 flex-wrap text-xs text-terminal-muted mb-3">
             {workbench.profile.website && (
-              <a href={workbench.profile.website} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-terminal-blue hover:underline">
+              <a href={workbench.profile.website} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-terminal-accent hover:underline">
                 <Globe size={11} />
                 {workbench.profile.website.replace(/^https?:\/\//, '')}
               </a>
@@ -926,7 +927,7 @@ function FundOverviewTab({ workbench }: { workbench: CompanyWorkbench }) {
           </p>
         </div>
 
-        <div className="bg-terminal-panel border border-terminal-border rounded p-4">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-4">
           <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">MANAGEMENT & FEES</div>
           <div className="grid grid-cols-1 gap-3 text-xs">
             <InfoStat label="Manager" value={fund.managerName ?? '--'} />
@@ -939,7 +940,7 @@ function FundOverviewTab({ workbench }: { workbench: CompanyWorkbench }) {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <div className="bg-terminal-panel border border-terminal-border rounded p-4">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-4">
           <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">ASSET MIX</div>
           {fund.assetAllocation.length === 0 ? (
             <div className="text-terminal-faint text-xs">No live asset mix is available.</div>
@@ -952,7 +953,7 @@ function FundOverviewTab({ workbench }: { workbench: CompanyWorkbench }) {
           )}
         </div>
 
-        <div className="bg-terminal-panel border border-terminal-border rounded p-4">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-4">
           <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">TOP SECTOR EXPOSURES</div>
           {fund.sectorWeightings.length === 0 ? (
             <div className="text-terminal-faint text-xs">No live sector exposure data is available.</div>
@@ -977,17 +978,17 @@ function FundPerformanceTab({ workbench }: { workbench: CompanyWorkbench }) {
   }
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="section-stack p-4 space-y-4">
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-        <MetricRow label="Fund 1Y" value={formatPercentValue(fund.oneYearReturn, 'points')} />
-        <MetricRow label="Category 1Y" value={formatPercentValue(fund.categoryOneYearReturn, 'points')} />
-        <MetricRow label="Fund 3Y" value={formatPercentValue(fund.threeYearReturn, 'points')} />
-        <MetricRow label="Category 3Y" value={formatPercentValue(fund.categoryThreeYearReturn, 'points')} />
-        <MetricRow label="Fund 5Y" value={formatPercentValue(fund.fiveYearReturn, 'points')} />
-        <MetricRow label="Category 5Y" value={formatPercentValue(fund.categoryFiveYearReturn, 'points')} />
+        <MetricRow label="Fund 1Y" value={formatPercentValue(fund.oneYearReturn, 'points')} change={fund.oneYearReturn} />
+        <MetricRow label="Category 1Y" value={formatPercentValue(fund.categoryOneYearReturn, 'points')} change={fund.categoryOneYearReturn} />
+        <MetricRow label="Fund 3Y" value={formatPercentValue(fund.threeYearReturn, 'points')} change={fund.threeYearReturn} />
+        <MetricRow label="Category 3Y" value={formatPercentValue(fund.categoryThreeYearReturn, 'points')} change={fund.categoryThreeYearReturn} />
+        <MetricRow label="Fund 5Y" value={formatPercentValue(fund.fiveYearReturn, 'points')} change={fund.fiveYearReturn} />
+        <MetricRow label="Category 5Y" value={formatPercentValue(fund.categoryFiveYearReturn, 'points')} change={fund.categoryFiveYearReturn} />
       </div>
 
-      <div className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+      <div className="instrument-card bg-terminal-panel border border-terminal-border rounded overflow-hidden">
         <div className="px-4 py-2 panel-border-b">
           <span className="text-terminal-muted text-xs font-bold tracking-wider">TRAILING RETURNS</span>
         </div>
@@ -1009,8 +1010,8 @@ function FundPerformanceTab({ workbench }: { workbench: CompanyWorkbench }) {
                 return (
                   <tr key={row.label}>
                     <td className="text-terminal-accent font-bold">{row.label}</td>
-                    <td>{formatPercentValue(row.value, 'points')}</td>
-                    <td>{formatPercentValue(row.categoryValue, 'points')}</td>
+                    <td className={changeColor(row.value)}>{formatPercentValue(row.value, 'points')}</td>
+                    <td className={changeColor(row.categoryValue)}>{formatPercentValue(row.categoryValue, 'points')}</td>
                     <td className={changeColor(delta)}>{delta != null ? formatPercentValue(delta, 'points') : '--'}</td>
                   </tr>
                 );
@@ -1021,7 +1022,7 @@ function FundPerformanceTab({ workbench }: { workbench: CompanyWorkbench }) {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <div className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded overflow-hidden">
           <div className="px-4 py-2 panel-border-b">
             <span className="text-terminal-muted text-xs font-bold tracking-wider">ANNUAL TOTAL RETURNS</span>
           </div>
@@ -1041,12 +1042,17 @@ function FundPerformanceTab({ workbench }: { workbench: CompanyWorkbench }) {
                 {fund.annualReturns.slice().reverse().map((row) => (
                   <tr key={row.year}>
                     <td className="text-terminal-accent font-bold">{row.year}</td>
-                    <td>{formatPercentValue(row.annualValue, 'points')}</td>
-                    <td>{formatPercentValue(row.categoryAnnualValue, 'points')}</td>
+                    <td className={changeColor(row.annualValue)}>{formatPercentValue(row.annualValue, 'points')}</td>
+                    <td className={changeColor(row.categoryAnnualValue)}>{formatPercentValue(row.categoryAnnualValue, 'points')}</td>
                     <td className="text-terminal-muted">
                       {[row.q1, row.q2, row.q3, row.q4].every((value) => value == null)
                         ? '--'
-                        : [row.q1, row.q2, row.q3, row.q4].map((value) => formatPercentValue(value, 'points')).join(' / ')}
+                        : [row.q1, row.q2, row.q3, row.q4].map((value, quarter) => (
+                          <Fragment key={quarter}>
+                            {quarter > 0 && ' / '}
+                            <span className={changeColor(value)}>{formatPercentValue(value, 'points')}</span>
+                          </Fragment>
+                        ))}
                     </td>
                   </tr>
                 ))}
@@ -1055,7 +1061,7 @@ function FundPerformanceTab({ workbench }: { workbench: CompanyWorkbench }) {
           )}
         </div>
 
-        <div className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded overflow-hidden">
           <div className="px-4 py-2 panel-border-b">
             <span className="text-terminal-muted text-xs font-bold tracking-wider">RISK STATISTICS</span>
           </div>
@@ -1079,7 +1085,7 @@ function FundPerformanceTab({ workbench }: { workbench: CompanyWorkbench }) {
                     <td>{row.beta != null ? fmt.number(row.beta, 2) : '--'}</td>
                     <td>{formatPercentValue(row.standardDeviation, 'points')}</td>
                     <td>{row.sharpeRatio != null ? fmt.number(row.sharpeRatio, 2) : '--'}</td>
-                    <td>{formatPercentValue(row.meanAnnualReturn, 'points')}</td>
+                    <td className={changeColor(row.meanAnnualReturn)}>{formatPercentValue(row.meanAnnualReturn, 'points')}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1099,9 +1105,9 @@ function FundHoldingsTab({ workbench }: { workbench: CompanyWorkbench }) {
   }
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="section-stack p-4 space-y-4">
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <div className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded overflow-hidden">
           <div className="px-4 py-2 panel-border-b flex items-center gap-2">
             <Landmark size={12} className="text-terminal-accent" />
             <span className="text-terminal-muted text-xs font-bold tracking-wider">TOP HOLDINGS</span>
@@ -1130,7 +1136,7 @@ function FundHoldingsTab({ workbench }: { workbench: CompanyWorkbench }) {
           )}
         </div>
 
-        <div className="bg-terminal-panel border border-terminal-border rounded p-4">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-4">
           <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">SECTOR EXPOSURE</div>
           {fund.sectorWeightings.length === 0 ? (
             <div className="text-terminal-faint text-xs">No live sector weightings are available.</div>
@@ -1145,7 +1151,7 @@ function FundHoldingsTab({ workbench }: { workbench: CompanyWorkbench }) {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <div className="bg-terminal-panel border border-terminal-border rounded p-4">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-4">
           <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">ASSET ALLOCATION</div>
           {fund.assetAllocation.length === 0 ? (
             <div className="text-terminal-faint text-xs">No live asset allocation data is available.</div>
@@ -1158,7 +1164,7 @@ function FundHoldingsTab({ workbench }: { workbench: CompanyWorkbench }) {
           )}
         </div>
 
-        <div className="bg-terminal-panel border border-terminal-border rounded p-4">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-4">
           <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">PORTFOLIO STYLE</div>
           {!fund.equityStyle ? (
             <div className="text-terminal-faint text-xs">No live equity-style factors are available.</div>
@@ -1186,9 +1192,9 @@ function FundDetailsTab({ workbench }: { workbench: CompanyWorkbench }) {
   }
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="section-stack p-4 space-y-4">
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <div className="bg-terminal-panel border border-terminal-border rounded p-4">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-4">
           <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">MANAGER COMMENTARY</div>
           <div className="space-y-3 text-xs">
             <InfoStat label="Lead Manager" value={fund.managerName ?? '--'} />
@@ -1199,7 +1205,7 @@ function FundDetailsTab({ workbench }: { workbench: CompanyWorkbench }) {
           </div>
         </div>
 
-        <div className="bg-terminal-panel border border-terminal-border rounded p-4">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-4">
           <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">STRUCTURE & FEES</div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
             <InfoStat label="Legal Type" value={fund.legalType ?? '--'} />
@@ -1214,7 +1220,7 @@ function FundDetailsTab({ workbench }: { workbench: CompanyWorkbench }) {
         </div>
       </div>
 
-      <div className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+      <div className="instrument-card bg-terminal-panel border border-terminal-border rounded overflow-hidden">
         <div className="px-4 py-2 panel-border-b flex items-center gap-2">
           <FileText size={12} className="text-terminal-accent" />
           <span className="text-terminal-muted text-xs font-bold tracking-wider">FUND SNAPSHOT</span>
@@ -1244,7 +1250,7 @@ function ExposureBar({ label, value }: { label: string; value: number | null | u
         <span className="text-terminal-text font-bold">{formatPercentValue(value, 'auto')}</span>
       </div>
       <div className="h-1.5 bg-terminal-elevated rounded-full overflow-hidden">
-        <div className="h-full bg-terminal-accent rounded-full" style={{ width: `${Math.max(0, Math.min(100, pct ?? 0))}%` }} />
+        <div className="instrument-meter h-full bg-terminal-accent rounded-full" style={{ width: `${Math.max(0, Math.min(100, pct ?? 0))}%` }} />
       </div>
     </div>
   );
@@ -1273,21 +1279,21 @@ function StyleComparison({
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         <div className="h-1.5 bg-terminal-elevated rounded-full overflow-hidden">
-          <div className="h-full bg-terminal-accent rounded-full" style={{ width: `${styleBarWidth(fundValue)}%` }} />
+          <div className="instrument-meter h-full bg-terminal-accent rounded-full" style={{ width: `${styleBarWidth(fundValue)}%` }} />
         </div>
         <div className="h-1.5 bg-terminal-elevated rounded-full overflow-hidden">
-          <div className="h-full bg-terminal-blue rounded-full" style={{ width: `${styleBarWidth(categoryValue)}%` }} />
+          <div className="instrument-meter h-full bg-terminal-blue rounded-full" style={{ width: `${styleBarWidth(categoryValue)}%` }} />
         </div>
       </div>
     </div>
   );
 }
 
-function MetricRow({ label, value }: { label: string; value: string }) {
+function MetricRow({ label, value, change }: { label: string; value: string; change?: number | null }) {
   return (
-    <div className="bg-terminal-panel border border-terminal-border rounded p-2.5">
+    <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-2.5">
       <div className="text-terminal-faint text-xs mb-1">{label}</div>
-      <div className="font-bold tabular-nums text-sm text-terminal-text">{value}</div>
+      <div className={`font-bold tabular-nums text-sm ${change === undefined ? 'text-terminal-text' : changeColor(change)}`}>{value}</div>
     </div>
   );
 }
@@ -1311,7 +1317,7 @@ function RangeBar({ label, low, high, pct }: { label: string; low?: number; high
         </span>
       </div>
       <div className="h-1.5 bg-terminal-elevated rounded-full overflow-hidden">
-        <div className="h-full bg-gradient-to-r from-terminal-negative via-terminal-accent to-terminal-positive rounded-full" style={{ width: '100%' }} />
+        <div className="instrument-meter h-full bg-gradient-to-r from-terminal-negative via-terminal-accent to-terminal-positive rounded-full" style={{ width: '100%' }} />
       </div>
       {pct != null && (
         <div className="relative h-2 mt-0.5">
@@ -1386,7 +1392,7 @@ function styleBarWidth(value: number | null | undefined): number {
 
 function NoDataBlock({ text }: { text: string }) {
   return (
-    <div className="bg-terminal-panel border border-terminal-border rounded p-4 text-terminal-faint text-xs">
+    <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-4 text-terminal-faint text-xs">
       {text}
     </div>
   );

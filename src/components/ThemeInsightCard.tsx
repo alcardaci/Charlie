@@ -134,7 +134,7 @@ export function ThemeInsightCard({
   const headingId = `theme-${theme.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
 
   return (
-    <article className="overflow-hidden rounded border border-terminal-border bg-terminal-panel" aria-labelledby={headingId}>
+    <article className="instrument-section overflow-hidden rounded border border-terminal-border bg-terminal-panel" aria-labelledby={headingId}>
       <header className="px-4 py-3 panel-border-b">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 flex-1">

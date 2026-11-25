@@ -61,9 +61,9 @@ export function WatchlistSidebar({ className = '', mobile = false, onClose }: Wa
   };
 
   return (
-    <div className={`${mobile ? 'w-full' : 'w-44 flex-shrink-0 panel-border-r'} flex flex-col bg-terminal-panel ${className}`}>
+    <div className={`instrument-section ${mobile ? 'w-full' : 'w-44 flex-shrink-0 panel-border-r'} flex flex-col bg-terminal-panel ${className}`}>
       {/* Header */}
-      <div className={`flex items-center justify-between panel-border-b ${mobile ? 'px-3 py-2' : 'px-2 py-1.5'}`}>
+      <div className={`instrument-section flex items-center justify-between panel-border-b ${mobile ? 'px-3 py-2' : 'px-2 py-1.5'}`}>
         <span className="text-terminal-accent text-xs font-bold tracking-wider">WATCHLIST</span>
         <div className="flex items-center gap-1">
           <button

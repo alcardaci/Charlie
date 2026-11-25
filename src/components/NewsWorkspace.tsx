@@ -10,6 +10,7 @@ import type { Divider, Drop, NewsBoard, NewsCardId, NewsLayout, Placement, Rect 
 import { CharlieLivePlayer } from './CharlieLivePlayer';
 import { NewsPanel } from './NewsPanel';
 import { PanelBoundary } from './PanelBoundary';
+import { WorkspaceHeader } from './WorkspaceHeader';
 
 const EventCard = lazy(() => import('../panels/GeopoliticsPanel').then(m => ({ default: m.NewsEventCard })));
 const RiskCard = lazy(() => import('../panels/GeopoliticsPanel').then(m => ({ default: m.NewsRiskCard })));
@@ -57,6 +58,20 @@ function previewRect(drop: Drop, r: Rect): Rect {
   const size = horizontal ? 'width' : 'height', start = horizontal ? 'left' : 'top';
   const half = (r[size] - NEWS_GAP) / 2;
   return { ...r, [size]: half, [start]: r[start] + (drop.edge === 'right' || drop.edge === 'bottom' ? half + NEWS_GAP : 0) };
+}
+
+function sectionRules(board: NewsBoard) {
+  const halfGap = NEWS_GAP / 2;
+  if (board.stacked) {
+    return board.tiles.slice(1).map(({ id, rect }) => ({
+      key: id, rect: { ...rect, top: rect.top - halfGap, height: 1 },
+    }));
+  }
+  return board.dividers.map(({ path, rect, axis }) => ({
+    key: path, rect: axis === 'x'
+      ? { ...rect, left: rect.left + halfGap, width: 1 }
+      : { ...rect, top: rect.top + halfGap, height: 1 },
+  }));
 }
 const dropLabels = { center: 'Swap with', left: 'Place left of', right: 'Place right of', top: 'Place above', bottom: 'Place below' };
 const boardDropLabels = { left: 'Full-height column on the left', right: 'Full-height column on the right', top: 'Full-width row at the top', bottom: 'Full-width row at the bottom', center: '' };
@@ -183,13 +198,12 @@ export function NewsWorkspace({ active }: { active: boolean }) {
     ? { left: 0, top: 0, width: size.width, height: board.height }
     : board.tiles.find(t => t.id === destination.target)!.rect);
 
-  return <div className={active ? 'flex h-full min-h-0 flex-col gap-2 p-2 sm:p-3' : 'contents'} onKeyDown={e => {
+  return <div className={active ? 'flex h-full min-h-0 flex-col' : 'contents'} onKeyDown={e => {
     if (draft && e.key === 'Escape') { e.preventDefault(); if (gesture.current) end(undefined, true); else setDraft(null); }
   }}>
-    {active && <header className="flex shrink-0 flex-wrap items-center justify-between gap-2">
-      <h1 className="text-sm font-bold tracking-wider text-terminal-accent">NEWS</h1>
-      {draft && <p id="news-edit-hint" className="min-w-0 flex-1 text-[11px] text-terminal-muted">Drag onto a card to swap, or to an edge to place it there. Drag a corner or divider to resize.<span className="sr-only"> Use arrow keys on a move or resize control. Escape cancels.</span></p>}
-      <div className="flex items-center gap-2">
+    {active && <WorkspaceHeader title="NEWS">
+      {draft && <p id="news-edit-hint" className="min-w-0 flex-[1_1_18rem] text-[11px] text-terminal-muted">Drag onto a card to swap, or to an edge to place it there. Drag a corner or divider to resize.<span className="sr-only"> Use arrow keys on a move or resize control. Escape cancels.</span></p>}
+      <div className="flex flex-wrap items-center gap-2">
         {draft ? <>
           <button type="button" className={action} onClick={() => setDraft(DEFAULT_NEWS_LAYOUT)}>Reset to default</button>
           <button type="button" className={action} onClick={() => setDraft(null)}>Cancel</button>
@@ -197,8 +211,8 @@ export function NewsWorkspace({ active }: { active: boolean }) {
         </> : <button type="button" className={'inline-flex items-center gap-1.5 ' + action} onClick={() => setDraft(saved)}><Settings2 size={13} />Edit layout</button>}
       </div>
       <span className="sr-only" aria-live="polite">{announcement}</span>
-    </header>}
-    <div key="workspace" ref={viewport} className={active ? 'min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden' : 'contents'}>
+    </WorkspaceHeader>}
+    <div key="workspace" ref={viewport} className={active ? 'm-2 min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden sm:m-3' : 'contents'}>
       <div ref={surface} className={active ? 'relative w-full' : 'contents'} style={active ? { height: board.height } : undefined}
         onPointerMove={move} onPointerUp={e => end(e)} onPointerCancel={e => end(e, true)} onLostPointerCapture={e => end(e, true)}>
         {NEWS_CARD_IDS.filter(id => active || id === 'player').map(id => {
@@ -226,6 +240,9 @@ export function NewsWorkspace({ active }: { active: boolean }) {
             </>}
           </section>;
         })}
+        {active && sectionRules(board).map(rule => (
+          <span key={rule.key} aria-hidden="true" className="news-section-rule pointer-events-none absolute" style={rule.rect} />
+        ))}
         {active && draft && !board.stacked && board.dividers.map(d => {
           const handles = { [d.axis]: d };
           return <button key={d.path} type="button" aria-label={'Resize ' + (d.axis === 'x' ? 'columns' : 'rows') + ' between cards'}

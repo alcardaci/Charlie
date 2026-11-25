@@ -1,0 +1,43 @@
+:root[data-theme] .instrument-card.overview-sector {
+  background-color: var(--sector-background);
+  background-image: var(--sector-dots);
+  background-size: 4px 4px;
+}
+
+.overview-sector-change {
+  color: var(--sector-change-text);
+}
+
+.overview-primary-region {
+  container: overview-instruments / inline-size;
+}
+
+.overview-primary-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.overview-primary-panel {
+  min-width: 0;
+  padding: 12px;
+  background-color: var(--terminal-bg);
+}
+
+.overview-primary-panel > h2 {
+  margin: 0 0 11px;
+  font-size: 12px;
+  line-height: 1.5;
+  font-weight: 700;
+}
+
+@container overview-instruments (min-width: 46rem) {
+  .overview-primary-pair {
+    grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr);
+  }
+
+  .overview-primary-panel {
+    padding: 14px;
+  }
+}

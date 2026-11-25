@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { WorkspaceHeader } from '../components/WorkspaceHeader';
 import { useTerminalStore } from '../store/useTerminalStore';
 import { useAppVersion } from '../utils/appVersion';
 
@@ -101,19 +102,14 @@ const EXCHANGE_NOTES = [
 
 function SectionCard({
   title,
-  subtitle,
   children,
 }: {
   title: string;
-  subtitle?: string;
   children: ReactNode;
 }) {
   return (
-    <section className="rounded border border-terminal-border bg-terminal-panel p-4">
-      <div className="mb-3">
-        <div className="text-terminal-muted text-xs font-bold tracking-wider">{title}</div>
-        {subtitle && <div className="text-terminal-faint text-xs mt-1">{subtitle}</div>}
-      </div>
+    <section className="instrument-card rounded border border-terminal-border bg-terminal-panel p-4">
+      <h2 className="instrument-heading mb-3 text-xs font-bold tracking-wider">{title}</h2>
       {children}
     </section>
   );
@@ -125,34 +121,22 @@ export function HelpPanel() {
   const workspaces = WORKSPACES;
 
   return (
-    <div className="h-full overflow-y-auto p-5 xl:p-6">
-      <div className="space-y-4 min-w-0">
-        <section className="rounded border border-terminal-border bg-terminal-panel p-5">
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="text-terminal-accent font-bold text-3xl tracking-widest">CHARLIE</span>
-            {appVersion && (
-              <span className="text-terminal-faint font-mono text-xs tracking-wider">{appVersion}</span>
-            )}
-            <span className="text-terminal-muted text-sm">Professional market data workspace</span>
-          </div>
-          <p className="mt-3 text-terminal-muted text-xs leading-relaxed">
-            Charlie brings near-real-time market data, charts, news, analytics, macro monitoring, geopolitics coverage,
-            and public prediction-market forecasts into one platform. Use the command bar for fast jumps, the shortcut
-            bar for the core workspaces, and Settings for local provider credentials and AI preferences.
-          </p>
-        </section>
-
+    <>
+      <WorkspaceHeader title="HELP">
+        {appVersion && <span className="text-terminal-faint font-mono text-xs">{appVersion}</span>}
+      </WorkspaceHeader>
+      <div className="section-stack min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto p-5 xl:p-6">
         <SectionCard title="DEDICATED WORKSPACES">
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
             {workspaces.map(({ title, command, summary }) => (
               <button
                 key={title}
                 onClick={() => executeCommand(command)}
-                className="rounded border border-terminal-border bg-terminal-elevated p-3 text-left hover:border-terminal-accent/40 hover:bg-terminal-hover transition-colors"
+                className="instrument-section rounded border border-terminal-border bg-terminal-elevated p-3 text-left hover:border-terminal-accent/40 hover:bg-terminal-hover transition-colors"
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-terminal-text text-xs font-bold">{title}</span>
-                  <span className="text-terminal-blue text-[11px] font-mono">{command}</span>
+                  <span className="text-terminal-accent text-[11px] font-mono">{command}</span>
                 </div>
                 <div className="mt-2 text-terminal-muted text-xs leading-relaxed">{summary}</div>
               </button>
@@ -164,7 +148,7 @@ export function HelpPanel() {
           <SectionCard title="KEYBOARD SHORTCUTS">
             <div className="space-y-2">
               {KEYBOARD.map(({ key, desc }) => (
-                <div key={key} className="flex items-start gap-3 rounded border border-terminal-border bg-terminal-elevated px-3 py-2">
+                <div key={key} className="instrument-section flex items-start gap-3 rounded border border-terminal-border bg-terminal-elevated px-3 py-2">
                   <span className="min-w-20 rounded border border-terminal-border bg-terminal-panel px-2 py-1 text-[11px] font-mono text-terminal-text text-center">
                     {key}
                   </span>
@@ -177,7 +161,7 @@ export function HelpPanel() {
           <SectionCard title="DATA SOURCES">
             <div className="space-y-2">
               {DATA_SOURCES.map(({ name, coverage, note }) => (
-                <div key={name} className="rounded border border-terminal-border bg-terminal-elevated px-3 py-2.5">
+                <div key={name} className="instrument-section rounded border border-terminal-border bg-terminal-elevated px-3 py-2.5">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-terminal-text text-xs font-bold">{name}</span>
                     <span className="text-terminal-faint text-[11px]">{note}</span>
@@ -189,15 +173,15 @@ export function HelpPanel() {
           </SectionCard>
 
           <SectionCard title="INTERNATIONAL TICKERS">
-            <div className="rounded border border-terminal-border bg-terminal-elevated px-3 py-2 text-terminal-faint text-xs leading-relaxed">
+            <div className="instrument-section rounded border border-terminal-border bg-terminal-elevated px-3 py-2 text-terminal-faint text-xs leading-relaxed">
               Non-US listings usually need an exchange suffix. Examples:
-              {' '}<span className="text-terminal-blue font-mono">VWCE.DE</span>,
-              {' '}<span className="text-terminal-blue font-mono">BP.L</span>,
-              {' '}<span className="text-terminal-blue font-mono">7203.T</span>
+              {' '}<span className="text-terminal-accent font-mono">VWCE.DE</span>,
+              {' '}<span className="text-terminal-accent font-mono">BP.L</span>,
+              {' '}<span className="text-terminal-accent font-mono">7203.T</span>
             </div>
             <div className="mt-2 space-y-2">
               {EXCHANGE_NOTES.map(({ suffix, exchange }) => (
-                <div key={suffix} className="flex items-center gap-3 rounded border border-terminal-border bg-terminal-elevated px-3 py-2">
+                <div key={suffix} className="instrument-section flex items-center gap-3 rounded border border-terminal-border bg-terminal-elevated px-3 py-2">
                   <span className="w-12 flex-shrink-0 text-terminal-accent font-mono text-xs">{suffix}</span>
                   <span className="text-terminal-muted text-xs">{exchange}</span>
                 </div>
@@ -206,7 +190,7 @@ export function HelpPanel() {
           </SectionCard>
         </div>
 
-        <section className="rounded border border-terminal-border bg-terminal-panel px-4 py-3">
+        <section className="instrument-card rounded border border-terminal-border bg-terminal-panel px-4 py-3">
           <div className="text-terminal-faint text-xs leading-relaxed">
             Charlie is an open-source market terminal built with React, Vite, and Tailwind CSS.
             Market data and event intelligence flow through Yahoo Finance, SEC EDGAR, Teleborsa/FIDA, BLS, OECD, Eurostat, CoinGecko, Polymarket, FRED, Finnhub,
@@ -216,6 +200,6 @@ export function HelpPanel() {
           </div>
         </section>
       </div>
-    </div>
+    </>
   );
 }

@@ -1,10 +1,11 @@
 import type { MutableRefObject, ReactNode } from 'react';
-import { useRef, useState } from 'react';
+import { useId, useLayoutEffect, useRef, useState } from 'react';
 import { ComposableMap, Geographies, Geography, Marker, ZoomableGroup } from 'react-simple-maps';
 import { Globe2, Minus, Plus, Zap } from 'lucide-react';
 import type { CountryNewsCount, GeopoliticalScanStatus, NewsItem } from '../types';
 import worldCountries110m from '../data/worldCountries110m.json';
 import { fmt } from '../utils/formatters';
+import './RegionalNewsMap.css';
 
 const GEO_DATA = worldCountries110m;
 // ISO 3166-1 alpha-2 → numeric (world-atlas TopoJSON IDs)
@@ -76,49 +77,15 @@ function countryCoords(countryCode: string, x: number, y: number): [number, numb
   return [-171 + (x / 2370) * 361, 84 - (y / 1200) * 142];
 }
 
-function interpolateColor(start: [number, number, number], end: [number, number, number], weight: number): [number, number, number] {
-  return [
-    Math.round(start[0] + (end[0] - start[0]) * weight),
-    Math.round(start[1] + (end[1] - start[1]) * weight),
-    Math.round(start[2] + (end[2] - start[2]) * weight),
-  ];
-}
+const SEVERITY_LEVELS = ['low', 'medium', 'high', 'severe'] as const;
+type SeverityLevel = typeof SEVERITY_LEVELS[number];
 
-function getSeverityRgb(score: number, maxScore: number): [number, number, number] {
-  if (score <= 0 || maxScore <= 0) return [13, 17, 23];
-
-  const norm = Math.min(1, score / maxScore);
-  const low: [number, number, number] = [250, 204, 21];
-  const mid: [number, number, number] = [249, 115, 22];
-  const high: [number, number, number] = [127, 29, 29];
-
-  if (norm < 0.55) {
-    return interpolateColor(low, mid, norm / 0.55);
-  }
-
-  return interpolateColor(mid, high, (norm - 0.55) / 0.45);
-}
-
-function getCountryFill(score: number, maxScore: number): string {
-  if (score <= 0 || maxScore <= 0) return '#0d1117';
-  const [r, g, b] = getSeverityRgb(score, maxScore);
-  const alpha = (0.62 + Math.min(1, score / maxScore) * 0.24).toFixed(2);
-  return `rgba(${r},${g},${b},${alpha})`;
-}
-
-function getHoverFill(score: number, maxScore: number): string {
-  if (score <= 0 || maxScore <= 0) return '#1a2535';
-  const [r, g, b] = getSeverityRgb(score, maxScore);
-  return `rgba(${Math.min(255, r + 14)},${Math.min(255, g + 10)},${Math.min(255, b + 10)},0.98)`;
-}
-
-type SeverityLevel = 'low' | 'medium' | 'high' | 'severe';
-
-const SEVERITY_CHIP: Record<SeverityLevel, { bg: string; border: string; text: string; label: string }> = {
-  low:    { bg: 'rgba(92,50,6,0.76)',   border: '#facc15', text: '#fde68a', label: 'LOW' },
-  medium: { bg: 'rgba(120,53,15,0.82)', border: '#fb923c', text: '#fdba74', label: 'MEDIUM' },
-  high:   { bg: 'rgba(127,29,29,0.82)', border: '#ef4444', text: '#fca5a5', label: 'HIGH' },
-  severe: { bg: 'rgba(69,10,10,0.88)',  border: '#b91c1c', text: '#fecaca', label: 'SEVERE' },
+const MAP_DOT_COLORS = {
+  land: 'var(--terminal-muted)',
+  low: 'var(--map-low)',
+  medium: 'var(--map-medium)',
+  high: 'var(--map-high)',
+  severe: 'var(--map-severe)',
 };
 
 function getSeverity(score: number): SeverityLevel {
@@ -213,10 +180,28 @@ export function RegionalNewsMap({
   archiveMode,
   analysisNote,
 }: RegionalNewsMapProps) {
+  const patternId = useId();
+  const mapRef = useRef<SVGSVGElement>(null);
+  const [svgScale, setSvgScale] = useState(1);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1.1);
   const [center, setCenter] = useState<[number, number]>([12, 20]);
   const hotspotRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  // The same map can occupy a short tile or an entire column. Size dots and
+  // labels in screen pixels while the country paths keep their map coordinates.
+  useLayoutEffect(() => {
+    const svg = mapRef.current;
+    if (!svg) return;
+    const measure = () => {
+      const scale = svg.getScreenCTM()?.a;
+      if (scale && scale > 0) setSvgScale(scale);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(svg);
+    return () => observer.disconnect();
+  }, []);
 
   const activeCountries = [...countryData]
     .filter((c) => c.count > 0)
@@ -259,17 +244,16 @@ export function RegionalNewsMap({
     onCountrySelect?.(key);
   }
 
-  // Marker font size: constant screen-space size by dividing by zoom
-  // Empirically calibrated: 5.5 → ~5px screen, so ~12.4 → ~11px screen
-  const markerFontSize = 12.4 / zoom;
-  const markerStroke = 4.0 / zoom;
+  const markerUnit = 1 / (zoom * svgScale);
+  const markerFontSize = 12.4 * markerUnit;
+  const markerStroke = 4.0 * markerUnit;
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded border border-terminal-border bg-terminal-panel">
+    <div className="regional-news-map instrument-card flex h-full min-h-0 flex-col overflow-hidden rounded border border-terminal-border bg-terminal-panel">
       {/* ─── Header ─── */}
       <header className="news-card-header">
         <div className="flex items-center gap-2">
           <Globe2 size={14} className="text-terminal-accent" />
-          <h2 className="text-terminal-accent text-sm font-bold tracking-wider">GLOBAL EVENT MAP</h2>
+          <h2 className="instrument-heading text-terminal-accent text-sm font-bold tracking-wider">GLOBAL EVENT MAP</h2>
         </div>
         {headerActions}
       </header>
@@ -297,25 +281,25 @@ export function RegionalNewsMap({
         <div className="flex flex-wrap items-center justify-between gap-1 px-3 pb-2">
           <div role="group" className="flex gap-0.5" aria-label={`Event lookback, currently ${timeframeLabel}`}>
             {timeframeOptions.map(option => <button key={option.key} type="button" aria-pressed={option.key === activeTimeframeKey}
-              onClick={() => onTimeframeChange(option.key)} className={`rounded px-2 py-1 text-[10px] ${option.key === activeTimeframeKey ? 'bg-terminal-accent text-terminal-bg' : 'text-terminal-muted hover:bg-terminal-hover'}`}>{option.label}</button>)}
+              onClick={() => onTimeframeChange(option.key)} className={`rounded px-2 py-1 text-[10px] ${option.key === activeTimeframeKey ? 'bg-terminal-accent text-terminal-on-accent' : 'text-terminal-muted hover:bg-terminal-hover'}`}>{option.label}</button>)}
           </div>
           {assessmentStamp && <time className="text-[10px] text-terminal-faint" title="Last completed review">{assessmentStamp}</time>}
         </div>
-        <div className={`relative mx-2 min-h-[8rem] overflow-hidden rounded bg-[#050a0e] ${showHotspotsSection ? 'h-[43%] shrink-0' : 'mb-2 flex-1'}`}>
-          {isLoading && <div role="status" className="pointer-events-none absolute left-2 top-2 z-10 rounded bg-black/75 px-2 py-1 text-[10px] text-terminal-muted">Fetching news feeds…</div>}
+        <div className={`map-surface relative mx-2 min-h-[8rem] overflow-hidden rounded ${showHotspotsSection ? 'h-[43%] shrink-0' : 'mb-2 flex-1'}`}>
+          {isLoading && <div role="status" className="pointer-events-none absolute left-2 top-2 z-10 rounded bg-terminal-panel/95 px-2 py-1 text-[10px] text-terminal-muted">Fetching news feeds…</div>}
           {/* Zoom controls */}
           <div className="absolute right-2 top-2 z-10 flex flex-col gap-1">
             <button
               aria-label="Zoom in event map"
               onClick={() => setZoom((z) => Math.min(z + 0.5, 8))}
-              className="flex h-7 w-7 items-center justify-center rounded border border-white/12 bg-black/70 text-terminal-faint/70 hover:bg-black/90 hover:text-terminal-text transition-colors backdrop-blur-sm"
+              className="flex h-7 w-7 items-center justify-center rounded border border-terminal-border bg-terminal-panel/95 text-terminal-muted hover:bg-terminal-hover hover:text-terminal-text transition-colors backdrop-blur-sm"
             >
               <Plus size={12} />
             </button>
             <button
               aria-label="Zoom out event map"
               onClick={() => setZoom((z) => Math.max(z - 0.5, 0.8))}
-              className="flex h-7 w-7 items-center justify-center rounded border border-white/12 bg-black/70 text-terminal-faint/70 hover:bg-black/90 hover:text-terminal-text transition-colors backdrop-blur-sm"
+              className="flex h-7 w-7 items-center justify-center rounded border border-terminal-border bg-terminal-panel/95 text-terminal-muted hover:bg-terminal-hover hover:text-terminal-text transition-colors backdrop-blur-sm"
             >
               <Minus size={12} />
             </button>
@@ -323,7 +307,7 @@ export function RegionalNewsMap({
               <button
                 aria-label="Reset event map zoom"
                 onClick={() => { setZoom(1.1); setCenter([12, 20]); }}
-                className="flex h-7 w-7 items-center justify-center rounded border border-white/12 bg-black/70 text-terminal-faint/50 hover:text-terminal-text text-[8px] font-bold tracking-tight transition-colors backdrop-blur-sm"
+                className="flex h-7 w-7 items-center justify-center rounded border border-terminal-border bg-terminal-panel/95 text-terminal-muted hover:bg-terminal-hover hover:text-terminal-text text-[8px] font-bold tracking-tight transition-colors backdrop-blur-sm"
               >
                 ⊡
               </button>
@@ -331,24 +315,29 @@ export function RegionalNewsMap({
           </div>
 
           {/* Legend */}
-          {activeCountries.length > 0 && <div className="absolute bottom-3 left-3 z-10 flex items-center gap-2.5 rounded border border-white/8 bg-black/65 px-3 py-1.5 backdrop-blur-sm pointer-events-none">
-            <span className="text-[9px] font-bold tracking-[0.24em] text-terminal-faint/60">AI IMPACT</span>
-            {(['low', 'medium', 'high', 'severe'] as SeverityLevel[]).map((level) => {
-              const chip = SEVERITY_CHIP[level];
-              return (
-                <span key={level} className="flex items-center gap-1 text-[9px]" style={{ color: chip.text }}>
-                  <span className="inline-block h-2 w-2 rounded-sm" style={{ backgroundColor: chip.border, opacity: 0.9 }} />
-                  {chip.label}
-                </span>
-              );
-            })}
+          {activeCountries.length > 0 && <div className="absolute bottom-3 left-3 z-10 flex items-center gap-2.5 rounded border border-terminal-border bg-terminal-panel/95 px-3 py-1.5 backdrop-blur-sm pointer-events-none">
+            <span className="text-[9px] font-bold tracking-[0.24em] text-terminal-muted">AI IMPACT</span>
+            {SEVERITY_LEVELS.map((level) => (
+              <span key={level} className="flex items-center gap-1 text-[9px] uppercase text-terminal-text">
+                <span className="inline-block h-2 w-2 rounded-sm" style={{ backgroundColor: MAP_DOT_COLORS[level] }} />
+                {level}
+              </span>
+            ))}
           </div>}
 
           <ComposableMap
+            ref={mapRef}
             projection="geoNaturalEarth1"
             projectionConfig={{ scale: 148, center: [12, 15] }}
             style={{ width: '100%', height: '100%' }}
           >
+            <defs>
+              {Object.entries(MAP_DOT_COLORS).map(([level, color]) => (
+                <pattern key={level} id={`${patternId}-${level}`} width="4" height="4" patternUnits="userSpaceOnUse" patternTransform={`scale(${markerUnit})`}>
+                  <circle cx="2" cy="2" r={level === 'land' ? 0.95 : 1.4} fill={color} />
+                </pattern>
+              ))}
+            </defs>
             <ZoomableGroup
               zoom={zoom}
               center={center}
@@ -360,7 +349,7 @@ export function RegionalNewsMap({
               }}
             >
               {/* Ocean background */}
-              <rect x={-5000} y={-3000} width={10000} height={6000} fill="#050a0e" />
+              <rect x={-5000} y={-3000} width={10000} height={6000} fill="var(--map-ocean)" />
 
               <Geographies geography={GEO_DATA}>
                 {({ geographies }: { geographies: MapGeography[] }) =>
@@ -368,16 +357,16 @@ export function RegionalNewsMap({
                     const numId = Number(geo.id);
                     const data = countryByNum.get(numId);
                     const hasEvents = data != null && data.count > 0;
-                    const fill = getCountryFill(data?.severityScore ?? 0, 10);
-                    const stroke = hasEvents ? 'rgba(239,68,68,0.3)' : '#1a2535';
-                    const hoverFill = getHoverFill(data?.severityScore ?? 0, 10);
+                    const score = data?.severityScore ?? 0;
+                    const level = hasEvents ? getSeverity(score) : 'land';
+                    const fill = `url(#${patternId}-${level})`;
 
                     return (
                       <Geography
                         key={geo.rsmKey}
                         geography={geo}
                         fill={fill}
-                        stroke={stroke}
+                        stroke="var(--map-ocean)"
                         strokeWidth={hasEvents ? 0.7 : 0.35}
                         tabIndex={hasEvents ? 0 : -1}
                         role={hasEvents ? 'button' : undefined}
@@ -385,10 +374,10 @@ export function RegionalNewsMap({
                         onKeyDown={hasEvents ? (event: React.KeyboardEvent) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); focusHotspot(data.key); } } : undefined}
                         onClick={hasEvents ? () => focusHotspot(data.key) : undefined}
                         style={{
-                          default: { fill, stroke, strokeWidth: hasEvents ? 0.7 : 0.35, outline: 'none' },
+                          default: { fill, stroke: 'var(--map-ocean)', strokeWidth: hasEvents ? 0.7 : 0.35, outline: 'none' },
                           hover: {
-                            fill: hoverFill,
-                            stroke: hasEvents ? 'rgba(239,68,68,0.55)' : '#1e2d40',
+                            fill,
+                            stroke: MAP_DOT_COLORS[level],
                             strokeWidth: hasEvents ? 0.9 : 0.35,
                             outline: 'none',
                             cursor: hasEvents ? 'pointer' : 'default',
@@ -407,10 +396,10 @@ export function RegionalNewsMap({
                 const isSelected = selectedKey === country.key;
                 const severityScore = Math.round(country.severityScore ?? 0);
                 const level = getSeverity(severityScore);
-                const chip = SEVERITY_CHIP[level];
-                const badgeWidth = 34 / zoom;
-                const badgeHeight = 24 / zoom;
-                const badgeRadius = 3.5 / zoom;
+                const color = MAP_DOT_COLORS[level];
+                const badgeWidth = 25 * markerUnit;
+                const badgeHeight = 21 * markerUnit;
+                const badgeRadius = 3.5 * markerUnit;
                 const pulseDuration = `${Math.max(1.55, 2.45 - Math.min(severityScore, 10) * 0.07).toFixed(2)}s`;
                 const basePulseRadius = badgeWidth * 0.82;
                 const peakPulseRadius = badgeWidth * 1.48;
@@ -433,7 +422,7 @@ export function RegionalNewsMap({
 
                       <circle
                         r={basePulseRadius * 0.66}
-                        fill={chip.border}
+                        fill={color}
                         opacity={0.12}
                       >
                         <animate attributeName="r" values={`${basePulseRadius * 0.66};${peakPulseRadius * 0.92};${basePulseRadius * 0.66}`} dur={pulseDuration} repeatCount="indefinite" />
@@ -442,8 +431,8 @@ export function RegionalNewsMap({
                       <circle
                         r={basePulseRadius}
                         fill="none"
-                        stroke={chip.border}
-                        strokeWidth={0.56 / zoom}
+                        stroke={color}
+                        strokeWidth={0.56 * markerUnit}
                         opacity={0.52}
                       >
                         <animate attributeName="r" values={`${basePulseRadius};${peakPulseRadius};${basePulseRadius}`} dur={pulseDuration} repeatCount="indefinite" />
@@ -452,8 +441,8 @@ export function RegionalNewsMap({
                       <circle
                         r={basePulseRadius * 0.84}
                         fill="none"
-                        stroke={chip.border}
-                        strokeWidth={0.42 / zoom}
+                        stroke={color}
+                        strokeWidth={0.42 * markerUnit}
                         opacity={0.38}
                       >
                         <animate attributeName="r" values={`${basePulseRadius * 0.84};${peakPulseRadius * 0.92};${basePulseRadius * 0.84}`} dur={pulseDuration} begin={`-${(Number.parseFloat(pulseDuration) / 2).toFixed(2)}s`} repeatCount="indefinite" />
@@ -465,7 +454,7 @@ export function RegionalNewsMap({
                         <circle
                           r={markerFontSize * 2.9}
                           fill="none"
-                          stroke="#f0a500"
+                          stroke="var(--terminal-accent)"
                           strokeWidth={markerStroke * 0.8}
                           strokeDasharray={`${markerFontSize} ${markerFontSize * 0.5}`}
                         />
@@ -477,15 +466,15 @@ export function RegionalNewsMap({
                         width={badgeWidth}
                         height={badgeHeight}
                         rx={badgeRadius}
-                        fill="rgba(3,8,12,0.86)"
-                        stroke={chip.border}
-                        strokeWidth={0.65 / zoom}
+                        fill="var(--terminal-panel)"
+                        stroke={color}
+                        strokeWidth={0.65 * markerUnit}
                       />
                       <text
                         textAnchor="middle"
                         dominantBaseline="central"
-                        y={-3.2 / zoom}
-                        fill={chip.text}
+                        y={-3.2 * markerUnit}
+                        fill={color}
                         fontSize={markerFontSize * 0.76}
                         fontWeight={800}
                         style={{ fontFamily: 'monospace', letterSpacing: '-0.02em', userSelect: 'none' }}
@@ -495,9 +484,9 @@ export function RegionalNewsMap({
                       <text
                         textAnchor="middle"
                         dominantBaseline="central"
-                        y={6.1 / zoom}
-                        fill="rgba(255,255,255,0.88)"
-                        fontSize={markerFontSize * 0.48}
+                        y={5.5 * markerUnit}
+                        fill="var(--terminal-text)"
+                        fontSize={markerFontSize * 0.62}
                         fontWeight={700}
                         style={{ fontFamily: 'monospace', letterSpacing: '-0.01em', userSelect: 'none' }}
                       >
@@ -540,7 +529,7 @@ function CountryHotspotsSection({ countries, isGeoView, selectedKey, hotspotRefs
       {countries.length === 0 && <p className="py-2 text-xs text-terminal-muted">OpenAI found no country-specific events in the reviewed headlines.</p>}
       {countries.map(country => {
         const score = Math.round(country.severityScore ?? 0);
-        const tone = SEVERITY_CHIP[getSeverity(score)];
+        const color = MAP_DOT_COLORS[getSeverity(score)];
         const sources = collectSummarySourceEntries(country.hotspotSummary ? country.hotspotSummarySources ?? [] : country.stories ?? []);
         return (
           <div key={country.key} ref={node => { hotspotRefs.current[country.key] = node; }}
@@ -550,7 +539,7 @@ function CountryHotspotsSection({ countries, isGeoView, selectedKey, hotspotRefs
               : country.hotspotSummaryStatus === 'loading' ? <p className="mt-1 text-xs text-terminal-muted">Preparing summary…</p>
               : country.hotspotSummaryStatus === 'error' ? <p className="mt-1 text-xs text-terminal-muted">Summary unavailable.</p> : null}
             <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-terminal-muted">
-              <span className="inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: tone.border }} />
+              <span className="inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color }} />
                 AI-estimated impact {score}/10</span>
               <span>{country.count} {country.count === 1 ? eventName : isGeoView ? 'events' : 'stories'}</span>
               {!!country.latestAt && <span>{fmt.timeAgo(country.latestAt)}</span>}

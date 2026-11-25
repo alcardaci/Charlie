@@ -100,7 +100,7 @@ export function CharlieLivePlayer({ embedded }: { embedded: boolean }) {
         <div className="fixed bottom-16 right-3 z-40 md:bottom-8 sm:right-4">
           <button
             onClick={() => setIsExpanded(true)}
-            className="flex items-center gap-2 rounded-full border border-terminal-border bg-terminal-panel/95 px-3 py-2 text-xs text-terminal-text shadow-[0_8px_24px_rgba(0,0,0,0.35)] backdrop-blur-sm transition-colors hover:border-terminal-accent/50 hover:bg-terminal-hover"
+            className="floating-player-frame flex items-center gap-2 rounded-full border border-terminal-border bg-terminal-panel/95 px-3 py-2 text-xs text-terminal-text shadow-[0_8px_24px_rgba(0,0,0,0.35)] backdrop-blur-sm transition-colors hover:border-terminal-accent/50 hover:bg-terminal-hover"
             title={`Open ${selectedChannel.title}`}
           >
             <span className="flex items-center gap-1 text-terminal-accent">
@@ -117,8 +117,8 @@ export function CharlieLivePlayer({ embedded }: { embedded: boolean }) {
         aria-hidden={!embedded && !isExpanded}
         className={embedded ? 'h-full' : `fixed bottom-16 right-3 z-30 w-[min(92vw,360px)] md:bottom-8 sm:right-4 ${isExpanded ? '' : 'invisible pointer-events-none'}`}
       >
-        <div className={`flex flex-col overflow-hidden rounded border border-terminal-border bg-terminal-panel ${embedded ? 'h-full' : 'shadow-2xl'}`}>
-        <header className={embedded ? 'news-card-header' : 'flex items-center justify-between gap-2 border-b border-terminal-border px-3 py-2'}>
+        <div className={`instrument-card flex flex-col overflow-hidden rounded border border-terminal-border bg-terminal-panel ${embedded ? 'h-full' : 'floating-player-frame shadow-2xl'}`}>
+        <header className={embedded ? 'news-card-header' : 'instrument-section flex items-center justify-between gap-2 border-b border-terminal-border px-3 py-2'}>
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-[11px] font-bold tracking-[0.18em] text-terminal-accent">
               <span className="h-1.5 w-1.5 rounded-full bg-terminal-negative animate-pulse" />

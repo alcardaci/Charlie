@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { WorkspaceHeader } from '../components/WorkspaceHeader';
 import { fetchQuotes } from '../api/finance';
 import { useTerminalStore } from '../store/useTerminalStore';
 import { fmt, changeColor } from '../utils/formatters';
@@ -85,25 +86,20 @@ export function ETFPanel() {
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2 panel-border-b bg-terminal-panel flex-shrink-0">
-        <div>
-          <span className="text-terminal-accent font-bold text-sm tracking-wider">ETF MONITOR</span>
-          <span className="text-terminal-faint text-xs ml-3">Funds and commodity notes</span>
-        </div>
+      <WorkspaceHeader title="ETF MONITOR">
         <button type="button" onClick={() => void refetch()} disabled={isFetching} className="text-terminal-muted text-xs hover:text-terminal-text disabled:opacity-50">{isFetching ? 'Refreshing…' : 'Refresh'}</button>
-      </div>
+      </WorkspaceHeader>
 
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto p-3 space-y-4">
         <div className="text-xs text-terminal-faint">{quotes.length}/{ALL_SYMBOLS.length} quotes available · prices in USD · regular-session change versus previous close. Public quotes may be delayed. {dataUpdatedAt ? `Checked ${new Date(dataUpdatedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}.` : ''}</div>
-        {isError && <div role="status" className="rounded border border-terminal-border p-3 text-xs text-terminal-muted">{quotes.length ? 'Refresh failed; last received quotes remain visible.' : 'ETF quotes are unavailable right now. Use Refresh to try again.'}</div>}
+        {isError && <div role="status" className="instrument-section rounded border border-terminal-border p-3 text-xs text-terminal-muted">{quotes.length ? 'Refresh failed; last received quotes remain visible.' : 'ETF quotes are unavailable right now. Use Refresh to try again.'}</div>}
         {ETF_GROUPS.map((group) => (
           <div key={group.label}>
             {/* Group header */}
             <div className="flex items-center gap-2 mb-1.5">
               <span className="text-terminal-accent text-xs font-bold tracking-wider">{group.label}</span>
-              <div className="flex-1 h-px bg-terminal-border/50" />
+              <div className="section-rule-line flex-1 h-px bg-terminal-border/50" />
             </div>
 
             {/* ETF rows */}
@@ -115,7 +111,7 @@ export function ETFPanel() {
                   <button
                     key={symbol}
                     onClick={() => setActivePanel('equity', symbol)}
-                    className="flex items-center justify-between px-3 py-2 bg-terminal-elevated border border-terminal-border rounded hover:border-terminal-accent/40 hover:bg-terminal-hover transition-colors text-left"
+                    className="instrument-card flex items-center justify-between px-3 py-2 bg-terminal-elevated border border-terminal-border rounded hover:border-terminal-accent/40 hover:bg-terminal-hover transition-colors text-left"
                   >
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">

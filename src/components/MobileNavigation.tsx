@@ -66,10 +66,7 @@ export function MobileNavigation({ onOpenWatchlist }: MobileNavigationProps) {
           />
           <div className="relative z-10 w-full rounded-t-2xl border border-terminal-border bg-terminal-panel p-4 shadow-2xl">
             <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <div className="text-terminal-accent text-xs font-bold tracking-[0.18em]">WORKSPACES</div>
-                <div className="mt-1 text-xs text-terminal-faint">Jump to any monitor from mobile.</div>
-              </div>
+              <h2 className="workspace-title">WORKSPACES</h2>
               <button
                 onClick={() => setShowMore(false)}
                 className="rounded border border-terminal-border p-2 text-terminal-faint hover:border-terminal-accent/40 hover:text-terminal-accent"

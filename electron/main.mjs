@@ -153,7 +153,7 @@ async function createMainWindow() {
     minWidth: 1180,
     minHeight: 760,
     title: 'Charlie',
-    backgroundColor: '#0a1017',
+    backgroundColor: '#000000',
     ...(isMac ? { titleBarStyle: 'hiddenInset' } : {}),
     autoHideMenuBar: true,
     webPreferences: {

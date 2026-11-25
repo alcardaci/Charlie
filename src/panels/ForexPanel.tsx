@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { ArrowRightLeft, Plus, RefreshCw, X } from 'lucide-react';
 import { fetchForexPairs } from '../api/finance';
+import { WorkspaceHeader } from '../components/WorkspaceHeader';
 import { useTerminalStore } from '../store/useTerminalStore';
 import { fmt, changeColor } from '../utils/formatters';
 import { parseCurrencyAmount } from '../utils/marketPanelDisplay';
@@ -118,34 +119,26 @@ export function ForexPanel() {
     setConvertQuote(convertBase);
   };
 
-  return (
-    <div className="h-full overflow-y-auto p-4 space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h1 className="text-terminal-accent font-bold text-sm tracking-wider">FOREX — CUSTOM CURRENCY MONITOR</h1>
-          <p className="text-terminal-faint text-xs mt-1 leading-relaxed">
-            Choose the currency pairs you want to track and convert any amount between supported currencies.
-          </p>
-        </div>
-
-        <button
-          onClick={() => {
-            void refetch();
-          }}
-          disabled={isFetching}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-terminal-border text-terminal-muted hover:text-terminal-accent hover:border-terminal-accent/40 hover:bg-terminal-hover transition-colors text-xs"
-        >
-          <RefreshCw size={11} className={isFetching ? 'animate-spin' : ''} />
-          REFRESH
-        </button>
-      </div>
-
-      {isError && <div role="status" className="rounded border border-terminal-border bg-terminal-panel p-3 text-xs text-terminal-muted">{quotes.length ? 'Rate refresh failed. Last received rates remain visible.' : 'Currency data is unavailable right now. Use Refresh to try again.'}</div>}
+  return <>
+    <WorkspaceHeader title="FOREX">
+      <button
+        onClick={() => {
+          void refetch();
+        }}
+        disabled={isFetching}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-terminal-border text-terminal-muted hover:text-terminal-accent hover:border-terminal-accent/40 hover:bg-terminal-hover transition-colors text-xs"
+      >
+        <RefreshCw size={11} className={isFetching ? 'animate-spin' : ''} />
+        REFRESH
+      </button>
+    </WorkspaceHeader>
+    <div className="min-h-0 flex-1 overflow-y-auto p-4 space-y-4">
+      {isError && <div role="status" className="instrument-section rounded border border-terminal-border bg-terminal-panel p-3 text-xs text-terminal-muted">{quotes.length ? 'Rate refresh failed. Last received rates remain visible.' : 'Currency data is unavailable right now. Use Refresh to try again.'}</div>}
       <div className="text-xs text-terminal-faint">{queryPairs.filter((pair) => quoteMap.has(pairKey(pair.base, pair.quote))).length}/{queryPairs.length} requested rates available · indicative public quotes, not transaction rates. {dataUpdatedAt ? `Checked ${new Date(dataUpdatedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}.` : ''}</div>
-      <div className="grid grid-cols-1 xl:grid-cols-[1.15fr_0.95fr] gap-4">
-        <div className="bg-terminal-panel border border-terminal-border rounded p-4 space-y-4">
+      <div className="workspace-section grid grid-cols-1 xl:grid-cols-[1.15fr_0.95fr] gap-4">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-4 space-y-4">
           <div>
-            <div className="text-terminal-muted text-xs font-bold tracking-wider mb-2">TRACKED PAIRS</div>
+            <div className="instrument-heading text-terminal-muted text-xs font-bold tracking-wider mb-2">TRACKED PAIRS</div>
             <div className="flex flex-wrap gap-2">
               {forexPairs.map((pair) => (
                 <div
@@ -182,7 +175,7 @@ export function ForexPanel() {
 
           <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-3 items-end">
             <div>
-              <label className="text-terminal-muted text-xs font-bold tracking-wider block mb-2">BASE</label>
+              <label className="instrument-heading text-terminal-muted text-xs font-bold tracking-wider block mb-2">BASE</label>
               <select
                 value={newBase}
                 onChange={(event) => setNewBase(event.target.value)}
@@ -197,7 +190,7 @@ export function ForexPanel() {
             </div>
 
             <div>
-              <label className="text-terminal-muted text-xs font-bold tracking-wider block mb-2">QUOTE</label>
+              <label className="instrument-heading text-terminal-muted text-xs font-bold tracking-wider block mb-2">QUOTE</label>
               <select
                 value={newQuote}
                 onChange={(event) => setNewQuote(event.target.value)}
@@ -234,14 +227,14 @@ export function ForexPanel() {
           </div>
         </div>
 
-        <div className="bg-terminal-panel border border-terminal-border rounded p-4 space-y-4">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-4 space-y-4">
           <div className="flex items-center gap-2">
             <ArrowRightLeft size={13} className="text-terminal-accent" />
-            <div className="text-terminal-muted text-xs font-bold tracking-wider">CURRENCY CONVERTER</div>
+            <div className="instrument-heading text-terminal-muted text-xs font-bold tracking-wider">CURRENCY CONVERTER</div>
           </div>
 
           <div>
-            <label className="text-terminal-muted text-xs font-bold tracking-wider block mb-2">AMOUNT</label>
+            <label className="instrument-heading text-terminal-muted text-xs font-bold tracking-wider block mb-2">AMOUNT</label>
             <input
               value={amountInput}
               aria-label="Amount to convert"
@@ -255,7 +248,7 @@ export function ForexPanel() {
 
           <div className="grid grid-cols-[1fr_auto_1fr] gap-3 items-end">
             <div>
-              <label className="text-terminal-muted text-xs font-bold tracking-wider block mb-2">FROM</label>
+              <label className="instrument-heading text-terminal-muted text-xs font-bold tracking-wider block mb-2">FROM</label>
               <select
                 value={convertBase}
                 onChange={(event) => setConvertBase(event.target.value)}
@@ -278,7 +271,7 @@ export function ForexPanel() {
             </button>
 
             <div>
-              <label className="text-terminal-muted text-xs font-bold tracking-wider block mb-2">TO</label>
+              <label className="instrument-heading text-terminal-muted text-xs font-bold tracking-wider block mb-2">TO</label>
               <select
                 value={convertQuote}
                 onChange={(event) => setConvertQuote(event.target.value)}
@@ -293,7 +286,7 @@ export function ForexPanel() {
             </div>
           </div>
 
-          <div className="rounded border border-terminal-border bg-terminal-elevated/60 p-4">
+          <div className="instrument-section rounded border border-terminal-border bg-terminal-elevated/60 p-4">
             <div className="text-terminal-faint text-xs">Latest available indicative rate</div>
             <div className="mt-1 text-terminal-text text-lg font-bold tabular-nums">
               {convertBase === convertQuote
@@ -318,13 +311,13 @@ export function ForexPanel() {
       </div>
 
       {isLoading ? (
-        <div className="space-y-1">
+        <div className="workspace-section space-y-1">
           {Array.from({ length: 12 }).map((_, index) => (
             <div key={index} className="shimmer h-10 rounded" />
           ))}
         </div>
       ) : (
-        <div className="bg-terminal-panel border border-terminal-border rounded overflow-x-auto">
+        <div className="workspace-section instrument-card bg-terminal-panel border border-terminal-border rounded overflow-x-auto">
           <table className="data-table w-full">
             <thead>
               <tr>
@@ -378,10 +371,10 @@ export function ForexPanel() {
                     <td className="tabular-nums text-terminal-muted">
                       {pair ? fmt.price(pair.regularMarketDayLow ?? null, decimals) : '—'}
                     </td>
-                    <td className="tabular-nums text-terminal-positive">
+                    <td className="tabular-nums text-terminal-muted">
                       {pair ? fmt.price(pair.fiftyTwoWeekHigh ?? null, decimals) : '—'}
                     </td>
-                    <td className="tabular-nums text-terminal-negative">
+                    <td className="tabular-nums text-terminal-muted">
                       {pair ? fmt.price(pair.fiftyTwoWeekLow ?? null, decimals) : '—'}
                     </td>
                   </tr>
@@ -392,5 +385,5 @@ export function ForexPanel() {
         </div>
       )}
     </div>
-  );
+  </>;
 }

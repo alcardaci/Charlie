@@ -15,6 +15,7 @@ export default {
           hover: 'rgb(var(--terminal-hover-rgb) / <alpha-value>)',
           border: 'rgb(var(--terminal-border-rgb) / <alpha-value>)',
           accent: 'rgb(var(--terminal-accent-rgb) / <alpha-value>)',
+          'on-accent': 'rgb(var(--terminal-on-accent-rgb) / <alpha-value>)',
           'accent-dim': 'rgb(var(--terminal-accent-rgb) / 0.15)',
           positive: 'rgb(var(--terminal-positive-rgb) / <alpha-value>)',
           'positive-dim': 'rgb(var(--terminal-positive-rgb) / 0.12)',

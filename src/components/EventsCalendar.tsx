@@ -5,10 +5,10 @@ import { fetchMacroReleaseCalendar } from '../api/finance';
 import { CalendarEvent } from '../types';
 
 const CATEGORY_COLORS: Record<CalendarEvent['category'], string> = {
-  economic: 'text-blue-400',
-  earnings: 'text-green-400',
-  policy: 'text-yellow-400',
-  geopolitical: 'text-red-400',
+  economic: 'text-terminal-blue',
+  earnings: 'text-terminal-positive',
+  policy: 'text-terminal-accent',
+  geopolitical: 'text-terminal-negative',
 };
 
 type CategoryFilter = 'all' | CalendarEvent['category'];
@@ -54,8 +54,8 @@ export function EventsCalendar() {
   const monthName = month.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 
   return (
-    <div className="flex flex-col h-full bg-terminal-panel">
-      <div className="flex items-center justify-between px-3 py-1.5 panel-border-b flex-shrink-0">
+    <div className="instrument-section flex flex-col h-full bg-terminal-panel">
+      <div className="instrument-section flex items-center justify-between px-3 py-1.5 panel-border-b flex-shrink-0">
         <span className="text-terminal-accent text-xs font-bold tracking-wider">EVENTS</span>
         <div className="flex items-center gap-1">
           <button type="button" aria-label="Previous month" onClick={() => setMonth((value) => new Date(value.getFullYear(), value.getMonth() - 1, 1))} className="p-0.5 text-terminal-faint hover:text-terminal-muted">
@@ -84,10 +84,10 @@ export function EventsCalendar() {
 
       <div className="px-2 py-1.5 border-b border-terminal-border/40 flex-shrink-0">
         <div className="grid grid-cols-2 gap-1.5 text-xs">
-          <LegendDot color="bg-blue-400" label="Economic" />
-          <LegendDot color="bg-green-400" label="Earnings" />
-          <LegendDot color="bg-yellow-400" label="Policy" />
-          <LegendDot color="bg-red-400" label="Geopolitical" />
+          <LegendDot color="bg-terminal-blue" label="Economic" />
+          <LegendDot color="bg-terminal-positive" label="Earnings" />
+          <LegendDot color="bg-terminal-accent" label="Policy" />
+          <LegendDot color="bg-terminal-negative" label="Geopolitical" />
         </div>
       </div>
 

@@ -577,24 +577,22 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
             className={
               companionExpanded
                 ? 'fixed inset-0 z-[60] flex w-full flex-col bg-terminal-bg'
-                : 'fixed inset-y-0 right-0 z-50 flex w-full max-w-[28rem] flex-col border-l border-terminal-border bg-terminal-panel shadow-2xl'
+                : 'instrument-section fixed inset-y-0 right-0 z-50 flex w-full max-w-[28rem] flex-col border-l border-terminal-border bg-terminal-panel shadow-2xl'
             }
             aria-label={companionExpanded ? 'Charlie Companion full page' : 'Charlie Companion'}
           >
             <div
               className={
                 companionExpanded
-                  ? 'mx-auto flex h-full min-h-0 w-full max-w-6xl flex-col border-x border-terminal-border bg-terminal-panel shadow-2xl'
+                  ? 'instrument-section mx-auto flex h-full min-h-0 w-full max-w-6xl flex-col border-x border-terminal-border bg-terminal-panel shadow-2xl'
                   : 'contents'
               }
             >
-            <div className="flex items-start justify-between gap-3 border-b border-terminal-border px-4 py-4">
+            <div className="instrument-section flex items-start justify-between gap-3 border-b border-terminal-border px-4 py-4">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <Sparkles size={14} className="text-terminal-accent" />
-                  <span className="text-sm font-bold tracking-wider text-terminal-accent">
-                    {historyOpen ? 'CHAT HISTORY' : 'CHARLIE COMPANION'}
-                  </span>
+                  <h2 className="workspace-title">{historyOpen ? 'CHAT HISTORY' : 'CHARLIE COMPANION'}</h2>
                 </div>
                 {!historyOpen && (
                   <div className="mt-2 flex flex-wrap gap-1.5">
@@ -621,7 +619,7 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
                 >
                   {historyOpen ? <ArrowLeft size={14} /> : <History size={14} />}
                   {!historyOpen && companionConversations.length > 0 && (
-                    <span className="absolute -right-1.5 -top-1.5 min-w-4 rounded-full bg-terminal-accent px-1 text-center text-[9px] font-bold leading-4 text-terminal-bg">
+                    <span className="absolute -right-1.5 -top-1.5 min-w-4 rounded-full bg-terminal-accent px-1 text-center text-[9px] font-bold leading-4 text-terminal-on-accent">
                       {companionConversations.length}
                     </span>
                   )}
@@ -663,7 +661,7 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
                   <div className="text-[10px] text-terminal-faint">Stored locally</div>
                 </div>
                 {companionConversations.length === 0 ? (
-                  <div className="mt-4 rounded border border-dashed border-terminal-border px-3 py-10 text-center text-[11px] text-terminal-faint">
+                  <div className="instrument-section mt-4 rounded border border-dashed border-terminal-border px-3 py-10 text-center text-[11px] text-terminal-faint">
                     Conversations appear here after your first message.
                   </div>
                 ) : (
@@ -674,7 +672,7 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
                         className={`flex items-center gap-3 rounded border p-3 ${
                           conversation.id === activeCompanionConversationId
                             ? 'border-terminal-accent/40 bg-terminal-accent/10'
-                            : 'border-terminal-border bg-terminal-elevated'
+                            : 'instrument-section border-terminal-border bg-terminal-elevated'
                         }`}
                       >
                         <button
@@ -704,7 +702,7 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
             ) : (
               <>
 
-            <div className="border-b border-terminal-border px-4 py-3">
+            <div className="instrument-section border-b border-terminal-border px-4 py-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="text-[11px] font-bold tracking-[0.18em] text-terminal-faint">WORKSPACE CONTEXT</div>
                 <div className="rounded bg-terminal-accent/10 px-2 py-1 text-[10px] font-bold tracking-[0.12em] text-terminal-accent">
@@ -717,7 +715,7 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
             </div>
 
             {debugMode && (
-              <div className="border-b border-terminal-border px-4 py-3">
+              <div className="instrument-section border-b border-terminal-border px-4 py-3">
                 <div className="text-[11px] font-bold tracking-[0.18em] text-terminal-faint">DEBUG · COMPANION SYSTEM PROMPT</div>
                 <pre className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap rounded border border-terminal-border bg-terminal-elevated px-3 py-2 text-[11px] leading-relaxed text-terminal-muted">
                   {DEFAULT_PANEL_COMPANION_SYSTEM_PROMPT}
@@ -766,12 +764,12 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
                       {(message.model || message.webSearch || message.webSearchForced || message.stopped || (message.panels && message.panels.length > 0)) && (
                         <div className="mt-2 flex flex-wrap gap-1">
                           {message.webSearch && (
-                            <span className="rounded bg-terminal-blue/10 px-1.5 py-0.5 text-[10px] text-terminal-blue">
+                            <span className="rounded bg-terminal-accent/10 px-1.5 py-0.5 text-[10px] text-terminal-accent">
                               Web sources
                             </span>
                           )}
                           {message.webSearchForced && (
-                            <span className="rounded bg-terminal-blue/10 px-1.5 py-0.5 text-[10px] text-terminal-blue">
+                            <span className="rounded bg-terminal-accent/10 px-1.5 py-0.5 text-[10px] text-terminal-accent">
                               Web forced
                             </span>
                           )}
@@ -799,7 +797,7 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
                             void handleSubmit({ content: retryPrompt, forceWebSearch: true });
                           }}
                           disabled={isLoading}
-                          className="mt-2 inline-flex items-center gap-1 rounded border border-terminal-blue/30 px-2 py-1 text-[10px] text-terminal-blue transition-colors hover:bg-terminal-blue/10 disabled:cursor-not-allowed disabled:opacity-50"
+                          className="mt-2 inline-flex items-center gap-1 rounded border border-terminal-accent/30 px-2 py-1 text-[10px] text-terminal-accent transition-colors hover:bg-terminal-accent/10 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           <Globe2 size={10} />
                           Retry with web
@@ -811,7 +809,7 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
               })}
 
               {!hasUserMessages && !isLoading && (
-                <div className="rounded-2xl border border-terminal-border bg-terminal-bg/35 p-3">
+                <div className="instrument-section rounded-2xl border border-terminal-border bg-terminal-bg/35 p-3">
                   <div className="text-[10px] font-bold tracking-[0.18em] text-terminal-faint">SUGGESTED PROMPTS</div>
                   <div className="mt-2 grid gap-1.5">
                     {suggestions.map((suggestion) => (
@@ -909,8 +907,8 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
                       title={forceWebSearch ? 'Web search is required for the next request' : 'Charlie decides whether to search the web'}
                       className={`inline-flex flex-shrink-0 items-center gap-1.5 rounded border px-2 py-1 text-[10px] font-bold tracking-[0.1em] transition-colors ${
                         forceWebSearch
-                          ? 'border-terminal-blue/50 bg-terminal-blue/15 text-terminal-blue'
-                          : 'border-terminal-border text-terminal-faint hover:border-terminal-blue/35 hover:text-terminal-blue'
+                          ? 'border-terminal-accent/50 bg-terminal-accent/15 text-terminal-accent'
+                          : 'border-terminal-border text-terminal-faint hover:border-terminal-accent/35 hover:text-terminal-accent'
                       }`}
                     >
                       <Globe2 size={11} />

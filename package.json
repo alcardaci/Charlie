@@ -27,7 +27,8 @@
     "check:market-display": "node scripts/check-market-display.mjs",
     "check:public-data": "node scripts/check-public-data.mjs",
     "check:news-coverage": "node scripts/check-news-coverage.mjs",
-    "check:startup": "node scripts/check-startup.mjs"
+    "check:startup": "node scripts/check-startup.mjs",
+    "check:workspace-headings": "electron scripts/check-workspace-headings.cjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.17.9",
