@@ -18,6 +18,7 @@ import { changeColor, fmt } from '../utils/formatters';
 import { getThemePalette, useTheme } from '../utils/theme';
 import type { ChartInterval, ChartPoint, ChartRange, ChartStyle } from '../types';
 import type { MultiAssetView } from '../store/useTerminalStore';
+import { prepareChartPoints } from '../utils/chartData';
 
 const TIMEFRAMES: { label: string; range: ChartRange; interval: ChartInterval }[] = [
   { label: '1D', range: '1d', interval: '5m' },
@@ -43,8 +44,8 @@ const MA_KEYS: Record<string, 'sma20' | 'sma50' | 'sma200'> = { MA20: 'sma20', M
 
 type PriceSeries = ISeriesApi<'Candlestick'> | ISeriesApi<'Bar'> | ISeriesApi<'Line'> | ISeriesApi<'Area'>;
 
-function chartTime(point: ChartPoint): string {
-  return Math.floor(point.timestamp / 1000) as unknown as string;
+function chartTime(point: ChartPoint): Time {
+  return Math.floor(point.timestamp / 1000) as Time;
 }
 
 function chartTimeToDate(time: Time): Date | null {
@@ -61,6 +62,7 @@ function formatChartLocalTime(time: Time, intraday: boolean, showYear: boolean):
   const date = chartTimeToDate(time);
   if (!date) return '';
   return new Intl.DateTimeFormat(undefined, {
+    ...(!intraday ? { timeZone: 'UTC' } : {}),
     month: 'short',
     day: 'numeric',
     ...(showYear ? { year: 'numeric' } : {}),
@@ -177,45 +179,6 @@ function setPriceSeriesData(data: ChartPoint[], chartStyle: ChartStyle, series: 
   );
 }
 
-function updateLivePriceSeries(chartStyle: ChartStyle, series: PriceSeries | null, lastPoint: ChartPoint, livePrice: number) {
-  if (!series) return;
-
-  if (chartStyle === 'candlestick') {
-    (series as ISeriesApi<'Candlestick'>).update({
-      time: chartTime(lastPoint),
-      open: lastPoint.open,
-      high: Math.max(lastPoint.high, livePrice),
-      low: Math.min(lastPoint.low, livePrice),
-      close: livePrice,
-    });
-    return;
-  }
-
-  if (chartStyle === 'ohlc') {
-    (series as ISeriesApi<'Bar'>).update({
-      time: chartTime(lastPoint),
-      open: lastPoint.open,
-      high: Math.max(lastPoint.high, livePrice),
-      low: Math.min(lastPoint.low, livePrice),
-      close: livePrice,
-    });
-    return;
-  }
-
-  if (chartStyle === 'line') {
-    (series as ISeriesApi<'Line'>).update({
-      time: chartTime(lastPoint),
-      value: livePrice,
-    });
-    return;
-  }
-
-  (series as ISeriesApi<'Area'>).update({
-    time: chartTime(lastPoint),
-    value: livePrice,
-  });
-}
-
 function applyData(
   data: ChartPoint[],
   chartStyle: ChartStyle,
@@ -225,7 +188,13 @@ function applyData(
   chart: IChartApi | null,
   palette: ReturnType<typeof getThemePalette>
 ) {
-  if (!data.length || !priceSeries || !volumeSeries) return;
+  if (!priceSeries || !volumeSeries) return;
+  if (!data.length) {
+    priceSeries.setData([]);
+    volumeSeries.setData([]);
+    maMap.forEach((series) => series.setData([]));
+    return;
+  }
 
   setPriceSeriesData(data, chartStyle, priceSeries);
 
@@ -309,7 +278,7 @@ export function ChartPanel({ symbol, embedded = false, onOpenParallel, onSwitchV
     staleTime: 10000,
   });
 
-  const { data: chartResult, isLoading } = useQuery({
+  const { data: chartResult, isLoading, isFetching, isError, refetch } = useQuery({
     queryKey: ['chart', selectedSymbol, tf?.range ?? 'custom', chartInterval, customAppliedRange?.start ?? null, customAppliedRange?.end ?? null],
     queryFn: () => fetchChartWindow(
       selectedSymbol,
@@ -326,9 +295,10 @@ export function ChartPanel({ symbol, embedded = false, onOpenParallel, onSwitchV
     ),
     refetchInterval: tf?.range === '1d' ? 30000 : tf?.range === '5d' ? 60000 : 300000,
     staleTime: tf?.range === '1d' ? 15000 : 60000,
-    gcTime: 600000,
+    gcTime: 1800000,
+    retry: 1,
   });
-  const chartData = chartResult?.points ?? [];
+  const chartData = useMemo(() => prepareChartPoints(chartResult?.points ?? []), [chartResult?.points]);
 
   chartDataRef.current = chartData;
 
@@ -404,7 +374,7 @@ export function ChartPanel({ symbol, embedded = false, onOpenParallel, onSwitchV
         secondsVisible: false,
         tickMarkFormatter: (time: Time, _type: TickMarkType, _locale: string) => formatChartLocalTime(time, intradayTimeScale, showYearInAxis),
       },
-      rightPriceScale: { borderColor: themePalette.border, scaleMargins: { top: 0.1, bottom: 0.25 } },
+      rightPriceScale: { autoScale: true, borderColor: themePalette.border, scaleMargins: { top: 0.1, bottom: 0.25 } },
       handleScroll: true,
       handleScale: true,
     });
@@ -457,34 +427,23 @@ export function ChartPanel({ symbol, embedded = false, onOpenParallel, onSwitchV
     applyData(chartData, chartStyle, priceSeriesRef.current, volumeSeriesRef.current, maSeriesRef.current, chartInstanceRef.current, themePalette);
   }, [chartData, chartStyle, mode, accent]);
 
-  useEffect(() => {
-    if (!quote || !chartDataRef.current.length || !priceSeriesRef.current) return;
-    const lastPoint = chartDataRef.current[chartDataRef.current.length - 1];
-    updateLivePriceSeries(chartStyle, priceSeriesRef.current, lastPoint, quote.regularMarketPrice);
-  }, [chartStyle, quote]);
-
   const timeframePriceMove = useMemo(() => {
-    if (chartData.length < 2) return null;
-
+    if (!chartData.length) return null;
     const firstPoint = chartData[0];
     const lastPoint = chartData[chartData.length - 1];
-    const today = toInputDate(new Date());
-    const actualEnd = chartResult?.actualEnd ?? customAppliedRange?.end ?? null;
-    const shouldUseLivePrice = Boolean(quote && (!customAppliedRange || !actualEnd || actualEnd >= today));
-    const currentPrice = shouldUseLivePrice ? quote!.regularMarketPrice : lastPoint.close;
-    const change = currentPrice - firstPoint.close;
-    const changePct = firstPoint.close ? (change / firstPoint.close) * 100 : null;
-
+    // A separately fetched current quote must never rewrite a past candle or
+    // change the return of a custom historical window.
+    const change = chartData.length > 1 ? lastPoint.close - firstPoint.close : null;
     return {
-      currentPrice,
+      currentPrice: lastPoint.close,
       change,
-      changePct,
+      changePct: change != null && firstPoint.close !== 0 ? change / firstPoint.close * 100 : null,
     };
-  }, [chartData, chartResult?.actualEnd, customAppliedRange, quote]);
+  }, [chartData]);
 
   const displayedPrice = timeframePriceMove?.currentPrice ?? quote?.regularMarketPrice ?? null;
-  const displayedChange = timeframePriceMove?.change ?? quote?.regularMarketChange ?? null;
-  const displayedChangePct = timeframePriceMove?.changePct ?? quote?.regularMarketChangePercent ?? null;
+  const displayedChange = timeframePriceMove ? timeframePriceMove.change : quote?.regularMarketChange ?? null;
+  const displayedChangePct = timeframePriceMove ? timeframePriceMove.changePct : quote?.regularMarketChangePercent ?? null;
   const chgColor = changeColor(displayedChangePct);
 
   return (
@@ -584,6 +543,7 @@ export function ChartPanel({ symbol, embedded = false, onOpenParallel, onSwitchV
           <button
             onClick={() => (inWatchlist ? removeFromWatchlist(selectedSymbol) : addToWatchlist(selectedSymbol))}
             className={`ml-1 p-1 rounded hover:bg-terminal-hover ${inWatchlist ? 'text-terminal-accent' : 'text-terminal-faint'}`}
+            aria-label={`${inWatchlist ? 'Remove from' : 'Add to'} watchlist`}
           >
             {inWatchlist ? <Star size={13} fill="currentColor" /> : <StarOff size={13} />}
           </button>
@@ -623,8 +583,8 @@ export function ChartPanel({ symbol, embedded = false, onOpenParallel, onSwitchV
             <span className="text-terminal-faint">{indicator}</span>
           </div>
         ))}
-        {isLoading && (
-          <span className="text-terminal-faint text-xs animate-pulse ml-auto">Loading...</span>
+        {isFetching && (
+          <span className="text-terminal-faint text-xs animate-pulse ml-auto" role="status">{chartData.length ? 'Refreshing…' : 'Loading…'}</span>
         )}
       </div>
 
@@ -687,11 +647,19 @@ export function ChartPanel({ symbol, embedded = false, onOpenParallel, onSwitchV
         </div>
       )}
 
+      {isError && chartData.length > 0 && <div className="panel-border-b px-3 py-2 text-xs text-terminal-muted" role="status">Refresh failed. Showing the last available observations.</div>}
+      {chartData.length > 0 && <div className="panel-border-b px-3 py-1 text-[11px] text-terminal-faint">Price change for the selected window; excludes dividends. Last observation: {formatChartLocalTime(chartTime(chartData[chartData.length - 1]), chartInterval === '5m' || chartInterval === '15m', true)}.</div>}
       <div className="flex-1 min-h-0 relative">
         <div ref={chartRef} className="w-full h-full chart-container" />
         {isLoading && !chartData.length && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none" role="status">
             <div className="text-terminal-accent text-sm animate-pulse">LOADING CHART DATA...</div>
+          </div>
+        )}
+        {!isLoading && !chartData.length && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-4 text-center bg-terminal-bg">
+            <div className="text-terminal-muted text-sm" role="status">{isError ? 'Price history could not be loaded.' : 'No price history is available for this symbol and date range.'}</div>
+            <button onClick={() => void refetch()} disabled={isFetching} className="rounded border border-terminal-border px-3 py-1.5 text-xs text-terminal-accent hover:bg-terminal-hover disabled:opacity-50">RETRY</button>
           </div>
         )}
       </div>

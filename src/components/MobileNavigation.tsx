@@ -8,7 +8,6 @@ type MobileNavigationProps = {
 };
 
 const MORE_PANELS: Array<{ panel: PanelType; label: string; icon: typeof Globe2 }> = [
-  { panel: 'opportunities', label: 'Opportunities', icon: Briefcase },
   { panel: 'predictions', label: 'Predictions', icon: BarChart2 },
   { panel: 'macro', label: 'Macro+Yield', icon: BarChart2 },
   { panel: 'heatmap', label: 'Heatmap', icon: BarChart2 },

@@ -1,3 +1,4 @@
+import { quoteCurrencyUnit } from '../utils/portfolioValuation';
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -54,17 +55,17 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
     setPeriodType('annual');
   }, [selectedSymbol]);
 
-  const { data: workbench, isLoading, error } = useQuery({
+  const { data: workbench, isLoading, error, refetch } = useQuery({
     queryKey: ['equity-workbench', selectedSymbol],
     queryFn: () => fetchCompanyWorkbench(selectedSymbol),
-    refetchInterval: 30000,
-    staleTime: 15000,
+    refetchInterval: 120000,
+    staleTime: 60000,
   });
 
-  const { data: financials, isLoading: loadingFinancials } = useQuery({
+  const { data: financials, isLoading: loadingFinancials, error: financialsError } = useQuery({
     queryKey: ['equity-financials', selectedSymbol, periodType],
     queryFn: () => fetchCompanyFinancials(selectedSymbol, periodType),
-    enabled: workbench?.instrumentKind !== 'fund' && tab === 'financials',
+    enabled: Boolean(workbench) && workbench?.instrumentKind !== 'fund' && tab === 'financials',
     staleTime: 10 * 60 * 1000,
     gcTime: 30 * 60 * 1000,
   });
@@ -96,7 +97,7 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
   }, [tab, workbench]);
 
   if (isLoading) return <LoadingState symbol={selectedSymbol} />;
-  if (error || !workbench) return <ErrorState symbol={selectedSymbol} />;
+  if (!workbench) return <ErrorState symbol={selectedSymbol} onRetry={() => { void refetch(); }} />;
 
   const isFund = workbench.instrumentKind === 'fund';
   const tabs = isFund ? FUND_TABS : EQUITY_TABS;
@@ -109,20 +110,22 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
       ? 'PRE-MARKET'
       : quote.marketState === 'POST'
         ? 'AFTER-HOURS'
-        : 'MARKET CLOSED';
+        : quote.marketState === 'CLOSED' ? 'MARKET CLOSED' : 'SESSION UNAVAILABLE';
   const descriptorLine = isFund
     ? [workbench.fund?.family, workbench.fund?.categoryName, quote.exchange].filter(Boolean).join(' | ')
     : [workbench.profile.sector, workbench.profile.industry, workbench.profile.country].filter(Boolean).join(' | ');
 
-  const fiftyTwoRange = quote.fiftyTwoWeekHigh && quote.fiftyTwoWeekLow
+  const fiftyTwoRange = quote.fiftyTwoWeekHigh > quote.fiftyTwoWeekLow
     ? ((quote.regularMarketPrice - quote.fiftyTwoWeekLow) / (quote.fiftyTwoWeekHigh - quote.fiftyTwoWeekLow)) * 100
     : null;
-  const dayRange = quote.regularMarketDayHigh && quote.regularMarketDayLow
+  const dayRange = quote.regularMarketDayHigh > quote.regularMarketDayLow
     ? ((quote.regularMarketPrice - quote.regularMarketDayLow) / (quote.regularMarketDayHigh - quote.regularMarketDayLow)) * 100
     : null;
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
+      {error && <div role="status" className="px-4 py-2 text-xs text-terminal-negative">Refresh failed. Showing the last available research data. <button className="underline" onClick={() => { void refetch(); }}>Retry</button></div>}
+      {financialsError && tab === 'financials' && <div role="alert" className="px-4 py-2 text-xs text-terminal-negative">Financial statements could not be refreshed. Available SEC filings remain separate from these estimates.</div>}
       <div className="bg-terminal-panel panel-border-b px-3 sm:px-4 py-3 flex-shrink-0">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between lg:gap-4">
           <div className="min-w-0">
@@ -301,7 +304,7 @@ function OverviewTab({
   return (
     <div className="p-3 sm:p-4 space-y-4">
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-        <MetricRow label="Market Cap" value={fmt.marketCap(quote.marketCap)} />
+        <MetricRow label="Market Cap" value={quote.marketCap == null ? '—' : quote.currency ? formatCompactCurrency(quote.marketCap, quoteCurrencyUnit(quote.currency).currency) : fmt.number(quote.marketCap, 0)} />
         <MetricRow label="P/E Ratio (TTM)" value={fmt.number(quote.trailingPE)} />
         <MetricRow label="P/E Ratio (Fwd)" value={fmt.number(quote.forwardPE)} />
         <MetricRow label="Revenue Growth" value={formatRatio(analysis.revenueGrowth)} />
@@ -1401,13 +1404,14 @@ function LoadingState({ symbol }: { symbol: string }) {
   );
 }
 
-function ErrorState({ symbol }: { symbol: string }) {
+function ErrorState({ symbol, onRetry }: { symbol: string; onRetry: () => void }) {
   return (
     <div className="h-full flex items-center justify-center">
       <div className="text-center">
         <div className="text-terminal-negative text-lg font-bold mb-2">DATA NOT FOUND</div>
         <div className="text-terminal-muted text-sm">Could not load live research data for <span className="text-terminal-accent">{symbol}</span></div>
-        <div className="text-terminal-faint text-xs mt-2">Check the symbol and try again</div>
+        <div className="text-terminal-faint text-xs mt-2">Check the symbol or try the data source again.</div>
+        <button className="mt-3 rounded border border-terminal-border px-3 py-1 text-terminal-accent" onClick={onRetry}>Retry</button>
       </div>
     </div>
   );

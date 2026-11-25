@@ -1,40 +1,52 @@
+const fixedFormats = new Map<number, Intl.NumberFormat>();
+function grouped(value: number, decimals: number): string {
+  let formatter = fixedFormats.get(decimals);
+  if (!formatter) {
+    formatter = new Intl.NumberFormat('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+    fixedFormats.set(decimals, formatter);
+  }
+  return formatter.format(Math.abs(value) < 0.5 * 10 ** -decimals ? 0 : value);
+}
+
 export const fmt = {
   price(price: number | undefined | null, decimals?: number): string {
-    if (price === undefined || price === null || isNaN(price)) return '—';
-    const d = decimals ?? (price < 1 ? 4 : price < 10 ? 3 : 2);
-    return new Intl.NumberFormat('en-US', {
-      minimumFractionDigits: d,
-      maximumFractionDigits: d,
-    }).format(price);
+    if (price === undefined || price === null || !Number.isFinite(price)) return '—';
+    const absolute = Math.abs(price);
+    if (decimals == null && absolute > 0 && absolute < 1e-10) return price.toPrecision(4);
+    const d = decimals ?? (absolute > 0 && absolute < 1 ? Math.min(12, Math.max(4, 3 - Math.floor(Math.log10(absolute)))) : absolute < 10 ? 3 : 2);
+    return grouped(price, d);
+  },
+
+  usdPrice(value: number | null | undefined): string {
+    return value != null && Number.isFinite(value) ? `$${fmt.price(value)}` : '—';
   },
 
   change(change: number | undefined | null, decimals = 2): string {
-    if (change === undefined || change === null || isNaN(change)) return '—';
-    const prefix = change >= 0 ? '+' : '';
-    return `${prefix}${change.toFixed(decimals)}`;
+    if (change === undefined || change === null || !Number.isFinite(change)) return '—';
+    const magnitude = grouped(change, decimals);
+    return magnitude.startsWith('-') ? magnitude : '+' + magnitude;
   },
 
   pct(pct: number | undefined | null): string {
-    if (pct === undefined || pct === null || isNaN(pct)) return '—';
-    const prefix = pct >= 0 ? '+' : '';
-    return `${prefix}${pct.toFixed(2)}%`;
+    if (pct === undefined || pct === null || !Number.isFinite(pct)) return '—';
+    return `${fmt.change(pct, 2)}%`;
   },
 
   volume(vol: number | undefined | null): string {
-    if (!vol) return '—';
+    if (vol == null || !Number.isFinite(vol)) return '—';
     if (vol >= 1e12) return `${(vol / 1e12).toFixed(2)}T`;
     if (vol >= 1e9) return `${(vol / 1e9).toFixed(2)}B`;
     if (vol >= 1e6) return `${(vol / 1e6).toFixed(2)}M`;
     if (vol >= 1e3) return `${(vol / 1e3).toFixed(1)}K`;
-    return vol.toLocaleString();
+    return vol.toLocaleString('en-US');
   },
 
   marketCap(cap: number | undefined | null): string {
-    if (!cap) return '—';
+    if (cap == null || !Number.isFinite(cap)) return '—';
     if (cap >= 1e12) return `$${(cap / 1e12).toFixed(3)}T`;
     if (cap >= 1e9) return `$${(cap / 1e9).toFixed(2)}B`;
     if (cap >= 1e6) return `$${(cap / 1e6).toFixed(2)}M`;
-    return `$${cap.toLocaleString()}`;
+    return `$${cap.toLocaleString('en-US')}`;
   },
 
   timeAgo(timestamp: number): string {
@@ -68,13 +80,13 @@ export const fmt = {
   },
 
   number(n: number | undefined | null, decimals = 2): string {
-    if (n === undefined || n === null || isNaN(n)) return '—';
-    return n.toFixed(decimals);
+    if (n === undefined || n === null || !Number.isFinite(n)) return '—';
+    return grouped(n, decimals);
   },
 
   integer(n: number | undefined | null): string {
-    if (n === undefined || n === null || isNaN(n)) return '—';
-    return n.toLocaleString();
+    if (n === undefined || n === null || !Number.isFinite(n)) return '—';
+    return n.toLocaleString('en-US');
   },
 };
 

@@ -110,6 +110,7 @@ export interface Quote {
   quoteType?: string;
   typeDisp?: string;
   regularMarketPrice: number;
+  regularMarketTime?: string | number;
   regularMarketChange: number;
   regularMarketChangePercent: number;
   regularMarketVolume: number;
@@ -164,6 +165,8 @@ export interface NewsItem {
   link: string;
   publishedAt: number;
   feedSource?: 'yahoo-finance' | 'gdelt';
+  gdeltCollection?: 'DOC' | 'GKG';
+  gdeltCached?: boolean;
   sourceCountry?: string | null;
   sourceCountryCode?: string | null;
   sourceCountryLabel?: string | null;
@@ -448,6 +451,7 @@ export interface SearchResult {
 }
 
 export type SentimentRegime =
+  | 'UNAVAILABLE'
   | 'RISK-ON'
   | 'BULLISH'
   | 'NEUTRAL'
@@ -461,6 +465,7 @@ export interface MarketSentimentPillar {
   signal: 'positive' | 'neutral' | 'negative' | 'unavailable';
   detail: string;
   symbols: string[];
+  quoteTime: number | null;
 }
 
 export interface MarketSentimentSnapshot {
@@ -484,6 +489,14 @@ export interface PredictionForecast {
   noPrice: number | null;
   leadingOutcome: string;
   leadingProbability: number | null;
+  yesChange24hr?: number | null;
+  outcomeGroup?: {
+    count: number;
+    endDate: string | null;
+    outcomes: Array<{ label: string; yesPrice: number; yesChange24hr: number | null }>;
+    volume24hr: number | null;
+    liquidity: number | null;
+  };
   volume24hr: number | null;
   volume: number | null;
   liquidity: number | null;
@@ -495,6 +508,10 @@ export interface PredictionForecastSnapshot {
   updatedAt: string;
   source: string;
   forecasts: PredictionForecast[];
+}
+
+export interface PredictionForecastPage extends PredictionForecastSnapshot {
+  nextCursor: string | null;
 }
 
 export type CalendarCategory = 'economic' | 'earnings' | 'policy' | 'geopolitical';
@@ -1031,6 +1048,7 @@ export interface MacroMetricSnapshot {
   areaScope?: string;
   frequency?: 'daily' | 'monthly' | 'quarterly' | 'annual';
   seriesId?: string;
+  chartType?: 'step';
   series: MacroSeriesPoint[];
 }
 
@@ -1193,6 +1211,7 @@ export interface ChartWindowRequest {
 }
 
 export interface ChartWindowResult {
+  currency?: string;
   points: ChartPoint[];
   requestedStart: string | null;
   requestedEnd: string | null;

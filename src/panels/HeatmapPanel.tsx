@@ -1,10 +1,11 @@
-import type { CSSProperties } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ResponsiveContainer, Treemap } from 'recharts';
 import { fetchQuotes } from '../api/finance';
 import { useTerminalStore } from '../store/useTerminalStore';
 import { fmt } from '../utils/formatters';
 import { getThemePalette, useTheme } from '../utils/theme';
+import { buildHeatmapEntries, heatmapNodeEntry, heatmapQuoteChange, weightedHeatmapChange, type HeatmapEntry, type HeatmapSizeMode } from '../utils/heatmapData';
 
 type SectorGroup = {
   label: string;
@@ -19,17 +20,7 @@ type SectorConfig = {
   groups: SectorGroup[];
 };
 
-type HeatmapEntry = {
-  name: string;
-  symbol: string;
-  shortName: string;
-  value: number;
-  changePct: number;
-  group: string;
-  marketCap: number | null;
-};
-
-type HeatmapTileProps = {
+type HeatmapTileProps = Partial<HeatmapEntry> & {
   x?: number;
   y?: number;
   width?: number;
@@ -170,7 +161,8 @@ const ALL_SYMBOLS = [
 
 const LEGEND_VALUES = [-3, -2, -1, 0, 1, 2, 3];
 
-function getHeatColor(pct: number, palette: ReturnType<typeof getThemePalette>): string {
+function getHeatColor(pct: number | null, palette: ReturnType<typeof getThemePalette>): string {
+  if (pct == null) return palette.elevated;
   const clamped = Math.max(-3, Math.min(3, pct));
 
   if (Math.abs(clamped) < 0.12) {
@@ -190,7 +182,8 @@ function getHeatColor(pct: number, palette: ReturnType<typeof getThemePalette>):
   return `hsl(356, ${saturation}%, ${lightness}%)`;
 }
 
-function getHeatAccentColor(pct: number, palette: ReturnType<typeof getThemePalette>): string {
+function getHeatAccentColor(pct: number | null, palette: ReturnType<typeof getThemePalette>): string {
+  if (pct == null) return palette.muted;
   if (pct > 0.08) return palette.positive;
   if (pct < -0.08) return palette.negative;
   return palette.muted;
@@ -199,7 +192,7 @@ function getHeatAccentColor(pct: number, palette: ReturnType<typeof getThemePale
 function getSectorCardStyle(
   totalValue: number,
   boardTotalValue: number,
-  sectorChange: number,
+  sectorChange: number | null,
   palette: ReturnType<typeof getThemePalette>
 ): CSSProperties & Record<string, string> {
   const share = boardTotalValue > 0 ? totalValue / boardTotalValue : 1 / SECTOR_CONFIG.length;
@@ -219,21 +212,17 @@ function getSectorCardStyle(
   };
 }
 
-function getEntryValue(marketCap: number | undefined | null, price: number | undefined | null): number {
-  if (marketCap && Number.isFinite(marketCap)) return marketCap;
-  if (price && Number.isFinite(price)) return price * 1e9;
-  return 1;
-}
-
-function HeatmapTileContent({
+function HeatmapTileContent(props: HeatmapTileProps & { palette: ReturnType<typeof getThemePalette>; onSelect: (symbol: string) => void }) {
+  const {
   x = 0,
   y = 0,
   width = 0,
   height = 0,
   depth = 0,
-  payload,
   palette,
-}: HeatmapTileProps & { palette: ReturnType<typeof getThemePalette> }) {
+  onSelect,
+  } = props;
+  const payload = heatmapNodeEntry(props);
   if (depth !== 1 || !payload || width <= 0 || height <= 0) return null;
 
   const inset = width < 36 || height < 28 ? 0.5 : 1;
@@ -247,8 +236,21 @@ function HeatmapTileContent({
   const symbolFontSize = Math.max(11, Math.min(20, Math.min(innerWidth / 4.4, innerHeight / (showChange ? 3.6 : 2.3))));
   const companyLabel = payload.shortName.replace(/\s+Class A|\s+Class C|\s+Common Stock/gi, '');
 
+  const changeLabel = payload.changePct == null ? 'Change unavailable' : fmt.pct(payload.changePct);
   return (
-    <g>
+    <g
+      role="button"
+      tabIndex={0}
+      aria-label={`Open ${payload.symbol}, ${companyLabel}, ${changeLabel}`}
+      className="cursor-pointer focus:outline focus:outline-2 focus:outline-offset-2 focus:outline-terminal-accent"
+      onClick={() => onSelect(payload.symbol)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onSelect(payload.symbol);
+        }
+      }}
+    >
       <rect
         x={x + inset}
         y={y + inset}
@@ -259,7 +261,7 @@ function HeatmapTileContent({
         stroke={palette.border}
         strokeWidth={1}
       />
-      <title>{`${payload.symbol} · ${companyLabel} · ${fmt.pct(payload.changePct)}`}</title>
+      <title>{`${payload.symbol} · ${companyLabel} · ${changeLabel} · ${payload.group} · Market cap ${payload.marketCap == null ? 'unavailable' : fmt.marketCap(payload.marketCap)}`}</title>
       {showSymbol && (
         <foreignObject
           x={x + inset + 2}
@@ -273,7 +275,7 @@ function HeatmapTileContent({
             </span>
             {showChange && (
               <span className="market-heatmap-node-change">
-                {fmt.pct(payload.changePct)}
+                {payload.changePct == null ? '—' : fmt.pct(payload.changePct)}
               </span>
             )}
             {showCompany && !vertical && (
@@ -290,204 +292,130 @@ function HeatmapTileContent({
 
 export function HeatmapPanel() {
   const { setActivePanel } = useTerminalStore();
+  const [sizeMode, setSizeMode] = useState<HeatmapSizeMode>('market-cap');
   useTheme();
   const themePalette = getThemePalette();
 
-  const { data: quotes = [], isLoading, dataUpdatedAt } = useQuery({
+  const { data: quotes = [], isLoading, isFetching, isError, dataUpdatedAt, refetch } = useQuery({
     queryKey: ['heatmap', ALL_SYMBOLS],
-    queryFn: () => fetchQuotes(ALL_SYMBOLS),
+    queryFn: async () => {
+      const result = await fetchQuotes(ALL_SYMBOLS);
+      if (!result.length) throw new Error('No heatmap quotes are available');
+      return result;
+    },
     refetchInterval: 120000,
     staleTime: 60000,
+    refetchOnWindowFocus: false,
+    retry: 1,
   });
 
   const quoteMap = new Map(quotes.map((quote) => [quote.symbol, quote]));
-
-  if (isLoading && quotes.length === 0) {
-    return (
-      <div className="h-full flex items-center justify-center bg-terminal-bg">
-        <div className="text-terminal-faint tracking-[0.18em] animate-pulse">LOADING HEATMAP...</div>
-      </div>
-    );
-  }
-
+  const sampleEntries = SECTOR_CONFIG.flatMap((config) => buildHeatmapEntries(config.groups, quoteMap, 'equal'));
   const sectors = SECTOR_CONFIG.map((config) => {
-    const entries = config.groups
-      .flatMap((group) =>
-        group.stocks.map((symbol) => {
-          const quote = quoteMap.get(symbol);
-          if (!quote) return null;
-
-          return {
-            name: symbol,
-            symbol,
-            shortName: quote.shortName ?? quote.longName ?? symbol,
-            value: getEntryValue(quote.marketCap, quote.regularMarketPrice),
-            changePct: quote.regularMarketChangePercent ?? 0,
-            group: group.label,
-            marketCap: quote.marketCap ?? null,
-          } satisfies HeatmapEntry;
-        })
-      )
-      .filter((entry): entry is HeatmapEntry => Boolean(entry))
-      .sort((left, right) => right.value - left.value);
-
-    const sectorQuote = quoteMap.get(config.etf);
+    const entries = buildHeatmapEntries(config.groups, quoteMap, sizeMode);
     const totalValue = entries.reduce((sum, entry) => sum + entry.value, 0);
-    const weightedChange = totalValue
-      ? entries.reduce((sum, entry) => sum + entry.changePct * entry.value, 0) / totalValue
-      : 0;
-    const sectorChange = sectorQuote?.regularMarketChangePercent ?? weightedChange;
-    const dominantGroups = config.groups
-      .map((group) => ({
-        label: group.label,
-        value: group.stocks.reduce((sum, symbol) => {
-          const quote = quoteMap.get(symbol);
-          return sum + getEntryValue(quote?.marketCap, quote?.regularMarketPrice);
-        }, 0),
-      }))
-      .sort((left, right) => right.value - left.value)
-      .slice(0, 3)
-      .map((group) => group.label)
-      .join('   ');
-
-    return {
-      ...config,
-      entries,
-      sectorChange,
-      dominantGroups,
-      totalValue,
-    };
+    const sectorEtfChange = heatmapQuoteChange(quoteMap.get(config.etf));
+    const sectorChange = sectorEtfChange ?? weightedHeatmapChange(entries);
+    const requestedCount = config.groups.reduce((sum, group) => sum + group.stocks.length, 0);
+    const quotedCount = config.groups.reduce((sum, group) => sum + group.stocks.filter((symbol) => quoteMap.has(symbol)).length, 0);
+    return { ...config, entries, totalValue, sectorChange, sectorEtfChange, requestedCount, quotedCount };
   }).sort((left, right) => right.totalValue - left.totalValue);
 
   const boardTotalValue = sectors.reduce((sum, sector) => sum + sector.totalValue, 0);
-
-  const updatedLabel = dataUpdatedAt
-    ? new Date(dataUpdatedAt).toLocaleString('en-US', {
-        timeZone: 'America/New_York',
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true,
-        timeZoneName: 'short',
-      })
-    : 'Live pricing';
+  const displayedCount = sectors.reduce((sum, sector) => sum + sector.entries.length, 0);
+  const requestedCount = SECTOR_CONFIG.reduce((sum, sector) => sum + sector.groups.reduce((total, group) => total + group.stocks.length, 0), 0);
+  const knownChanges = sampleEntries.filter((entry) => entry.changePct != null);
+  const advancing = knownChanges.filter((entry) => entry.changePct! > 0).length;
+  const declining = knownChanges.filter((entry) => entry.changePct! < 0).length;
+  const movers = [...knownChanges].sort((left, right) => Math.abs(right.changePct!) - Math.abs(left.changePct!)).slice(0, 8);
+  const updatedLabel = dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : null;
+  const openSymbol = (symbol: string) => setActivePanel('equity', symbol);
 
   return (
     <div className="h-full overflow-y-auto bg-terminal-bg text-terminal-text">
       <div className="px-3 py-3 md:px-4 md:py-4">
-        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between mb-4">
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between mb-3">
           <div>
-            <div className="text-[11px] uppercase tracking-[0.28em] text-terminal-accent">Market Map</div>
-            <h1 className="text-[24px] leading-none font-bold tracking-wide text-terminal-text">
-              Sector Heatmap
-            </h1>
-            <div className="mt-1 text-[12px] text-terminal-faint">
-              Sector cards are sized by aggregate market cap. Inner tiles are sized by constituent market cap and colored by session performance.
+            <div className="text-[11px] uppercase tracking-[0.28em] text-terminal-accent">US stock sample</div>
+            <h1 className="text-[24px] leading-none font-bold tracking-wide text-terminal-text">Sector Heatmap</h1>
+            <div className="mt-2 text-xs text-terminal-faint max-w-3xl leading-relaxed">
+              Latest available regular-session change versus the previous close. This curated large-company sample is not the full market or the sector ETFs' holdings; quotes may be delayed.
             </div>
           </div>
+          <button type="button" disabled={isFetching} onClick={() => void refetch()} className="shrink-0 border border-terminal-border rounded px-3 py-1.5 text-xs text-terminal-muted hover:text-terminal-text disabled:opacity-50">
+            {isFetching ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
 
-          <div className="flex items-center gap-2 text-[12px] text-terminal-faint">
-            <span className="font-medium text-terminal-muted">Scale</span>
-            <div className="flex items-center gap-1">
-              {LEGEND_VALUES.map((value) => (
-                <div key={value} className="flex items-center gap-1">
-                  <span className="market-heatmap-legend-chip" style={{ backgroundColor: getHeatColor(value, themePalette) }} />
-                  {value === LEGEND_VALUES[0] || value === LEGEND_VALUES[LEGEND_VALUES.length - 1] ? (
-                    <span className="tabular-nums">{value > 0 ? `+${value}%` : `${value}%`}</span>
-                  ) : null}
-                </div>
-              ))}
-            </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="text-terminal-faint">Tile size</span>
+            {([{ key: 'market-cap', label: 'Market cap' }, { key: 'equal', label: 'Equal size' }] as const).map((item) => (
+              <button key={item.key} type="button" aria-pressed={sizeMode === item.key} onClick={() => setSizeMode(item.key)} className={`rounded border px-2 py-1 ${sizeMode === item.key ? 'border-terminal-accent/50 text-terminal-accent bg-terminal-accent/10' : 'border-terminal-border text-terminal-muted hover:text-terminal-text'}`}>
+                {item.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2 text-xs text-terminal-faint" aria-label="Color scale from minus three percent or lower to plus three percent or higher">
+            <span>−3% or less</span>
+            {LEGEND_VALUES.map((value) => <span key={value} className="market-heatmap-legend-chip" style={{ backgroundColor: getHeatColor(value, themePalette) }} />)}
+            <span>+3% or more</span>
+            <span className="market-heatmap-legend-chip ml-2" style={{ backgroundColor: getHeatColor(null, themePalette) }} />
+            <span>No change data</span>
           </div>
         </div>
 
-        <div className="market-heatmap-board">
+        <div className="flex flex-wrap gap-x-5 gap-y-1 rounded border border-terminal-border bg-terminal-panel px-3 py-2 text-xs mb-3">
+          <span><strong className="text-terminal-text">{sampleEntries.length}/{requestedCount}</strong> <span className="text-terminal-faint">quotes available</span></span>
+          <span><strong style={{ color: themePalette.positive }}>{advancing}</strong> <span className="text-terminal-faint">advancing</span></span>
+          <span><strong style={{ color: themePalette.negative }}>{declining}</strong> <span className="text-terminal-faint">declining</span></span>
+          <span><strong>{knownChanges.length - advancing - declining}</strong> <span className="text-terminal-faint">unchanged</span></span>
+          <span><strong>{sampleEntries.length - knownChanges.length}</strong> <span className="text-terminal-faint">without a change</span></span>
+          {updatedLabel && <span className="text-terminal-faint ml-auto">Checked {updatedLabel}</span>}
+        </div>
+
+        {sizeMode === 'market-cap' && displayedCount < sampleEntries.length && <div className="mb-3 text-xs text-terminal-muted">{sampleEntries.length - displayedCount} quoted companies have no valid market cap and are omitted from weighted tiles. Choose Equal size to include them.</div>}
+        {(isError || (!isLoading && sampleEntries.length === 0)) && <div role="status" className="mb-4 rounded border border-terminal-border p-4 text-sm text-terminal-muted">{sampleEntries.length ? 'The refresh failed. Previously received quotes remain visible.' : 'Quotes are unavailable right now. Refresh to try again; unavailable data is not shown as a flat market.'}</div>}
+        {isLoading && <div role="status" className="shimmer rounded h-32 mb-4 flex items-center justify-center text-terminal-faint text-sm">Loading available quotes…</div>}
+
+        {movers.length > 0 && <section className="mb-4" aria-label="Largest absolute moves in the sample">
+          <div className="text-[10px] tracking-wider text-terminal-faint mb-2">LARGEST MOVES IN THIS SAMPLE · SELECT A SYMBOL TO RESEARCH</div>
+          <div className="flex flex-wrap gap-2">
+            {movers.map((entry) => <button key={entry.symbol} type="button" onClick={() => openSymbol(entry.symbol)} title={`${entry.shortName} · ${entry.group}`} className="rounded border border-terminal-border bg-terminal-panel px-2.5 py-1.5 text-xs hover:bg-terminal-hover">
+              <span className="font-bold">{entry.symbol}</span><span className="ml-2 tabular-nums" style={{ color: getHeatAccentColor(entry.changePct, themePalette) }}>{fmt.pct(entry.changePct!)}</span>
+            </button>)}
+          </div>
+        </section>}
+
+        {sampleEntries.length > 0 && <div className="market-heatmap-board">
           {sectors.map((sector) => (
-            <section
-              key={sector.sector}
-              className="market-heatmap-sector"
-              style={getSectorCardStyle(sector.totalValue, boardTotalValue, sector.sectorChange, themePalette)}
-            >
-              <button
-                onClick={() => setActivePanel('equity', sector.etf)}
-                className="w-full text-left px-3 pt-3 pb-2"
-                title={`Open ${sector.etf}`}
-              >
-                <div className="flex items-start justify-between gap-3">
+            <section key={sector.sector} className="market-heatmap-sector" style={getSectorCardStyle(sector.totalValue, boardTotalValue, sector.sectorChange, themePalette)}>
+              <button type="button" onClick={() => openSymbol(sector.etf)} className="w-full text-left px-3 pt-3 pb-2" title={`Open sector ETF ${sector.etf}; it is a separate benchmark, not this sample's portfolio`}>
+                <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="flex items-end gap-2 leading-none">
-                      <span className="text-[14px] md:text-[16px] font-bold tracking-wide text-terminal-text">
-                        {sector.sector}
-                      </span>
-                      <span
-                        className="text-[12px] md:text-[13px] font-medium tabular-nums"
-                        style={{ color: getHeatAccentColor(sector.sectorChange, themePalette) }}
-                      >
-                        {fmt.pct(sector.sectorChange)}
-                      </span>
-                    </div>
-                    <div className="mt-1 text-[11px] md:text-[12px] text-terminal-faint truncate">
-                      {sector.dominantGroups}
-                    </div>
+                    <div className="text-sm font-bold tracking-wide">{sector.sector}</div>
+                    <div className="mt-1 text-[11px] text-terminal-faint">{sector.entries.length}/{sector.requestedCount} sample tiles · {sector.quotedCount} quotes</div>
                   </div>
-
-                  <div className="flex-shrink-0 rounded border border-terminal-border bg-terminal-elevated px-1.5 py-1 text-right">
-                    <div className="text-[10px] font-bold tracking-[0.16em] text-terminal-accent">{sector.etf}</div>
-                    <div className="mt-0.5 text-[10px] tabular-nums text-terminal-faint">
-                      {fmt.number(boardTotalValue > 0 ? (sector.totalValue / boardTotalValue) * 100 : 0, 1)}%
-                    </div>
+                  <div className="shrink-0 text-right">
+                    <div className="text-[10px] tracking-wider text-terminal-faint">{sector.sectorEtfChange == null ? 'SAMPLE MOVE' : `${sector.etf} ETF`}</div>
+                    <div className="text-sm tabular-nums font-bold" style={{ color: getHeatAccentColor(sector.sectorChange, themePalette) }}>{sector.sectorChange == null ? '—' : fmt.pct(sector.sectorChange)}</div>
                   </div>
                 </div>
-
-                <div className="mt-2 flex items-center gap-2">
-                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-terminal-bg/90">
-                    <div
-                      className="h-full rounded-full"
-                      style={{
-                        width: `${Math.max(8, boardTotalValue > 0 ? (sector.totalValue / boardTotalValue) * 100 : 8)}%`,
-                        backgroundColor: getHeatAccentColor(sector.sectorChange, themePalette),
-                      }}
-                    />
-                  </div>
-                  <span className="text-[10px] uppercase tracking-[0.16em] text-terminal-faint">Sector Share</span>
-                </div>
+                <div className="mt-2 text-[10px] text-terminal-faint" title="This is a share of the stocks shown here, not total market or ETF portfolio weight.">{boardTotalValue > 0 ? `${fmt.number(sector.totalValue / boardTotalValue * 100, 1)}% of displayed ${sizeMode === 'market-cap' ? 'market cap' : 'companies'}` : 'No sizing data'}</div>
               </button>
-
               <div className="market-heatmap-sector-body">
                 {sector.entries.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <Treemap
-                      data={sector.entries}
-                      dataKey="value"
-                      aspectRatio={1.15}
-                      stroke={themePalette.border}
-                      isAnimationActive={false}
-                      content={<HeatmapTileContent palette={themePalette} />}
-                      onClick={(node) => {
-                        const clickedNode = node as typeof node & { payload?: HeatmapEntry; symbol?: string };
-                        const symbol = clickedNode.payload?.symbol ?? clickedNode.symbol;
-                        if (symbol) setActivePanel('equity', symbol);
-                      }}
-                    />
+                    <Treemap data={sector.entries} dataKey="value" aspectRatio={1.15} stroke={themePalette.border} isAnimationActive={false} content={<HeatmapTileContent palette={themePalette} onSelect={openSymbol} />} />
                   </ResponsiveContainer>
-                ) : (
-                  <div className="h-full flex items-center justify-center text-terminal-faint text-[12px]">
-                    No sector data
-                  </div>
-                )}
+                ) : <div className="h-full flex items-center justify-center text-terminal-faint text-xs px-3 text-center">{sizeMode === 'market-cap' && sector.quotedCount > 0 ? 'No valid market caps. Choose Equal size.' : 'No available sample quotes'}</div>}
               </div>
             </section>
           ))}
-        </div>
+        </div>}
 
-        <div className="flex flex-col gap-2 pt-3 text-[12px] text-terminal-faint md:flex-row md:items-center md:justify-between">
-          <div className="flex items-center gap-2">
-            <span className="font-medium text-terminal-muted">Live board</span>
-            <span>Sector card area reflects aggregate market cap. Inner tile area reflects company market cap. Click any sector or tile to open the corresponding security.</span>
-          </div>
-          <div className="tabular-nums">{updatedLabel}</div>
+        <div className="pt-3 text-[11px] text-terminal-faint leading-relaxed">
+          Sector areas are approximate; tile area uses {sizeMode === 'market-cap' ? 'reported company market cap' : 'equal weights'}. Missing changes are grey, not zero. Sector headings show the sector ETF's change when available, otherwise a weighted move of the displayed sample. Source: Yahoo Finance. Click or keyboard-select a tile to open its research page.
         </div>
       </div>
     </div>

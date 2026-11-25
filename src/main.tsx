@@ -2,7 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.tsx'
 import './index.css'
-import { hydrateLocalStateCache } from './utils/localStateStorage.ts'
+import { hydrateTerminalState } from './utils/bootstrapState.ts'
 import { initializeThemeMode } from './utils/theme.ts'
 
 async function bootstrap() {
@@ -13,7 +13,7 @@ async function bootstrap() {
   }
 
   try {
-    await hydrateLocalStateCache()
+    await hydrateTerminalState()
   } catch (error) {
     console.warn('[bootstrap] unable to hydrate local state cache', error)
   }

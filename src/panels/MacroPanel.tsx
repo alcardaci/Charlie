@@ -1,24 +1,15 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  Legend,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
+import { MacroHistoryChart, MacroRangeContext, MacroRangeSelect } from '../components/MacroHistoryChart';
+import { availableMacroWindows, type MacroHistory, type MacroWindow } from '../utils/macroHistory';
 import { fetchMacroDashboard } from '../api/finance';
 import { EventsCalendar } from '../components/EventsCalendar';
 import { MACRO_COUNTRIES, MACRO_METRICS } from '../data/macroRegistry';
 import { useTerminalStore } from '../store/useTerminalStore';
-import { BlsIndicator, EurostatIndicator, MacroCountryCode, MacroDashboardData, MacroMetricKey, MacroMetricSnapshot, OecdComparableIndicator } from '../types';
+import { BlsIndicator, EurostatIndicator, MacroDashboardData, MacroMetricKey, MacroMetricSnapshot, OecdComparableIndicator } from '../types';
 import { fmt } from '../utils/formatters';
 import { getThemePalette, useTheme } from '../utils/theme';
+import { formatMacroReading, formatMacroNumber, getMacroSeriesStyle, macroDeltaUnit, macroObservationAge } from '../utils/macroDisplay';
 import { YieldPanel } from './YieldPanel';
 
 type MacroView = 'dashboard' | 'compare' | 'calendar' | 'yield';
@@ -31,11 +22,11 @@ const VIEWS: Array<{ key: MacroView; label: string }> = [
 ];
 
 const METRIC_KEYS = Object.keys(MACRO_METRICS) as MacroMetricKey[];
-
 export function MacroPanel() {
-  const { activePanel } = useTerminalStore();
+  const { activePanel, macroCountry: country, setMacroCountry: setCountry } = useTerminalStore();
   const [view, setView] = useState<MacroView>(activePanel === 'yield' ? 'yield' : 'dashboard');
-  const [country, setCountry] = useState<MacroCountryCode>('US');
+  const [customRanges, setCustomRanges] = useState(false);
+  const [sharedRange, setSharedRange] = useState<{ range: MacroWindow; revision: number }>({ range: '1Y', revision: 0 });
   useTheme();
   const themePalette = getThemePalette();
 
@@ -53,51 +44,97 @@ export function MacroPanel() {
     data: dashboardData,
     isLoading: dashboardLoading,
     isError: dashboardError,
+    isFetching: dashboardRefreshing,
+    refetch: refreshDashboard,
   } = useQuery({
     queryKey: ['macro-dashboard', country],
     queryFn: () => fetchMacroDashboard([country]),
     staleTime: 5 * 60 * 1000,
     refetchInterval: 10 * 60 * 1000,
     retry: 1,
-    refetchOnMount: 'always',
+    refetchOnWindowFocus: false,
+    enabled: view === 'dashboard',
   });
 
   const {
     data: compareData,
     isLoading: compareLoading,
     isError: compareError,
+    isFetching: compareRefreshing,
+    refetch: refreshCompare,
   } = useQuery({
     queryKey: ['macro-compare'],
     queryFn: () => fetchMacroDashboard(),
     staleTime: 5 * 60 * 1000,
     refetchInterval: 10 * 60 * 1000,
     retry: 1,
-    refetchOnMount: 'always',
+    refetchOnWindowFocus: false,
     enabled: view === 'compare',
   });
 
-  const activeData = view === 'compare' ? compareData : view === 'dashboard' ? dashboardData : null;
   const selectedCountry = dashboardData?.countries[0];
-  const selectedCountryEmpty = !selectedCountry || METRIC_KEYS.every((metricKey) => !selectedCountry.values[metricKey]);
+  const selectedCountryName = MACRO_COUNTRIES.find((item) => item.code === country)?.label;
+
+  const histories: MacroHistory[] = [
+    ...Object.values(selectedCountry?.values ?? {}).flatMap(s => s ? [{ series: s.series, step: s.chartType === 'step' }] : []),
+    ...(dashboardData?.bls?.indicators ?? []), ...(dashboardData?.oecdCountry?.indicators ?? []),
+    ...(dashboardData?.eurostat?.indicators.filter(i => i.placement === 'detail') ?? []),
+  ].filter(h => h.series.length > 1);
+  // A dashboard preset must work independently for every plotted source, including older releases.
+  const ranges = histories.map(h => availableMacroWindows([h]));
+  for (const family of ['jolts', 'productivity', 'trade-prices', 'sector-payrolls']) {
+    const group = dashboardData?.bls?.indicators.filter(i => i.family === family && i.series.length);
+    if (group?.length) ranges.push(availableMacroWindows(group));
+  }
+  const activity = dashboardData?.eurostat?.indicators.filter(i => i.group === 'activity' && i.series.length);
+  if (activity?.length) ranges.push(availableMacroWindows(activity));
+  const commonRanges = ranges[0]?.filter(r => ranges.every(options => options.includes(r))) ?? [];
+  const dashboardRange = commonRanges.includes(sharedRange.range) ? sharedRange.range : 'All';
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
       <div className="flex flex-col gap-2 px-4 py-2 panel-border-b bg-terminal-panel flex-shrink-0 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <span className="text-terminal-accent font-bold text-sm tracking-wider">MACRO MONITOR</span>
-          <span className="block sm:inline text-terminal-faint text-xs sm:ml-3">US + G10 economic dashboard</span>
+          <span className="block sm:inline text-terminal-faint text-xs sm:ml-3">Ten economies · source dates and coverage vary</span>
         </div>
-        {activeData?.error && (
-          <span className="text-terminal-faint text-xs">{activeData.error}</span>
+        {(view === 'dashboard' || view === 'compare') && (
+          <div className="flex items-center justify-between gap-4">
+            {view === 'dashboard' && <span aria-live="polite" className="text-terminal-text text-xs font-bold">{selectedCountryName}</span>}
+            <button
+              type="button"
+              onClick={() => void (view === 'compare' ? refreshCompare() : refreshDashboard())}
+              disabled={view === 'compare' ? compareRefreshing : dashboardRefreshing}
+              className="text-terminal-muted text-xs hover:text-terminal-text disabled:opacity-50"
+            >
+              {(view === 'compare' ? compareRefreshing : dashboardRefreshing) ? 'Refreshing…' : 'Refresh'}
+            </button>
+          </div>
         )}
       </div>
 
       <div className="flex flex-col gap-2 px-4 py-2 bg-terminal-bg panel-border-b flex-shrink-0">
-        <div className="flex gap-1 overflow-x-auto pb-1">
+        <div role="tablist" aria-label="Macro views" className="flex gap-1 overflow-x-auto pb-1">
           {VIEWS.map((item) => (
             <button
               key={item.key}
+              type="button"
+              role="tab"
+              id={`macro-tab-${item.key}`}
+              tabIndex={view === item.key ? 0 : -1}
+              aria-selected={view === item.key}
+              aria-controls={`macro-view-${item.key}`}
               onClick={() => setView(item.key)}
+              onKeyDown={(event) => {
+                if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+                event.preventDefault();
+                const current = VIEWS.findIndex((entry) => entry.key === view);
+                const index = event.key === 'Home' ? 0 : event.key === 'End' ? VIEWS.length - 1
+                  : (current + (event.key === 'ArrowRight' ? 1 : -1) + VIEWS.length) % VIEWS.length;
+                const next = VIEWS[index].key;
+                setView(next);
+                document.getElementById(`macro-tab-${next}`)?.focus();
+              }}
               className={`px-2.5 py-0.5 text-xs rounded border transition-colors ${
                 view === item.key
                   ? 'border-terminal-accent/50 bg-terminal-accent/10 text-terminal-accent'
@@ -109,12 +146,16 @@ export function MacroPanel() {
           ))}
         </div>
 
-        {(view === 'dashboard' || view === 'compare') && (
+        {view === 'dashboard' && (
           <div className="flex gap-1 overflow-x-auto pb-1">
             {MACRO_COUNTRIES.map((item) => (
               <button
                 key={item.code}
-                onClick={() => setCountry(item.code)}
+                type="button"
+                aria-pressed={item.code === country}
+                aria-label={item.label}
+                title={item.label}
+                onClick={() => { setCountry(item.code); setCustomRanges(false); setSharedRange(current => ({ ...current, revision: current.revision + 1 })); }}
                 className={`px-2 py-0.5 text-xs rounded transition-colors ${
                   item.code === country
                     ? 'bg-terminal-accent/15 text-terminal-accent'
@@ -128,22 +169,28 @@ export function MacroPanel() {
         )}
       </div>
 
-      <div className="flex-1 overflow-hidden">
+      <div role="tabpanel" id={`macro-view-${view}`} aria-labelledby={`macro-tab-${view}`} className="flex-1 overflow-hidden">
         {view === 'dashboard' && (
           <div className="h-full overflow-y-auto p-4 space-y-4">
+            <MacroRangeContext.Provider value={{ range: dashboardRange, revision: sharedRange.revision, onOverride: () => setCustomRanges(true) }}>
+            {dashboardData && <div className="flex flex-wrap items-center justify-between gap-2 text-terminal-faint text-[11px]">
+              <span>Each chart ends at its latest published observation.</span>
+              {commonRanges.length > 0 && <label className="flex items-center gap-2">All charts
+                <MacroRangeSelect label="Time frame for all Macro charts" options={commonRanges} range={dashboardRange} mixed={customRanges}
+                  onChange={range => { setSharedRange(current => ({ range, revision: current.revision + 1 })); setCustomRanges(false); }} /></label>}
+            </div>}
             {dashboardData?.error && (
               <MacroAlert text={dashboardData.error} />
             )}
+            {dashboardError && dashboardData && <MacroAlert text="Refresh failed. Previously received observations remain visible below." />}
             {dashboardLoading ? (
               <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-3">
                 {Array.from({ length: 6 }).map((_, index) => (
                   <div key={index} className="shimmer h-36 rounded" />
                 ))}
               </div>
-            ) : dashboardError || !selectedCountry ? (
+            ) : !selectedCountry ? (
               <PanelMessage text="Could not load macro dashboard" />
-            ) : selectedCountryEmpty && dashboardData?.error ? (
-              <PanelMessage text={dashboardData.error} />
             ) : (
               <>
                 <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-3">
@@ -162,6 +209,7 @@ export function MacroPanel() {
                 {country === 'EA' && <EurostatLocalDetail data={dashboardData.eurostat} palette={themePalette} />}
               </>
             )}
+            </MacroRangeContext.Provider>
           </div>
         )}
 
@@ -172,13 +220,15 @@ export function MacroPanel() {
                 <MacroAlert text={compareData.error} />
               </div>
             )}
+            {compareError && compareData && <MacroAlert text="Refresh failed. Previously received comparison data remains visible below." />}
             {compareLoading ? (
               <div className="shimmer h-64 rounded" />
-            ) : compareError || !compareData ? (
+            ) : !compareData ? (
               <PanelMessage text="Could not load cross-country comparison" />
             ) : (
               <>
-                <div className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+                <div className="text-terminal-faint text-xs leading-relaxed">Compare source definitions as well as values: GDP may be annualized or quarter-on-quarter, CPI may be annual or monthly, and short rates may be interbank proxies. Observation dates can differ. Open a cell's source for its exact series.</div>
+                <div className="bg-terminal-panel border border-terminal-border rounded overflow-x-auto">
                   <table className="data-table w-full">
                     <thead>
                       <tr>
@@ -194,7 +244,14 @@ export function MacroPanel() {
                           <td className="text-terminal-accent font-bold">{item.label}</td>
                           {METRIC_KEYS.map((metricKey) => (
                             <td key={metricKey} className="tabular-nums">
-                              {formatMacroValue(item.values[metricKey])}
+                              {item.values[metricKey] ? (
+                                <a href={item.values[metricKey]!.sourceUrl} target="_blank" rel="noreferrer" className="block hover:text-terminal-accent" title={[item.values[metricKey]!.label, item.values[metricKey]!.areaScope, item.values[metricKey]!.seriesId].filter(Boolean).join(' · ')}>
+                                  <span className="block">{formatMacroValue(item.values[metricKey])}</span>
+                                  <span className="block text-[10px] font-normal text-terminal-faint whitespace-nowrap">{item.values[metricKey]!.date ?? 'Date unavailable'} · {item.values[metricKey]!.frequency}</span>
+                                  <span className="block text-[10px] font-normal text-terminal-faint">{item.values[metricKey]!.label} ↗</span>
+                                  {macroObservationAge(item.values[metricKey]!.date, item.values[metricKey]!.frequency) && <span className="block text-[10px] font-normal text-terminal-accent">{macroObservationAge(item.values[metricKey]!.date, item.values[metricKey]!.frequency)}</span>}
+                                </a>
+                              ) : <span className="text-terminal-faint">Unavailable</span>}
                             </td>
                           ))}
                         </tr>
@@ -233,11 +290,12 @@ function MetricCard({
   snapshot: MacroMetricSnapshot | null;
   palette: ReturnType<typeof getThemePalette>;
 }) {
+  const stepHistory = snapshot?.chartType === 'step';
   return (
     <div className="bg-terminal-panel border border-terminal-border rounded p-3 min-h-[12rem]">
       <div className="flex items-center justify-between mb-2">
         <div className="text-terminal-muted text-xs font-bold tracking-wider">{title}</div>
-        <span className="text-terminal-faint text-xs">{snapshot?.source ?? 'FRED'}</span>
+        {snapshot?.sourceUrl ? <a href={snapshot.sourceUrl} target="_blank" rel="noreferrer" className="text-terminal-faint text-xs hover:text-terminal-text" title="Open the official source series">{snapshot.source ?? 'Source'} ↗</a> : <span className="text-terminal-faint text-xs">{snapshot?.source ?? 'FRED'}</span>}
       </div>
 
       {snapshot ? (
@@ -246,55 +304,20 @@ function MetricCard({
             {formatMacroValue(snapshot)}
           </div>
           <div className="text-terminal-muted text-xs mt-1">
-            {snapshot.change == null
+            {stepHistory ? 'Rate history · changes shown on their effective dates' : snapshot.change == null
               ? 'No prior print'
-              : `Delta ${formatSignedValue(snapshot.change, 2)} ${snapshot.unit}`}
+              : `Change vs prior print ${formatSignedValue(snapshot.change, 2)} ${macroDeltaUnit(snapshot.unit)}`}
           </div>
           <div className="text-terminal-faint text-[10px] mt-1">
             {[snapshot.frequency, snapshot.areaScope, snapshot.date].filter(Boolean).join(' · ')}
           </div>
-          <div className="h-24 mt-3">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={snapshot.series.slice(-12)}>
-                <defs>
-                  <linearGradient id={`macro-${snapshot.key}`} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={palette.accent} stopOpacity={0.35} />
-                    <stop offset="95%" stopColor={palette.accent} stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid stroke={palette.chartGrid} strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="date"
-                  tick={{ fill: palette.muted, fontSize: 10 }}
-                  tickFormatter={(value: string) => value.slice(2, 7)}
-                  axisLine={{ stroke: palette.border }}
-                  tickLine={false}
-                />
-                <YAxis
-                  tick={{ fill: palette.muted, fontSize: 10 }}
-                  axisLine={{ stroke: palette.border }}
-                  tickLine={false}
-                  tickFormatter={(value: number) => value.toFixed(1)}
-                />
-                <Tooltip
-                  contentStyle={{ background: palette.elevated, border: `1px solid ${palette.border}`, borderRadius: '4px', fontSize: '11px' }}
-                  labelStyle={{ color: palette.text }}
-                  formatter={(value: number) => [`${value.toFixed(2)} ${snapshot.unit}`, title]}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="value"
-                  stroke={palette.accent}
-                  fill={`url(#macro-${snapshot.key})`}
-                  strokeWidth={2}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
+          {macroObservationAge(snapshot.date, snapshot.frequency) && <div className="text-terminal-accent text-[10px] mt-1">{macroObservationAge(snapshot.date, snapshot.frequency)}</div>}
+          <MacroHistoryChart title={title} unit={snapshot.unit} palette={palette} height="h-24"
+            lines={[{ id: 'value', label: title, series: snapshot.series, step: stepHistory, stroke: palette.accent }]} />
         </>
       ) : (
         <div className="h-full flex items-center justify-center text-terminal-faint text-xs">
-          No live data available
+          No observation available
         </div>
       )}
     </div>
@@ -302,7 +325,7 @@ function MetricCard({
 }
 
 function formatMacroValue(snapshot: MacroMetricSnapshot | null): string {
-  if (!snapshot || snapshot.value == null) return '--';
+  if (!snapshot || snapshot.value == null) return '—';
   const decimals = snapshot.key === 'yield10y' || snapshot.key === 'policyRate' ? 2 : 1;
   return `${fmt.number(normalizeRoundedZero(snapshot.value, decimals), decimals)}${snapshot.unit}`;
 }
@@ -311,9 +334,9 @@ function normalizeRoundedZero(value: number, decimals: number): number {
   return Math.abs(value) < 0.5 * (10 ** -decimals) ? 0 : value;
 }
 
-function formatSignedValue(value: number, decimals: number): string {
+function formatSignedValue(value: number, decimals: 0 | 1 | 2): string {
   const normalized = normalizeRoundedZero(value, decimals);
-  return `${normalized >= 0 ? '+' : ''}${normalized.toFixed(decimals)}`;
+  return `${normalized >= 0 ? '+' : ''}${formatMacroNumber(normalized, decimals)}`;
 }
 
 function OecdComparableTrends({ data, palette }: {
@@ -355,16 +378,16 @@ function OecdComparableCard({ indicator, palette }: { indicator: OecdComparableI
       </div>
     );
   }
-  const value = indicator.value == null ? '--' : indicator.unit === '%'
-    ? `${indicator.value.toFixed(2)}%`
-    : indicator.value.toFixed(1);
-  const change = indicator.change == null ? 'No prior print' : `Delta ${formatSignedValue(indicator.change, 2)}`;
+  const value = formatMacroReading(indicator.value, indicator.unit);
+  const change = indicator.change == null ? 'No prior print' : `Change vs prior print ${formatSignedValue(indicator.change, 2)} ${macroDeltaUnit(indicator.unit)}`;
   return <SupplementalTrendCard
     title={indicator.label}
     value={value}
     detail={`${change} · ${indicator.date ?? 'Latest unavailable'} · ${indicator.frequency} · ${indicator.unitLabel}`}
     series={indicator.series}
-    unit={indicator.unitLabel}
+    observationDate={indicator.date}
+    observationFrequency={indicator.frequency}
+    unit={indicator.unit}
     sourceUrl={indicator.sourceUrl}
     color={indicator.key === 'employmentGrowth' ? palette.accent : indicator.key === 'businessConfidence' ? palette.purple : palette.blue}
     palette={palette}
@@ -433,15 +456,15 @@ function BlsFamilySection({ title, indicators, palette, mode = 'lines', compact 
 }
 
 function BlsIndicatorChart({ indicator, palette }: { indicator: BlsIndicator; palette: ReturnType<typeof getThemePalette> }) {
-  const value = indicator.value == null ? '--' : indicator.unit === 'thousand jobs'
-    ? `${fmt.number(indicator.value, 0)} ${indicator.unit}`
-    : `${indicator.value.toFixed(indicator.unit === 'USD/hour' ? 2 : 1)} ${indicator.unit}`;
-  const change = indicator.change == null ? 'No prior print' : `Δ ${formatSignedValue(indicator.change, 2)}`;
+  const value = formatMacroReading(indicator.value, indicator.unit);
+  const change = indicator.change == null ? 'No prior print' : `Change vs prior print ${formatSignedValue(indicator.change, 2)} ${macroDeltaUnit(indicator.unit)}`;
   return <SupplementalTrendCard
     title={indicator.label}
     value={value}
     detail={`${change} · ${indicator.date ?? 'Latest unavailable'} · ${indicator.frequency} · ${indicator.seasonalAdjustment}`}
     series={indicator.series}
+    observationDate={indicator.date}
+    observationFrequency={indicator.frequency}
     unit={indicator.unit}
     sourceUrl={indicator.sourceUrl}
     color={palette.accent}
@@ -451,35 +474,17 @@ function BlsIndicatorChart({ indicator, palette }: { indicator: BlsIndicator; pa
 
 function OecdComparisonChart({ data, palette }: { data: NonNullable<MacroDashboardData['oecd']> | undefined; palette: ReturnType<typeof getThemePalette> }) {
   if (!data || data.indicators.length === 0) return null;
-  const dates = Array.from(new Set(data.indicators.flatMap((indicator) => indicator.series.map((point) => point.date)))).sort();
-  const chartData = dates.map((date) => Object.fromEntries([
-    ['date', date],
-    ...data.indicators.map((indicator) => [indicator.countryCode, indicator.series.find((point) => point.date === date)?.value]),
-  ]));
-  const colors = [palette.accent, palette.blue, palette.purple, palette.positive, palette.negative];
+  const lines = data.indicators.flatMap((indicator, i) => indicator.series.length ? [{ id: indicator.countryCode, label: indicator.countryLabel, series: indicator.series, ...getMacroSeriesStyle(i, palette) }] : []);
   return (
     <section className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
       <div className="px-4 py-2 panel-border-b flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-terminal-muted text-xs font-bold tracking-wider">OECD LEADING INDICATOR COMPARISON</div>
-          <div className="text-terminal-faint text-[10px] mt-1">Direction-focused cross-country trend · index · {data.status.toUpperCase()}</div>
+          <div className="text-terminal-faint text-[10px] mt-1">Directional indicator · 100 = long-term trend · not a growth forecast · {data.status.toUpperCase()}</div>
         </div>
         <a href="https://www.oecd.org/en/data/insights/data-explainers/2024/09/api.html" target="_blank" rel="noreferrer" className="text-terminal-faint text-[10px] hover:text-terminal-text">OECD SOURCE ↗</a>
       </div>
-      <div className="h-56 p-3">
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={chartData}>
-            <CartesianGrid stroke={palette.chartGrid} strokeDasharray="3 3" />
-            <XAxis dataKey="date" tick={{ fill: palette.muted, fontSize: 10 }} tickFormatter={(value: string) => value.slice(2, 7)} axisLine={{ stroke: palette.border }} tickLine={false} />
-            <YAxis domain={['auto', 'auto']} tick={{ fill: palette.muted, fontSize: 10 }} axisLine={{ stroke: palette.border }} tickLine={false} tickFormatter={(value: number) => value.toFixed(1)} />
-            <Tooltip contentStyle={{ background: palette.elevated, border: `1px solid ${palette.border}`, borderRadius: '4px', fontSize: '11px' }} labelStyle={{ color: palette.text }} />
-            <Legend wrapperStyle={{ color: palette.muted, fontSize: '10px', paddingTop: '8px' }} />
-            {data.indicators.map((indicator, index) => (
-              <Line key={indicator.countryCode} type="monotone" dataKey={indicator.countryCode} name={indicator.countryLabel} stroke={colors[index % colors.length]} strokeWidth={2} dot={false} connectNulls />
-            ))}
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
+      <div className="p-3"><MacroHistoryChart title="OECD leading indicator comparison" lines={lines} unit="index" palette={palette} reference={100} height="h-48" /></div>
       {data.warning && <div className="px-4 py-2 panel-border-t text-terminal-faint text-[10px]">{data.warning}</div>}
     </section>
   );
@@ -498,7 +503,7 @@ function EurostatLocalDetail({ data, palette }: { data: NonNullable<MacroDashboa
         <a href="https://ec.europa.eu/eurostat/web/user-guides/data-browser/api-data-access/api-getting-started/api" target="_blank" rel="noreferrer" className="text-terminal-faint text-[10px] hover:text-terminal-text">EUROSTAT SOURCE ↗</a>
       </div>
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 p-3">
-        <GroupedTrendCard title="LABOUR COSTS & VACANCIES" indicators={indicators.filter((indicator) => indicator.group === 'labour')} palette={palette} color={palette.accent} />
+        {indicators.filter((indicator) => indicator.group === 'labour').map((indicator) => <EurostatIndicatorChart key={indicator.id} indicator={indicator} palette={palette} />)}
         <GroupedTrendCard title="ACTIVITY VOLUMES" indicators={indicators.filter((indicator) => indicator.group === 'activity')} palette={palette} color={palette.blue} />
         {indicators.filter((indicator) => indicator.group === 'prices-trade').map((indicator) => (
           indicator.value == null
@@ -512,13 +517,15 @@ function EurostatLocalDetail({ data, palette }: { data: NonNullable<MacroDashboa
 }
 
 function EurostatIndicatorChart({ indicator, palette }: { indicator: EurostatIndicator; palette: ReturnType<typeof getThemePalette> }) {
-  const value = indicator.value == null ? '--' : `${indicator.value.toFixed(1)}${indicator.unit === '%' ? '%' : indicator.unit === 'billion EUR' ? ' €bn' : ''}`;
-  const change = indicator.change == null ? 'No prior print' : `Delta ${formatSignedValue(indicator.change, 1)}`;
+  const value = formatMacroReading(indicator.value, indicator.unit);
+  const change = indicator.change == null ? 'No prior print' : `Change vs prior print ${formatSignedValue(indicator.change, 1)} ${macroDeltaUnit(indicator.unit)}`;
   return <SupplementalTrendCard
     title={indicator.label}
     value={value}
     detail={`${change} · ${indicator.date ?? 'Latest unavailable'} · ${indicator.frequency} · ${indicator.unitLabel} · ${indicator.seasonalAdjustment}`}
     series={indicator.series}
+    observationDate={indicator.date}
+    observationFrequency={indicator.frequency}
     unit={indicator.unit}
     sourceUrl={indicator.sourceUrl}
     color={palette.blue}
@@ -537,39 +544,25 @@ function GroupedTrendCard({ title, indicators, palette, color, compact = false }
 }) {
   const available = indicators.filter((indicator) => indicator.series.length > 0);
   if (available.length === 0) return <UnavailableTrendCard title={title} detail="No current observations are available for these exact series contracts." cadence="Coverage unavailable" />;
-  const dates = Array.from(new Set(available.flatMap((indicator) => indicator.series.map((point) => point.date)))).sort();
-  const chartData = dates.map((date) => Object.fromEntries([
-    ['date', date],
-    ...available.map((indicator) => [indicator.id, indicator.series.find((point) => point.date === date)?.value]),
-  ]));
-  const colors = [color, palette.blue, palette.purple, palette.positive, palette.negative];
+  const lines = available.map(indicator => ({ id: indicator.id, label: indicator.shortLabel, series: indicator.series, ...getMacroSeriesStyle(indicators.indexOf(indicator), palette) }));
+  const unit = Array.from(new Set(available.map((indicator) => indicator.unit))).join(' / ');
   return (
     <div className="bg-terminal-elevated border border-terminal-border rounded p-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="text-terminal-muted text-xs font-bold tracking-wider">{title}</div>
-        <div className="text-terminal-faint text-[10px]">{Array.from(new Set(available.map((indicator) => indicator.frequency))).join(' + ')}</div>
+        <div className="text-terminal-faint text-[10px]">{unit} · {Array.from(new Set(available.map((indicator) => indicator.frequency))).join(' + ')}</div>
       </div>
       <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
         {indicators.map((indicator) => (
           <a key={indicator.id} href={indicator.sourceUrl} target="_blank" rel="noreferrer" className="text-[10px] hover:text-terminal-text">
             <span className="text-terminal-faint">{indicator.shortLabel}</span>{' '}
-            <span className="text-terminal-text tabular-nums font-bold">{formatSupplementalValue(indicator.value, indicator.unit)}</span>{' '}
+            <span className="text-terminal-text tabular-nums font-bold">{formatMacroReading(indicator.value, indicator.unit)}</span>{' '}
             <span className="text-terminal-faint">{indicator.date?.slice(0, 7) ?? 'unavailable'} ↗</span>
+            {macroObservationAge(indicator.date, indicator.frequency) && <span className="text-terminal-accent"> · {macroObservationAge(indicator.date, indicator.frequency)}</span>}
           </a>
         ))}
       </div>
-      <div className={compact ? 'h-32 mt-2' : 'h-40 mt-2'}>
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={chartData}>
-            <CartesianGrid stroke={palette.chartGrid} strokeDasharray="3 3" />
-            <XAxis dataKey="date" tick={{ fill: palette.muted, fontSize: 10 }} tickFormatter={(value: string) => value.slice(2, 7)} axisLine={{ stroke: palette.border }} tickLine={false} />
-            <YAxis domain={['auto', 'auto']} tick={{ fill: palette.muted, fontSize: 10 }} axisLine={{ stroke: palette.border }} tickLine={false} tickFormatter={(value: number) => Math.abs(value) >= 1_000 ? `${(value / 1_000).toFixed(0)}k` : value.toFixed(1)} />
-            <Tooltip contentStyle={{ background: palette.elevated, border: `1px solid ${palette.border}`, borderRadius: '4px', fontSize: '11px' }} labelStyle={{ color: palette.text }} />
-            <Legend wrapperStyle={{ color: palette.muted, fontSize: '10px', paddingTop: '6px' }} />
-            {available.map((indicator, index) => <Line key={indicator.id} type="monotone" dataKey={indicator.id} name={indicator.shortLabel} stroke={colors[index % colors.length]} strokeWidth={2} dot={false} connectNulls />)}
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
+      <MacroHistoryChart title={title} unit={unit} palette={palette} lines={lines} height={compact ? 'h-32' : 'h-40'} />
     </div>
   );
 }
@@ -585,53 +578,31 @@ function UnavailableTrendCard({ title, detail, cadence }: { title: string; detai
   );
 }
 
-function formatSupplementalValue(value: number | null, unit: string): string {
-  if (value == null) return '--';
-  const formatted = Math.abs(value) >= 1_000 ? fmt.number(value, 0) : value.toFixed(1);
-  if (unit === '%') return `${formatted}%`;
-  if (unit === 'billion EUR') return `${formatted} €bn`;
-  return `${formatted} ${unit}`;
-}
-
-function SupplementalTrendCard({ title, value, detail, series, unit, sourceUrl, color, palette }: {
+function SupplementalTrendCard({ title, value, detail, series, unit, sourceUrl, color, palette, observationDate, observationFrequency }: {
   title: string;
   value: string;
   detail: string;
   series: Array<{ date: string; value: number }>;
+  observationDate?: string;
+  observationFrequency?: string;
   unit: string;
   sourceUrl: string;
   color: string;
   palette: ReturnType<typeof getThemePalette>;
 }) {
-  const gradientId = `supplemental-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
   return (
-    <a href={sourceUrl} target="_blank" rel="noreferrer" className="block bg-terminal-elevated border border-terminal-border rounded p-3 hover:bg-terminal-hover transition-colors">
+    <div className="bg-terminal-elevated border border-terminal-border rounded p-3">
       <div className="flex items-start justify-between gap-2">
         <div>
           <div className="text-terminal-muted text-xs font-bold tracking-wider">{title}</div>
           <div className="text-terminal-text font-bold text-lg tabular-nums mt-1">{value}</div>
         </div>
-        <span className="text-terminal-faint text-[10px]">SOURCE ↗</span>
+        <a href={sourceUrl} target="_blank" rel="noreferrer" aria-label={`Source for ${title}`} className="text-terminal-faint text-[10px] hover:text-terminal-accent">SOURCE ↗</a>
       </div>
       <div className="text-terminal-faint text-[10px] mt-1">{detail}</div>
-      <div className="h-28 mt-2">
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={series}>
-            <defs>
-              <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor={color} stopOpacity={0.3} />
-                <stop offset="95%" stopColor={color} stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid stroke={palette.chartGrid} strokeDasharray="3 3" />
-            <XAxis dataKey="date" tick={{ fill: palette.muted, fontSize: 10 }} tickFormatter={(date: string) => date.slice(2, 7)} axisLine={{ stroke: palette.border }} tickLine={false} />
-            <YAxis domain={['auto', 'auto']} tick={{ fill: palette.muted, fontSize: 10 }} axisLine={{ stroke: palette.border }} tickLine={false} tickFormatter={(point: number) => point.toFixed(1)} />
-            <Tooltip contentStyle={{ background: palette.elevated, border: `1px solid ${palette.border}`, borderRadius: '4px', fontSize: '11px' }} labelStyle={{ color: palette.text }} formatter={(point: number) => [`${point.toFixed(2)} ${unit}`, title]} />
-            <Area type="monotone" dataKey="value" stroke={color} fill={`url(#${gradientId})`} strokeWidth={2} />
-          </AreaChart>
-        </ResponsiveContainer>
-      </div>
-    </a>
+      {macroObservationAge(observationDate, observationFrequency) && <div className="text-terminal-accent text-[10px] mt-1">{macroObservationAge(observationDate, observationFrequency)}</div>}
+      <MacroHistoryChart title={title} unit={unit} palette={palette} lines={[{ id: 'value', label: title, series, stroke: color }]} />
+    </div>
   );
 }
 

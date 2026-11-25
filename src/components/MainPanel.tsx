@@ -1,31 +1,32 @@
+import { NewsWorkspace } from './NewsWorkspace';
+import { lazy, Suspense } from 'react';
 import { useTerminalStore } from '../store/useTerminalStore';
-import { OverviewPanel } from '../panels/OverviewPanel';
-import { OpportunitiesPanel } from '../panels/OpportunitiesPanel';
-import { EquityPanel } from '../panels/EquityPanel';
-import { ChartPanel } from '../panels/ChartPanel';
-import { NewsGeopoliticsPanel } from '../panels/GeopoliticsPanel';
-import { PredictionPanel } from '../panels/PredictionPanel';
-import { MacroPanel } from '../panels/MacroPanel';
-import { PortfolioPanel } from '../panels/PortfolioPanel';
-import { HeatmapPanel } from '../panels/HeatmapPanel';
-import { ForexPanel } from '../panels/ForexPanel';
-import { CryptoPanel } from '../panels/CryptoPanel';
-import { HelpPanel } from '../panels/HelpPanel';
-import { ETFPanel } from '../panels/ETFPanel';
-import { SettingsPanel } from '../panels/SettingsPanel';
-import { MultiAssetPanel } from '../panels/MultiAssetPanel';
+import { PanelBoundary } from './PanelBoundary';
+
+const OverviewPanel = lazy(() => import('../panels/OverviewPanel').then(m => ({ default: m.OverviewPanel })));
+const EquityPanel = lazy(() => import('../panels/EquityPanel').then(m => ({ default: m.EquityPanel })));
+const ChartPanel = lazy(() => import('../panels/ChartPanel').then(m => ({ default: m.ChartPanel })));
+
+const PredictionPanel = lazy(() => import('../panels/PredictionPanel').then(m => ({ default: m.PredictionPanel })));
+const MacroPanel = lazy(() => import('../panels/MacroPanel').then(m => ({ default: m.MacroPanel })));
+const PortfolioPanel = lazy(() => import('../panels/PortfolioPanel').then(m => ({ default: m.PortfolioPanel })));
+const HeatmapPanel = lazy(() => import('../panels/HeatmapPanel').then(m => ({ default: m.HeatmapPanel })));
+const ForexPanel = lazy(() => import('../panels/ForexPanel').then(m => ({ default: m.ForexPanel })));
+const CryptoPanel = lazy(() => import('../panels/CryptoPanel').then(m => ({ default: m.CryptoPanel })));
+const HelpPanel = lazy(() => import('../panels/HelpPanel').then(m => ({ default: m.HelpPanel })));
+const ETFPanel = lazy(() => import('../panels/ETFPanel').then(m => ({ default: m.ETFPanel })));
+const SettingsPanel = lazy(() => import('../panels/SettingsPanel').then(m => ({ default: m.SettingsPanel })));
+const MultiAssetPanel = lazy(() => import('../panels/MultiAssetPanel').then(m => ({ default: m.MultiAssetPanel })));
 
 export function MainPanel() {
   const { activePanel } = useTerminalStore();
 
+  const news = activePanel === 'news' || activePanel === 'geopolitics';
   const panels: Record<string, JSX.Element> = {
     overview: <OverviewPanel />,
-    opportunities: <OpportunitiesPanel />,
     equity: <EquityPanel />,
     chart: <ChartPanel />,
     multiAsset: <MultiAssetPanel />,
-    news: <NewsGeopoliticsPanel />,
-    geopolitics: <NewsGeopoliticsPanel />,
     predictions: <PredictionPanel />,
     macro: <MacroPanel />,
     portfolio: <PortfolioPanel />,
@@ -41,7 +42,12 @@ export function MainPanel() {
 
   return (
     <div className="h-full overflow-hidden bg-terminal-bg">
-      {panels[activePanel] ?? <OverviewPanel />}
+      {!news && <PanelBoundary key={activePanel}>
+        <Suspense fallback={<div role="status" className="p-4 text-sm text-terminal-muted">Opening workspace…</div>}>
+          {panels[activePanel] ?? <OverviewPanel />}
+        </Suspense>
+      </PanelBoundary>}
+      <NewsWorkspace active={news} />
     </div>
   );
 }

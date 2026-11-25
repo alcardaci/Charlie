@@ -55,7 +55,7 @@ export function normalizeOecdCli(payload: OecdPayload, sourceUrl: string): OecdI
   }
 
   return OECD_CLI_COUNTRIES.flatMap((definition) => {
-    const series = (seriesByCountry.get(definition.code) ?? []).sort((left, right) => left.date.localeCompare(right.date)).slice(-18);
+    const series = (seriesByCountry.get(definition.code) ?? []).sort((left, right) => left.date.localeCompare(right.date));
     const latest = series[series.length - 1];
     const previous = series[series.length - 2];
     return [{
@@ -141,7 +141,7 @@ export function normalizeOecdComparableSeries(
 
   const series = contract.transformation === 'derived-qoq-percent'
     ? deriveComparableGrowth(rawSeries, contract)
-    : rawSeries.slice(-24);
+    : rawSeries;
   if (!series.length) return null;
   const latest = series[series.length - 1];
   const previous = series[series.length - 2];
@@ -212,7 +212,7 @@ function deriveComparableGrowth(
     const value = ((point.value / previous.value) - 1) * 100;
     if (!Number.isFinite(value) || Math.abs(value) > contract.maxAbsValue) return [];
     return [{ date: point.date, value }];
-  }).slice(-16);
+  });
 }
 
 function areConsecutiveQuarters(previous: string, current: string): boolean {

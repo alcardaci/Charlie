@@ -1,8 +1,6 @@
 import { PanelType } from '../types';
 
 export const SCREEN_COMMANDS: Record<string, PanelType> = {
-  OPP: 'opportunities', OPPS: 'opportunities', IDEA: 'opportunities', IDEAS: 'opportunities', OPPORTUNITY: 'opportunities', OPPORTUNITIES: 'opportunities',
-  DISC: 'opportunities', DISCOVER: 'opportunities', DISCOVERY: 'opportunities', THEME: 'opportunities', THEMES: 'opportunities',
   NEWS: 'news', TOP: 'news',
   GEO: 'geopolitics', GEOPOL: 'geopolitics', GEOPOLITICS: 'geopolitics', WORLD: 'geopolitics',
   PRED: 'predictions', PMKT: 'predictions', POLY: 'predictions', PREDICTION: 'predictions', PREDICTIONS: 'predictions', POLYMARKET: 'predictions',
@@ -13,7 +11,8 @@ export const SCREEN_COMMANDS: Record<string, PanelType> = {
   YIELD: 'yield', WIRP: 'yield', BYFC: 'yield',
   ETF: 'etf', ETFS: 'etf',
   MACRO: 'macro', ECO: 'macro', ECON: 'macro',
-  SCREEN: 'screener', EQS: 'screener',
+  RESEARCH: 'equity',
+  SCREEN: 'overview', EQS: 'overview',
   HOME: 'overview', OVERVIEW: 'overview', WB: 'overview', WL: 'overview',
   SETTINGS: 'settings', SETUP: 'settings', CONFIG: 'settings', AI: 'settings',
   HELP: 'help',
@@ -37,6 +36,8 @@ export function isSymbolToken(value: string): boolean {
 
 export function getScreenCommandPanel(raw: string): PanelType | undefined {
   const normalized = normalizeCommandInput(raw);
+  // Retired commands remain reserved so they cannot become accidental ticker searches.
+  if (['OPP', 'OPPS', 'IDEA', 'IDEAS', 'OPPORTUNITY', 'OPPORTUNITIES', 'DISC', 'DISCOVER', 'DISCOVERY', 'THEME', 'THEMES'].includes(normalized)) return 'overview';
   return normalized ? SCREEN_COMMANDS[normalized] : undefined;
 }
 

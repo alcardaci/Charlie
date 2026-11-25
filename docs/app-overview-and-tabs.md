@@ -23,7 +23,7 @@ It keeps a command-driven shell around a routed center panel, then layers persis
   - `<TICKER> NEWS`: ticker-specific news feed
   - `<TICKER> WL`: add the symbol to the watchlist
 - Named workspaces:
-  - `OPPS`, `NEWS`, `GEO`, `PRED`, `MACRO`, `PORT`, `HEAT`, `FX`, `CRYPTO`, `ETF`, `HELP`, `SETTINGS`
+  - `NEWS`, `GEO`, `PRED`, `MACRO`, `PORT`, `HEAT`, `FX`, `CRYPTO`, `ETF`, `HELP`, `SETTINGS`
   - `SETTINGS` / `AI` / `CONFIG`
 - `YIELD`, `WIRP`, and `BYFC` are still accepted, but they route into the merged macro workspace rather than a separate yield panel
 - `SCREEN` / `EQS` still exist in command parsing, but no screener panel is mounted
@@ -58,7 +58,7 @@ It keeps a command-driven shell around a routed center panel, then layers persis
 
 - Yahoo Finance news/search
   - General market headlines, ticker news, topic feeds, and some geopolitics candidate stories
-- GDELT DOC 2.0
+- GDELT DOC 2.0 and the Global Knowledge Graph archive
   - Supplemental geopolitical story intake and clustering support
 - Caldara-Iacoviello GPR dataset
   - Official geopolitical risk time series used by the geopolitics panel
@@ -110,31 +110,9 @@ How it is processed:
 - Multi-topic news is merged and deduplicated before being passed into the overview AI summary request
 - Portfolio holdings are repriced from live quotes to create the overview allocation and P/L snapshot
 
-### 2. Opportunities (`OPP`, `OPPS`, `OPPORTUNITIES`, `THEMES`, `DISCOVERY`)
+### Retired Opportunities workspace
 
-What it contains:
-
-- A live discovery workspace
-- A user-driven topic workspace based on typed themes
-- Theme cards, signal counts, linked assets, and optional AI refinement
-- A connection gate when no OpenAI key is configured locally
-
-Data sources:
-
-- Yahoo Finance topic feeds
-- Geopolitics hotspot counts from the geopolitics pipeline
-- Macro release calendar
-- Polymarket forecasts
-- Derived market sentiment
-- OpenAI for optional discovery and guidance passes
-
-How it is processed:
-
-- If no OpenAI key is configured locally, the panel does not populate and instead prompts the user to open `SETTINGS`
-- The panel first assembles a shared base snapshot from news, geopolitics, macro, prediction, sentiment, watchlist, portfolio, and quotes
-- A deterministic clustering engine turns those signals into themes even without AI
-- If AI is enabled, the same normalized signal payload is sent for theme labeling and higher-level guidance
-- The custom-topic side separately searches the archive for the user’s requested topics, merges in extra quote context, then builds topic-specific dashboards
+Opportunities is removed from current navigation and runtime mounting. Legacy commands return to Overview. A replacement will be proposed separately and requires user approval before implementation.
 
 ### 3. Equity Research (`<TICKER>`)
 
@@ -188,32 +166,36 @@ What it contains:
 - Search/archive mode
 - Compact and extended display modes
 - Official geopolitical risk cards and chart
-- Global event map with country clustering and hotspot summaries
+- Global event map with linked country hotspots below it
+- Live media player and a saved, editable card layout
 
 Data sources:
 
 - Yahoo Finance news/search endpoints
 - Caldara-Iacoviello GPR dataset
-- GDELT DOC 2.0
-- Yahoo Finance headlines
+- GDELT DOC 2.0 and the Global Knowledge Graph archive
 - OpenAI for event extraction and summarization
 
 How it is processed:
 
 - The top news section still switches between ticker mode and topic-feed mode depending on navigation state
 - Topic feeds can combine several related Yahoo queries, then deduplicate the result set
+- Visible market and ticker feeds check Yahoo every minute. The wider GEO search checks Yahoo and GDELT every five minutes. New reports appear at the top or wait behind a “Show new headlines” button while the reader is scrolled down.
+- The headline bar below the price ticker shares the All/World feed. New stories and highlights enter between headlines. Hovering or focusing a headline holds the desktop scroll. On mobile and with reduced motion, headlines scroll manually.
+- Recent material announcements from official sources and developing stories reported by multiple publishers can appear above the headlines. GDELT timestamps describe indexing. Alerts use publisher-dated reports and link to their sources.
 - Archive search narrows the feed by topic, lookback window, and region before display
 - Mixed headlines are ingested and deduplicated into a common `NewsItem` shape
-- Headlines are classified into countries/events, then grouped into country-level hotspot counts
-- The risk index is fetched separately from the official dataset and shown alongside the faster-moving headline map
-- AI is optional and used as an enrichment step rather than as the only hotspot pipeline
+- OpenAI identifies and scores events in the collected headlines. Charlie groups reviewed incidents into country hotspots.
+- The risk index is fetched separately from the official dataset and shown alongside the event map
+- The map requires an OpenAI connection. When a review is incomplete, it can reuse recent AI assessments for the same reports and shows the review status.
 
 ### 6. Prediction Markets (`PRED`, `PMKT`, `POLY`, `PREDICTIONS`, `POLYMARKET`)
 
 What it contains:
 
 - Forecast cards
-- Probabilities, leading outcomes, liquidity, and volume
+- Quoted YES/NO prices, 24-hour changes in percentage points, liquidity, and dollar trading volume
+- Leading choices side by side for Polymarket events with mutually exclusive outcomes
 - Theme/category context
 
 Data sources:
@@ -222,8 +204,10 @@ Data sources:
 
 How it is processed:
 
-- The app requests a capped forecast set, normalizes contract metadata, and ranks it into a compact snapshot
-- The same normalized forecast objects are reused in overview and opportunities workflows
+- Charlie fetches open events in batches of up to 120, ordered by daily trading volume. Within each batch it gives precedence to contested, actively traded events, covers different topics and limits repeated series when alternatives are available. If either side of a binary question, or the favourite in a single-winner event, reaches 95%, the event is featured after more open ones.
+- Predictions initially displays 12 cards. Show more reveals the remaining eligible events. Load more continues through Polymarket’s catalogue, appending distinct events. The opening view refreshes every two minutes. While browsing additional results, Refresh updates the loaded pages.
+- A binary card uses that contract’s own trading figures. For single-winner events, the card shows the highest quoted YES prices and labels event-wide activity separately. Missing data appears as a dash.
+- The same normalized forecast objects are reused in the Overview and Predictions panels
 
 ### 7. Macro + Yield (`MACRO`, `ECO`, `ECON`, `YIELD`, `WIRP`, `BYFC`)
 
@@ -385,7 +369,7 @@ How it is processed:
 ### Right-side news rail
 
 - Usually visible on desktop
-- Hidden when the active workspace already needs more room, such as `news`, `geopolitics`, `predictions`, or `opportunities`
+- Hidden when the active workspace already needs more room, such as `news`, `geopolitics`, `predictions`
 
 ### Panel companion
 

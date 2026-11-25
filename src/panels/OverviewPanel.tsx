@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bot, Info, Loader2, Sparkles } from 'lucide-react';
 import {
+  fetchForexPairs,
   fetchMacroReleaseCalendar,
   fetchNewsFeed,
   fetchOpenAIKeyStatus,
@@ -15,10 +16,12 @@ import type { OpenAIDebugPayloadEntry } from '../api/finance';
 import { useTerminalStore } from '../store/useTerminalStore';
 import { AIMarketSummary, MarketSentimentPillar, NewsItem, Quote } from '../types';
 import { fmt, changeColor } from '../utils/formatters';
+import { formatSentimentScore } from '../utils/marketPanelDisplay';
 import { buildTimestampedJsonFilename, downloadJsonFile } from '../utils/downloadJson';
 import { EventsCalendar } from '../components/EventsCalendar';
 import { PredictionMarketsSection } from '../components/PredictionMarketsSection';
 import { DEFAULT_OVERVIEW_SUMMARY_SYSTEM_PROMPT } from '../utils/openaiConfig';
+import { buildPortfolioOverviewSnapshot, normalizePortfolioCurrency, quoteCurrencyUnit, type PortfolioOverviewSnapshot } from '../utils/portfolioValuation';
 
 const INDICES = ['^GSPC', '^DJI', '^IXIC', '^RUT', '^VIX'];
 const INDEX_NAMES: Record<string, string> = {
@@ -48,30 +51,33 @@ const MOVERS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'BRK-B'
 
 const SENTIMENT_EXPLAINERS: Record<'composite' | MarketSentimentPillar['key'], { description: string; source: string }> = {
   composite: {
-    description: 'Combines the four live sentiment pillars into one market regime score, summarizing whether risk appetite is constructive, neutral, or defensive.',
-    source: 'Derived from live Yahoo Finance quotes for ^VIX, SPY, QQQ, IWM, RSP, HYG, LQD, TLT, and GLD.',
+    description: 'The score is the equal-weight average of the available pillars. A higher score indicates greater risk appetite.',
+    source: 'Derived from latest available Yahoo Finance quotes for ^VIX, SPY, QQQ, IWM, RSP, HYG, LQD, TLT, and GLD.',
   },
   volatility: {
-    description: 'Tracks how calm or stressed the equity tape is. Lower implied volatility supports the score; higher volatility drags it down.',
-    source: 'Live Yahoo Finance quote data from ^VIX.',
+    description: 'A lower score indicates greater market stress. The score reaches zero when the VIX is at least 32 and has risen at least 4% from its previous close.',
+    source: 'Latest available Yahoo Finance quote data from ^VIX.',
   },
   breadth: {
     description: 'Measures how broad market participation is by comparing small caps and equal-weight performance against the S&P 500.',
-    source: 'Live Yahoo Finance quote data from SPY, IWM, and RSP.',
+    source: 'Latest available Yahoo Finance quote data from SPY, IWM, and RSP.',
   },
   credit: {
     description: 'Measures risk appetite across credit and duration by comparing high-yield credit, investment grade credit, and Treasury behavior.',
-    source: 'Live Yahoo Finance quote data from HYG, LQD, and TLT.',
+    source: 'Latest available Yahoo Finance quote data from HYG, LQD, and TLT.',
   },
   leadership: {
-    description: 'Tracks whether higher-beta leadership is supporting the market or whether defensive assets are taking over.',
-    source: 'Live Yahoo Finance quote data from QQQ, SPY, and GLD.',
+    description: 'Starts at 50, adds 10 times the daily QQQ return and 14 times its lead over SPY, then subtracts 6 times the GLD return. Returns are in percentage points. The score is capped at 0 and 100.',
+    source: 'Latest available Yahoo Finance quote data from QQQ, SPY, and GLD.',
   },
 };
 
 const SENTIMENT_SYMBOL_LABELS: Record<string, string> = {
   '^VIX': 'VIX',
 };
+const sentimentQuoteClock = new Intl.DateTimeFormat('en-US', {
+  month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York', timeZoneName: 'short',
+});
 const OVERVIEW_SUMMARY_HARNESS = 'comprehensive' as const;
 const US_EQUITY_MARKET_OPEN_STATES = new Set(['REGULAR']);
 const OVERVIEW_SUMMARY_NEWS_TOPICS = [
@@ -376,21 +382,6 @@ function buildOverviewRequestContext(
   };
 }
 
-type PortfolioOverviewSnapshot = {
-  lotCount: number;
-  assetCount: number;
-  totalCost: number;
-  totalValue: number;
-  gainLoss: number;
-  gainLossPct: number;
-  topHoldings: Array<{
-    symbol: string;
-    currentValue: number;
-    gainLoss: number;
-    weightPct: number;
-  }>;
-};
-
 function StatCard({ label, value, change, changePct, onClick }: {
   label: string; value: string; change?: string; changePct?: string;
   onClick?: () => void;
@@ -417,11 +408,13 @@ function StatCard({ label, value, change, changePct, onClick }: {
 }
 
 export function OverviewPanel() {
+  const queryClient = useQueryClient();
   const {
     setActivePanel,
     debugMode,
     openAISettings,
     portfolio,
+    portfolioDisplayCurrency: displayCurrency,
     marketOverviewSummary,
     marketOverviewSummaryCollapsed,
     updateOpenAISettings,
@@ -435,50 +428,56 @@ export function OverviewPanel() {
   const monthFrom = toYmd(new Date(today.getFullYear(), today.getMonth(), 1));
   const monthTo = toYmd(new Date(today.getFullYear(), today.getMonth() + 1, 0));
 
-  const { data: indices = [], isLoading: loadingIdx } = useQuery({
+  const { data: indices = [], isLoading: loadingIdx, isError: indexError, isFetching: refreshingIndices, dataUpdatedAt: indicesUpdatedAt } = useQuery({
     queryKey: ['indices'],
     queryFn: () => fetchQuotes(INDICES),
-    refetchInterval: 15000,
-    staleTime: 5000,
+    refetchInterval: 60000,
+    staleTime: 30000,
+    retry: 1,
   });
 
-  const { data: sectors = [], isLoading: loadingSectors } = useQuery({
+  const { data: sectors = [], isLoading: loadingSectors, isError: sectorError } = useQuery({
     queryKey: ['sectors'],
     queryFn: () => fetchQuotes(SECTORS),
-    refetchInterval: 30000,
-    staleTime: 10000,
+    refetchInterval: 60000,
+    staleTime: 30000,
+    retry: 1,
   });
 
-  const { data: movers = [] } = useQuery({
+  const { data: movers = [], isError: moversError } = useQuery({
     queryKey: ['movers'],
     queryFn: () => fetchQuotes(MOVERS),
-    refetchInterval: 15000,
-    staleTime: 5000,
+    refetchInterval: 60000,
+    staleTime: 30000,
+    retry: 1,
   });
 
-  const { data: sentiment, isLoading: loadingSentiment } = useQuery({
+  const { data: sentiment, isLoading: loadingSentiment, isError: sentimentError } = useQuery({
     queryKey: ['market-sentiment'],
     queryFn: fetchSentimentSnapshot,
-    refetchInterval: 15000,
-    staleTime: 5000,
+    refetchInterval: 60000,
+    staleTime: 30000,
+    retry: 1,
   });
 
-  const { data: crossAssetQuotes = [], isLoading: loadingCrossAssets } = useQuery({
+  const { data: crossAssetQuotes = [], isLoading: loadingCrossAssets, isError: crossAssetError } = useQuery({
     queryKey: ['overview-cross-asset'],
     queryFn: () => fetchQuotes([...COMMODITIES, ...CURRENCIES]),
-    refetchInterval: 15000,
-    staleTime: 5000,
+    refetchInterval: 60000,
+    staleTime: 30000,
+    retry: 1,
   });
   const portfolioSymbols = useMemo(
-    () => Array.from(new Set(portfolio.map((lot) => lot.symbol.toUpperCase()))),
+    () => Array.from(new Set(portfolio.map((lot) => lot.symbol.trim().toUpperCase()))).sort(),
     [portfolio]
   );
-  const { data: portfolioQuotes = [], isLoading: loadingPortfolioSnapshot } = useQuery({
-    queryKey: ['overview-portfolio-quotes', portfolioSymbols],
+  const { data: portfolioQuotes = [], isLoading: loadingPortfolioSnapshot, isError: portfolioQuoteError } = useQuery({
+    queryKey: ['portfolio-quotes', portfolioSymbols],
     queryFn: () => fetchQuotes(portfolioSymbols),
     enabled: portfolioSymbols.length > 0,
-    refetchInterval: 15000,
-    staleTime: 5000,
+    refetchInterval: 60000,
+    staleTime: 30000,
+    retry: 1,
   });
 
   const { data: predictionSnapshot, isLoading: loadingPredictions } = useQuery({
@@ -505,7 +504,7 @@ export function OverviewPanel() {
   const { data: overviewNews = [] } = useQuery({
     queryKey: ['overview-summary-news'],
     queryFn: fetchOverviewSummaryNewsMultiTopic,
-    refetchInterval: 300000,
+    enabled: false,
     staleTime: 120000,
     retry: 1,
   });
@@ -516,80 +515,31 @@ export function OverviewPanel() {
     }
   }, [keyStatus?.configured, openAISettings.hasStoredApiKey, updateOpenAISettings]);
 
-  const gainers = [...movers].sort((a, b) => (b.regularMarketChangePercent ?? 0) - (a.regularMarketChangePercent ?? 0)).slice(0, 8);
-  const losers = [...movers].sort((a, b) => (a.regularMarketChangePercent ?? 0) - (b.regularMarketChangePercent ?? 0)).slice(0, 8);
+  const gainers = movers.filter((quote) => Number.isFinite(quote.regularMarketChangePercent) && quote.regularMarketChangePercent > 0).sort((a, b) => b.regularMarketChangePercent - a.regularMarketChangePercent).slice(0, 8);
+  const losers = movers.filter((quote) => Number.isFinite(quote.regularMarketChangePercent) && quote.regularMarketChangePercent < 0).sort((a, b) => a.regularMarketChangePercent - b.regularMarketChangePercent).slice(0, 8);
   const todayYmd = toYmd(today);
   const upcomingEvents = (calendarData?.events ?? []).filter((event) => event.date >= todayYmd).slice(0, 8);
   const predictions = predictionSnapshot?.forecasts ?? [];
   const sentimentSymbols = sentiment ? Array.from(new Set(sentiment.pillars.flatMap((pillar) => pillar.symbols))) : [];
-  const portfolioQuoteMap = useMemo(
-    () => new Map(portfolioQuotes.map((quote) => [quote.symbol.toUpperCase(), quote])),
-    [portfolioQuotes]
-  );
-  const portfolioSnapshot = useMemo<PortfolioOverviewSnapshot>(() => {
-    if (!portfolio.length) {
-      return {
-        lotCount: 0,
-        assetCount: 0,
-        totalCost: 0,
-        totalValue: 0,
-        gainLoss: 0,
-        gainLossPct: 0,
-        topHoldings: [],
-      };
-    }
-
-    const grouped = new Map<string, { symbol: string; totalCost: number; currentValue: number; gainLoss: number }>();
-    let totalCost = 0;
-    let totalValue = 0;
-
-    for (const lot of portfolio) {
-      const symbol = lot.symbol.toUpperCase();
-      const quote = portfolioQuoteMap.get(symbol);
-      const currentPrice = quote?.regularMarketPrice ?? lot.avgCost;
-      const lotCost = lot.avgCost * lot.shares;
-      const lotValue = currentPrice * lot.shares;
-      const lotGainLoss = lotValue - lotCost;
-
-      totalCost += lotCost;
-      totalValue += lotValue;
-
-      const existing = grouped.get(symbol);
-      if (existing) {
-        existing.totalCost += lotCost;
-        existing.currentValue += lotValue;
-        existing.gainLoss += lotGainLoss;
-      } else {
-        grouped.set(symbol, {
-          symbol,
-          totalCost: lotCost,
-          currentValue: lotValue,
-          gainLoss: lotGainLoss,
-        });
-      }
-    }
-
-    const gainLoss = totalValue - totalCost;
-    const topHoldings = Array.from(grouped.values())
-      .sort((left, right) => right.currentValue - left.currentValue)
-      .slice(0, 4)
-      .map((holding) => ({
-        symbol: holding.symbol,
-        currentValue: holding.currentValue,
-        gainLoss: holding.gainLoss,
-        weightPct: totalValue ? (holding.currentValue / totalValue) * 100 : 0,
-      }));
-
-    return {
-      lotCount: portfolio.length,
-      assetCount: grouped.size,
-      totalCost,
-      totalValue,
-      gainLoss,
-      gainLossPct: totalCost ? (gainLoss / totalCost) * 100 : 0,
-      topHoldings,
-    };
-  }, [portfolio, portfolioQuoteMap]);
+  const fxCurrencies = [...new Set([...portfolio.map((lot) => normalizePortfolioCurrency(lot.currency)), ...portfolioQuotes.map((quote) => quoteCurrencyUnit(quote.currency).currency)])].sort();
+  const fxCurrencyKey = fxCurrencies.join(',');
+  const { data: portfolioFx = [], isLoading: loadingPortfolioFx, isError: portfolioFxError } = useQuery({
+    queryKey: ['portfolio-fx-rates', fxCurrencyKey, displayCurrency],
+    queryFn: () => fetchForexPairs(fxCurrencies.filter((currency) => currency !== displayCurrency).map((currency) => ({ base: currency, quote: displayCurrency }))),
+    enabled: portfolioSymbols.length > 0 && fxCurrencies.some((currency) => currency !== displayCurrency),
+    staleTime: 300000,
+    refetchInterval: 300000,
+    retry: 1,
+  });
+  const portfolioSnapshot = useMemo(() => buildPortfolioOverviewSnapshot(portfolio, portfolioQuotes, displayCurrency, portfolioFx), [portfolio, portfolioQuotes, displayCurrency, portfolioFx]);
+  const quoteIssues = [
+    indexError || (!loadingIdx && indices.length < INDICES.length) ? 'major indices' : null,
+    sectorError || (!loadingSectors && sectors.length < SECTORS.length) ? 'sectors' : null,
+    moversError ? 'tracked-stock movers' : null,
+    crossAssetError || (!loadingCrossAssets && crossAssetQuotes.length < COMMODITIES.length + CURRENCIES.length) ? 'cross-asset quotes' : null,
+    sentimentError ? 'sentiment inputs' : null,
+    portfolioQuoteError || portfolioFxError ? 'portfolio inputs' : null,
+  ].filter((label): label is string => label != null);
 
   const overviewSnapshot = useMemo(() => ({
     indices: INDICES.map((symbol) => normalizeOverviewQuote(indices.find((item) => item.symbol === symbol), INDEX_NAMES[symbol] ?? symbol)),
@@ -609,6 +559,7 @@ export function OverviewPanel() {
             score: pillar.score,
             signal: pillar.signal,
             detail: pillar.detail,
+            quoteTime: pillar.quoteTime == null ? null : new Date(pillar.quoteTime).toISOString(),
           })),
         }
       : null,
@@ -623,17 +574,22 @@ export function OverviewPanel() {
     })),
     predictions: predictions.map((forecast) => ({
       question: forecast.question,
+      event: forecast.eventTitle,
       theme: forecast.theme,
       yesProbability: forecast.yesPrice,
       noProbability: forecast.noPrice,
+      yesChange24hr: forecast.yesChange24hr,
+      leadingChoices: forecast.outcomeGroup?.outcomes,
       endDate: forecast.endDate,
       volume24hr: forecast.volume24hr,
     })),
     news: overviewNews,
-    portfolio: portfolioSnapshot.assetCount > 0
+    portfolio: portfolioSnapshot.assetCount > 0 && portfolioSnapshot.complete
       ? {
           lotCount: portfolioSnapshot.lotCount,
           assetCount: portfolioSnapshot.assetCount,
+          currency: portfolioSnapshot.currency,
+          valuationMethod: 'latest quotes and latest FX rates; recorded lot costs',
           totalCost: portfolioSnapshot.totalCost,
           totalValue: portfolioSnapshot.totalValue,
           gainLoss: portfolioSnapshot.gainLoss,
@@ -646,12 +602,18 @@ export function OverviewPanel() {
           })),
         }
       : null,
-  }), [indices, sectors, gainers, losers, crossAssetQuotes, sentiment, upcomingEvents, predictions, overviewNews, portfolioSnapshot]);
+    portfolioCoverage: {
+      currency: displayCurrency,
+      complete: portfolioSnapshot.complete,
+      missingQuotes: portfolioSnapshot.missingQuoteSymbols,
+      missingFx: portfolioSnapshot.missingFxCurrencies,
+    },
+  }), [displayCurrency, indices, sectors, gainers, losers, crossAssetQuotes, sentiment, upcomingEvents, predictions, overviewNews, portfolioSnapshot]);
 
   const summaryMutation = useMutation({
     mutationFn: async () => {
       const requestedAt = new Date();
-      const latestOverviewNews = await fetchOverviewSummaryNewsMultiTopic().catch(() => overviewNews);
+      const latestOverviewNews = await queryClient.fetchQuery({ queryKey: ['overview-summary-news'], queryFn: fetchOverviewSummaryNewsMultiTopic, staleTime: 120000 }).catch(() => overviewNews);
       const requestContext = buildOverviewRequestContext(requestedAt, indices, latestOverviewNews);
 
       return generateMarketOverviewSummary({
@@ -702,6 +664,11 @@ export function OverviewPanel() {
           {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
         </span>
       </div>
+
+      <div className="text-[11px] text-terminal-faint" role="status">
+        Public market quotes may be delayed. {refreshingIndices ? 'Refreshing…' : indicesUpdatedAt ? `Quotes fetched ${new Date(indicesUpdatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.` : 'No quote snapshot yet.'}
+      </div>
+      {quoteIssues.length > 0 && <div className="rounded border border-terminal-accent/30 bg-terminal-accent/5 px-3 py-2 text-xs text-terminal-muted" role="status">Some data is unavailable or could not refresh: {quoteIssues.join(', ')}. Missing values stay blank; cached observations may still be shown.</div>}
 
       <AISummaryCard
         summary={marketOverviewSummary}
@@ -800,7 +767,7 @@ export function OverviewPanel() {
 
       <PortfolioSnapshotCard
         snapshot={portfolioSnapshot}
-        loading={loadingPortfolioSnapshot}
+        loading={loadingPortfolioSnapshot || loadingPortfolioFx}
         onOpenPortfolio={() => setActivePanel('portfolio')}
         onSelectSymbol={(symbol) => setActivePanel('equity', symbol)}
       />
@@ -818,10 +785,10 @@ export function OverviewPanel() {
             <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-1.5">
               {SECTORS.map((sym) => {
                 const q = sectors.find((s) => s.symbol === sym);
-                const pct = q?.regularMarketChangePercent ?? 0;
-                const isPos = pct >= 0;
-                const intensity = Math.min(Math.abs(pct) / 3, 1);
-                const bg = isPos
+                const pct = q && Number.isFinite(q.regularMarketChangePercent) ? q.regularMarketChangePercent : null;
+                const isPos = pct != null && pct > 0;
+                const intensity = pct == null ? 0 : Math.min(Math.abs(pct) / 3, 1);
+                const bg = pct == null || pct === 0 ? 'rgba(128,128,128,0.08)' : isPos
                   ? `rgba(63,185,80,${0.1 + intensity * 0.3})`
                   : `rgba(248,81,73,${0.1 + intensity * 0.3})`;
 
@@ -833,7 +800,7 @@ export function OverviewPanel() {
                     style={{ backgroundColor: bg }}
                   >
                     <div className="text-terminal-muted text-xs truncate">{SECTOR_NAMES[sym]}</div>
-                    <div className={`text-xs font-bold tabular-nums mt-0.5 ${isPos ? 'text-terminal-positive' : 'text-terminal-negative'}`}>
+                    <div className={`text-xs font-bold tabular-nums mt-0.5 ${pct == null || pct === 0 ? 'text-terminal-muted' : isPos ? 'text-terminal-positive' : 'text-terminal-negative'}`}>
                       {fmt.pct(pct)}
                     </div>
                     <div className="text-terminal-faint text-xs tabular-nums">{sym}</div>
@@ -846,8 +813,8 @@ export function OverviewPanel() {
 
         {/* Gainers and Losers */}
         <div className="flex flex-col sm:flex-row gap-3 flex-shrink-0 overflow-x-auto xl:overflow-visible pb-1 xl:pb-0">
-          <MoverTable title="TOP GAINERS" data={gainers} onSelect={(s) => setActivePanel('equity', s)} />
-          <MoverTable title="TOP LOSERS" data={losers} onSelect={(s) => setActivePanel('equity', s)} />
+          <MoverTable title="TRACKED GAINERS" data={gainers} onSelect={(s) => setActivePanel('equity', s)} />
+          <MoverTable title="TRACKED LOSERS" data={losers} onSelect={(s) => setActivePanel('equity', s)} />
         </div>
       </div>
 
@@ -1063,19 +1030,21 @@ function PortfolioSnapshotCard({
         </div>
       ) : (
         <div className="rounded border border-terminal-border bg-terminal-panel p-3">
+          <div className="mb-2 text-[11px] text-terminal-faint">Valued in {snapshot.currency} using latest available FX rates.</div>
+          {!snapshot.complete && <div className="mb-3 rounded border border-terminal-accent/30 bg-terminal-accent/5 px-2 py-1.5 text-xs text-terminal-muted" role="status">Portfolio valuation is incomplete. {snapshot.missingQuoteSymbols.length > 0 && `Missing quotes: ${snapshot.missingQuoteSymbols.join(', ')}. `}{snapshot.missingFxCurrencies.length > 0 && `Missing FX: ${snapshot.missingFxCurrencies.join(', ')}. `}Current value, P&L, and allocation are withheld until coverage is complete.</div>}
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-2">
             <SnapshotStat label="ASSETS" value={String(snapshot.assetCount)} />
             <SnapshotStat label="LOTS" value={String(snapshot.lotCount)} />
-            <SnapshotStat label="TOTAL VALUE" value={fmt.marketCap(snapshot.totalValue)} />
-            <SnapshotStat label="TOTAL COST" value={fmt.marketCap(snapshot.totalCost)} />
+            <SnapshotStat label="TOTAL VALUE" value={formatSnapshotCurrency(snapshot.totalValue, snapshot.currency)} />
+            <SnapshotStat label="TOTAL COST" value={formatSnapshotCurrency(snapshot.totalCost, snapshot.currency)} />
             <SnapshotStat
               label="TOTAL P&L"
-              value={`${fmt.change(snapshot.gainLoss)} (${fmt.pct(snapshot.gainLossPct)})`}
-              tone={snapshot.gainLoss >= 0 ? 'positive' : 'negative'}
+              value={snapshot.gainLoss == null ? '—' : `${formatSnapshotCurrency(snapshot.gainLoss, snapshot.currency)} (${fmt.pct(snapshot.gainLossPct)})`}
+              tone={snapshot.gainLoss == null || snapshot.gainLoss === 0 ? 'neutral' : snapshot.gainLoss > 0 ? 'positive' : 'negative'}
             />
           </div>
 
-          <div className="mt-3">
+          {snapshot.complete && <div className="mt-3">
             <div className="text-terminal-muted text-[11px] font-bold tracking-wide mb-1.5">TOP HOLDINGS</div>
             <div className="flex flex-wrap gap-1.5">
               {snapshot.topHoldings.map((holding) => (
@@ -1085,15 +1054,20 @@ function PortfolioSnapshotCard({
                   className="rounded border border-terminal-border bg-terminal-panel px-2.5 py-1.5 text-[11px] hover:border-terminal-accent/35 hover:text-terminal-accent hover:bg-terminal-hover transition-colors"
                 >
                   <span className="text-terminal-text font-bold">{holding.symbol}</span>{' '}
-                  <span className="text-terminal-muted font-medium">{fmt.marketCap(holding.currentValue)} · {fmt.pct(holding.weightPct)}</span>
+                  <span className="text-terminal-muted font-medium">{formatSnapshotCurrency(holding.currentValue, snapshot.currency)} · {fmt.pct(holding.weightPct)}</span>
                 </button>
               ))}
             </div>
-          </div>
+          </div>}
         </div>
       )}
     </div>
   );
+}
+
+function formatSnapshotCurrency(value: number | null, currency: string): string {
+  if (value == null || !Number.isFinite(value)) return '—';
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency, minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
 }
 
 function SnapshotStat({
@@ -1145,7 +1119,7 @@ function SentimentPillarCard({
         />
       </div>
       <div className={`font-bold text-xl tabular-nums ${signalClass}`}>
-        {pillar.score?.toFixed(0) ?? '--'}
+        {formatSentimentScore(pillar.score)}
       </div>
       <div className="mt-2 h-1.5 bg-terminal-elevated rounded-full overflow-hidden">
         <div
@@ -1160,6 +1134,12 @@ function SentimentPillarCard({
         />
       </div>
       <div className="text-terminal-text text-xs mt-2 leading-relaxed">{pillar.detail}</div>
+      {pillar.quoteTime != null && (
+        <div className="mt-1 text-[11px] text-terminal-muted">
+          {pillar.symbols.length === 1 ? 'Quote' : 'Oldest quote'}{' '}
+          <time dateTime={new Date(pillar.quoteTime).toISOString()}>{sentimentQuoteClock.format(pillar.quoteTime)}</time>
+        </div>
+      )}
       <div className="mt-2">
         <SentimentSymbolLinks symbols={pillar.symbols} onSelect={onSelectSymbol} />
       </div>
@@ -1225,7 +1205,7 @@ function InfoTooltip({
 
 function MoverTable({ title, data, onSelect }: {
   title: string;
-  data: ReturnType<typeof Array.prototype.sort>;
+  data: Quote[];
   onSelect: (symbol: string) => void;
 }) {
   return (
@@ -1241,6 +1221,7 @@ function MoverTable({ title, data, onSelect }: {
             </tr>
           </thead>
           <tbody>
+            {data.length === 0 && <tr><td colSpan={3} className="text-terminal-faint text-xs">No matching moves in the tracked stock sample.</td></tr>}
             {data.map((q) => (
               <tr key={q.symbol} onClick={() => onSelect(q.symbol)} className="cursor-pointer">
                 <td className="text-terminal-accent font-bold">{q.symbol}</td>

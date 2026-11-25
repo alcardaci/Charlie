@@ -13,7 +13,7 @@ Charlie is a local-first desktop market workspace built with React, Vite, and El
 ## Current Feature Set
 
 - Command-driven terminal UI with a top command bar, live market ticker, watchlist sidebar, main panel, status bar, and optional live player.
-- Dedicated workspaces for market overview, ticker research, charts, news and geopolitics, opportunities, prediction markets, macro and yield monitoring, portfolio tracking, sector heatmaps, forex, crypto, ETF monitoring, help, and settings.
+- Dedicated workspaces for market overview, ticker research, charts, news and geopolitics, prediction markets, macro and yield monitoring, portfolio tracking, sector heatmaps, forex, crypto, ETF monitoring, help, and settings.
 - Fast ticker shortcuts such as `AAPL`, `AAPL GP`, `AAPL NEWS`, and `AAPL WL`.
 - Optional AI-assisted market summaries, geopolitics extraction, and a general-purpose research companion with autonomous web access and workspace awareness.
 - Local persistence for watchlists, portfolio lots, command history, companion conversations, chart style, forex pair selection, and provider settings.
@@ -40,7 +40,7 @@ npm run desktop:dev
   - `AAPL GP` or `AAPL CHART` opens the chart workspace
   - `AAPL NEWS` opens ticker-specific news
   - `AAPL WL` adds the symbol to the watchlist
-- `OPPS`, `NEWS`, `GEO`, `PRED`, `MACRO`, `PORT`, `HEAT`, `FX`, `CRYPTO`, `ETF`, `HELP`, and `SETTINGS` jump straight to the matching workspace.
+- `NEWS`, `GEO`, `PRED`, `MACRO`, `PORT`, `HEAT`, `FX`, `CRYPTO`, `ETF`, `HELP`, and `SETTINGS` jump straight to the matching workspace.
 - `ENTER` runs the command, `UP` and `DOWN` browse command history, `TAB` accepts autocomplete, and `ESC` clears or closes the command dropdown.
 - `F1` through `F12` provide shortcut-bar navigation for the core workspaces.
 
@@ -52,10 +52,10 @@ npm run desktop:dev
 - Polymarket Gamma API: prediction-market contracts, probabilities, liquidity, and volume.
 - FRED: macro series and release dates used in the macro and calendar views.
 - Finnhub: earnings calendar support used in macro views.
-- GDELT DOC 2.0: geopolitics headline intake and country clustering.
+- GDELT DOC 2.0 and Global Knowledge Graph supply articles for the event map and country hotspots.
 - Caldara-Iacoviello GPR dataset: geopolitical risk time series and charting.
 - Local policy calendar registry: bundled policy-event schedule data.
-- OpenAI Responses API: optional overview summaries, general chat and live web research, workspace-aware companion analysis, geopolitics extraction, and opportunities theme discovery.
+- OpenAI Responses API: optional overview summaries, general chat and live web research, workspace-aware companion analysis, geopolitics extraction.
 - SEC EDGAR: verified ticker/CIK resolution, official filing links, and selected XBRL reported metrics in Equity research; configured through the local proxy and no credentials required.
 - BLS, OECD, and Eurostat: bounded public macro trends in the existing Macro view, with homogeneous OECD country comparisons and clearly separated local detail; no credentials required.
 
@@ -63,7 +63,7 @@ npm run desktop:dev
 
 Charlie works with public/no-key sources out of the box. Optional provider credentials are configured in the `SETTINGS` workspace, not in `.env`, and that workspace also lets you adjust the OpenAI model and prompts used by the AI workflows.
 
-- OpenAI: optional AI features
+- OpenAI powers the Global Event Map, country summaries, and the optional AI features.
 - FRED: macro data and release calendars
 - Finnhub: earnings calendar support
 

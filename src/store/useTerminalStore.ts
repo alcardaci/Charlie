@@ -1,7 +1,9 @@
+import { DEFAULT_NEWS_LAYOUT, normalizeNewsLayout, type NewsLayout } from '../utils/newsLayout';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import {
   AIMarketSummary,
+  MacroCountryCode,
   ChartStyle,
   CompanionConversation,
   CompanionConversationMessage,
@@ -62,9 +64,13 @@ export interface MultiAssetTile {
 }
 
 interface TerminalState {
+  macroCountry: MacroCountryCode;
+  setMacroCountry: (country: MacroCountryCode) => void;
   activePanel: PanelType;
   activeSymbol: string;
   debugMode: boolean;
+  newsLayout: NewsLayout;
+  setNewsLayout: (layout: NewsLayout) => void;
   watchlistSidebarVisible: boolean;
   watchlist: string[];
   portfolio: PortfolioPosition[];
@@ -120,6 +126,7 @@ interface TerminalState {
 
 type PersistedTerminalState = Pick<
   TerminalState,
+  | 'newsLayout'
   | 'watchlistSidebarVisible'
   | 'watchlist'
   | 'portfolio'
@@ -309,6 +316,10 @@ function createPortfolioEntry(position: Omit<PortfolioPosition, 'id'>): Portfoli
 export const useTerminalStore = create<TerminalState>()(
   persist<TerminalState, [], [], PersistedTerminalState>(
     (set, get) => ({
+      macroCountry: 'US',
+      setMacroCountry: macroCountry => set({ macroCountry }),
+      newsLayout: DEFAULT_NEWS_LAYOUT,
+      setNewsLayout: layout => set({ newsLayout: normalizeNewsLayout(layout) }),
       activePanel: 'overview',
       activeSymbol: 'AAPL',
       debugMode: false,
@@ -655,6 +666,8 @@ export const useTerminalStore = create<TerminalState>()(
     }),
     {
       name: TERMINAL_STORAGE_KEY,
+      // Bootstrap loads the disk mirror before any hydration callbacks may persist state.
+      skipHydration: true,
       storage: createJSONStorage<PersistedTerminalState>(() => terminalStateStorage),
       merge: (persistedState, currentState) => {
         const persisted = (persistedState ?? {}) as Partial<PersistedTerminalState>;
@@ -670,6 +683,7 @@ export const useTerminalStore = create<TerminalState>()(
         return {
           ...currentState,
           ...persisted,
+          newsLayout: normalizeNewsLayout(persisted.newsLayout),
           debugMode: false,
           portfolioDisplayCurrency: normalizeCurrencyCode(persisted.portfolioDisplayCurrency),
           openAISettings: normalizeOpenAISettings(persisted.openAISettings),
@@ -682,6 +696,7 @@ export const useTerminalStore = create<TerminalState>()(
         state.updateOpenAISettings({ hasStoredApiKey: state.openAISettings.hasStoredApiKey });
       },
       partialize: (state): PersistedTerminalState => ({
+        newsLayout: state.newsLayout,
         watchlistSidebarVisible: state.watchlistSidebarVisible,
         watchlist: state.watchlist,
         portfolio: state.portfolio,

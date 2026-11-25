@@ -1,34 +1,30 @@
-import { useEffect, useRef, useState } from 'react';
+import { readEventFeed, saveEventFeed } from '../utils/newsCoverage';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Bug, ExternalLink, Globe2, Info, Minus, RefreshCw, ShieldAlert, TrendingDown, TrendingUp } from 'lucide-react';
+import { Bug, ExternalLink, Info, Minus, RefreshCw, ShieldAlert, TrendingDown, TrendingUp } from 'lucide-react';
 import {
   aggregateGeopoliticalStoriesToCountries,
-  buildEmptyGeopoliticalCountryCounts,
-  classifyGeopoliticalHeadlineBatch,
-  clearGeopoliticalCountrySummaryCache,
-  clearGeopoliticalHeadlineAssessmentCache,
-  clearGeopoliticalMapCache,
-  fetchGeopoliticalHeadlineCandidates,
+  cachedGeopoliticalEvents,
+  fetchGeopoliticalGdeltHeadlines,
+  fetchGeopoliticalYahooHeadlines,
+  selectEventCandidates,
   fetchGeopoliticalCountrySummaries,
   getCachedGeopoliticalCountrySummaries,
-  rankGeopoliticalHeadlineCandidates,
-  readCachedGeopoliticalMapCountryCounts,
+  reviewGeopoliticalEvents,
   fetchGeopoliticalRiskSnapshot,
   fetchOpenAIKeyStatus,
   getOpenAIDebugPayload,
-  writeGeopoliticalMapCountryCountCache,
 } from '../api/finance';
 import type { OpenAIDebugPayloadEntry } from '../api/finance';
-import { CountryHotspotsSection, RegionalNewsMap } from '../components/RegionalNewsMap';
+import { RegionalNewsMap } from '../components/RegionalNewsMap';
 import { useTerminalStore } from '../store/useTerminalStore';
-import type { CountryNewsCount, GeopoliticalScanStatus, NewsItem, OpenAISettings, PanelType } from '../types';
+import type { CountryNewsCount, GeopoliticalScanStatus, NewsItem } from '../types';
 import { GeopoliticalRiskPoint, GeopoliticalRiskSnapshot } from '../types';
 import { fmt } from '../utils/formatters';
 import { DEFAULT_GEOPOLITICS_OPENAI_MODEL } from '../utils/openaiConfig';
 import { buildTimestampedJsonFilename, downloadJsonFile } from '../utils/downloadJson';
 import { getThemePalette, useTheme } from '../utils/theme';
-import { NewsPanel } from '../components/NewsPanel';
 
 type TimeframeOption = {
   key: '1h' | '6h' | '24h' | '72h' | '7d';
@@ -44,7 +40,6 @@ const TIMEFRAMES: TimeframeOption[] = [
   { key: '7d', label: '7D', hours: 168 },
 ];
 
-const GEOPOLITICS_TOPIC_QUERY = 'geopolitics';
 const GPR_METRIC_SOURCE = 'Official Caldara-Iacoviello recent daily geopolitical risk dataset.';
 const GPR_CHART_TIMEFRAMES = [
   { key: '30d', label: '30D' },
@@ -152,12 +147,12 @@ function LabeledMetric({
   align?: 'left' | 'right';
 }) {
   return (
-    <div className="rounded border border-terminal-border bg-terminal-elevated/30 px-3 py-2">
-      <div className="flex items-center gap-1.5 text-[10px] tracking-[0.2em] text-terminal-faint">
+    <div className="min-w-0">
+      <div className="flex items-center gap-1.5 text-[10px] tracking-wide text-terminal-faint">
         <span>{label}</span>
         <InfoTooltip label={label} description={description} source={source} align={align} />
       </div>
-      <div className="mt-1 text-sm font-bold tabular-nums text-terminal-text">{value}</div>
+      <div className="text-xs font-semibold tabular-nums text-terminal-text">{value}</div>
     </div>
   );
 }
@@ -201,48 +196,15 @@ function GeopoliticsPayloadBlock({
   );
 }
 
-function GeopoliticalRiskCard({
-  snapshot,
-  isLoading,
-  isError,
-}: {
-  snapshot: GeopoliticalRiskSnapshot | undefined;
-  isLoading: boolean;
-  isError: boolean;
-}) {
+function RiskIndexReadings({ snapshot }: { snapshot: GeopoliticalRiskSnapshot }) {
   useTheme();
   const [chartTimeframe, setChartTimeframe] = useState<GprChartTimeframeKey>('30d');
   const themePalette = getThemePalette();
-
-  if (isLoading) {
-    return <div className="shimmer h-64 rounded" />;
-  }
-
-  if (!snapshot || isError) {
-    return (
-      <div className="rounded border border-terminal-border bg-terminal-panel p-4">
-        <div className="flex items-center gap-2 text-terminal-accent text-sm font-bold tracking-wider">
-          <ShieldAlert size={14} />
-          GEOPOLITICAL RISK INDEX
-        </div>
-        <p className="mt-3 text-sm text-terminal-faint">
-          The official geopolitical risk index could not be loaded right now.
-        </p>
-      </div>
-    );
-  }
-
   const latest = snapshot.latest;
   const change = snapshot.change;
-  const riskRising = (change ?? 0) > 0;
-  const changeTone = change == null ? 'text-terminal-muted' : riskRising ? 'text-terminal-negative' : 'text-terminal-positive';
-  const changeChipTone =
-    change == null
-      ? 'border-terminal-border bg-terminal-hover text-terminal-muted'
-      : riskRising
-        ? 'border-terminal-negative/30 bg-terminal-negative/10 text-terminal-negative'
-        : 'border-terminal-positive/30 bg-terminal-positive/10 text-terminal-positive';
-  const DeltaIcon = change == null ? Minus : riskRising ? TrendingUp : TrendingDown;
+  const riskRising = change != null && change > 0;
+  const changeTone = !change ? 'text-terminal-muted' : riskRising ? 'text-terminal-negative' : 'text-terminal-positive';
+  const DeltaIcon = !change ? Minus : riskRising ? TrendingUp : TrendingDown;
   const chartData = getRiskChartData(snapshot.series, chartTimeframe);
   const chartMin = Math.min(...chartData.flatMap((point) => [point.value, point.movingAverage7]));
   const chartMax = Math.max(...chartData.flatMap((point) => [point.value, point.movingAverage7]));
@@ -250,142 +212,39 @@ function GeopoliticalRiskCard({
   const yDomain: [number, number] = [Math.max(0, chartMin - chartPadding), chartMax + chartPadding];
 
   return (
-    <div className="rounded border border-terminal-border bg-terminal-panel overflow-hidden">
-      <div className="flex min-h-[3.5rem] items-center justify-between gap-3 px-4 py-3 panel-border-b bg-terminal-elevated/40">
-        <div className="flex items-center gap-2">
-          <ShieldAlert size={14} className="text-terminal-accent" />
-          <span className="text-terminal-accent text-sm font-bold tracking-wider">GEOPOLITICAL RISK INDEX</span>
-        </div>
-
-        <a
-          href={snapshot.sourceUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-1 text-[11px] text-terminal-faint hover:text-terminal-accent transition-colors"
-        >
-          SOURCE
-          <ExternalLink size={11} />
-        </a>
-      </div>
-
-      <div className="space-y-4 p-4">
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-end gap-3">
-            <div>
-              <div className="flex items-center gap-1.5 text-[11px] font-bold tracking-[0.22em] text-terminal-faint">
-                <span>OFFICIAL DAILY RECENT GPR</span>
-                <InfoTooltip
-                  label="Official Daily Recent GPR"
-                  description="The headline global Geopolitical Risk Index level for the latest daily observation. The series is normalized so the 1985-2019 average equals 100."
-                  source={GPR_METRIC_SOURCE}
-                />
-              </div>
-              <div className="mt-1 text-4xl font-bold tracking-tight text-terminal-text tabular-nums">
-                {fmt.number(latest.value, 2)}
-              </div>
-            </div>
-
-            <div className="rounded border border-terminal-border bg-terminal-elevated/30 px-3 py-2">
-              <div className="flex items-center gap-1.5 text-[10px] tracking-[0.2em] text-terminal-faint">
-                <span>D/D DELTA</span>
-                <InfoTooltip
-                  label="Day-over-day delta"
-                  description="Absolute and percentage change versus the previous published daily GPR observation. Positive means geopolitical risk increased versus the prior day."
-                  source={GPR_METRIC_SOURCE}
-                />
-              </div>
-              <div className={`mt-1 inline-flex items-center gap-1 rounded border px-2.5 py-1 text-xs font-medium ${changeChipTone}`}>
-                <DeltaIcon size={12} />
-                {change == null ? 'NO DELTA' : `${fmt.change(change, 2)} / ${fmt.pct(snapshot.changePct)}`}
-              </div>
-            </div>
+      <div className="flex min-h-0 flex-1 flex-col gap-2 px-3 py-2">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+          <strong className="text-2xl leading-tight tabular-nums text-terminal-text">{fmt.number(latest.value, 2)}</strong>
+          <div className={`inline-flex items-center gap-1 text-xs tabular-nums ${changeTone}`}>
+            <DeltaIcon size={12} />
+            {change == null ? 'Prior change unavailable' : `${fmt.change(change, 2)} (${fmt.pct(snapshot.changePct)})`}
           </div>
-
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-            <LabeledMetric
-              label="ACTS"
-              value={fmt.number(latest.acts, 1)}
-              description="The 'acts' sub-index captures realized geopolitical events such as attacks, wars, terrorism, and other concrete escalations reflected in the newspaper-based methodology."
-              source={GPR_METRIC_SOURCE}
-            />
-            <LabeledMetric
-              label="THREATS"
-              value={fmt.number(latest.threats, 1)}
-              description="The 'threats' sub-index captures rising geopolitical threats, tensions, and warnings before or alongside realized events."
-              source={GPR_METRIC_SOURCE}
-            />
-            <LabeledMetric
-              label="MA 7D"
-              value={fmt.number(latest.movingAverage7, 1)}
-              description="Seven-day moving average of the daily GPR index. This smooths one-day spikes and makes short-term trend changes easier to read."
-              source={GPR_METRIC_SOURCE}
-            />
-            <LabeledMetric
-              label="DATA DATE"
-              value={formatRiskDate(latest.date)}
-              description="Publication date of the latest official daily GPR observation currently loaded into the app."
-              source={GPR_METRIC_SOURCE}
-            />
-            <LabeledMetric
-              label="7D RANGE"
-              value={
-                snapshot.weeklyLow == null || snapshot.weeklyHigh == null
-                  ? '—'
-                  : `${fmt.number(snapshot.weeklyLow, 1)} - ${fmt.number(snapshot.weeklyHigh, 1)}`
-              }
-              description="Lowest and highest daily global GPR readings observed in the latest seven published daily observations."
-              source={GPR_METRIC_SOURCE}
-            />
+          <span className="text-[11px] text-terminal-muted">{formatRiskDate(latest.date)}</span>
+          <InfoTooltip label="Official daily GPR" description={snapshot.methodology} source={snapshot.cadence} align="right" />
+        </div>
+        <div className="flex flex-wrap gap-x-5 gap-y-1">
+          <LabeledMetric label="ACTS" value={fmt.number(latest.acts, 1)}
+            description="Realized geopolitical events in the index, including attacks, wars and other escalations." source={GPR_METRIC_SOURCE} />
+          <LabeledMetric label="THREATS" value={fmt.number(latest.threats, 1)}
+            description="Geopolitical threats, tensions and warnings in newspaper coverage." source={GPR_METRIC_SOURCE} />
+          <LabeledMetric label="7D AVG" value={fmt.number(latest.movingAverage7, 1)}
+            description="Seven-day moving average of the daily index." source={GPR_METRIC_SOURCE} />
+          <LabeledMetric label="7D RANGE" value={snapshot.weeklyLow == null || snapshot.weeklyHigh == null ? '—' : `${fmt.number(snapshot.weeklyLow, 1)}–${fmt.number(snapshot.weeklyHigh, 1)}`}
+            description="Lowest and highest readings in the last seven published observations." source={GPR_METRIC_SOURCE} align="right" />
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+          <div className="flex items-center gap-3 text-[10px] text-terminal-muted">
+            <span className="inline-flex items-center gap-1"><span className="h-[2px] w-3 bg-[#ff6b6b]" /> Daily GPR</span>
+            <span className="inline-flex items-center gap-1"><span className="w-3 border-t-2 border-dashed border-[#f0c96d]" /> 7D average</span>
+          </div>
+          <div className="flex" aria-label="Risk index time frame">
+            {GPR_CHART_TIMEFRAMES.map(option => <button key={option.key} type="button" aria-pressed={option.key === chartTimeframe}
+              onClick={() => setChartTimeframe(option.key)} className={`rounded px-1.5 py-0.5 text-[10px] ${option.key === chartTimeframe ? 'bg-terminal-accent text-terminal-bg' : 'text-terminal-muted hover:bg-terminal-hover'}`}>
+              {option.label}
+            </button>)}
           </div>
         </div>
-
-        <div className="rounded border border-terminal-border bg-[#071018] px-3 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-1.5 text-[11px] font-bold tracking-[0.22em] text-terminal-faint">
-              <span>GLOBAL DAILY GPR INDEX</span>
-              <InfoTooltip
-                label="Global Daily GPR Chart"
-                description="This chart shows the official global aggregate geopolitical risk series, not a single country. X-axis is observation date in UTC; Y-axis is the GPR index level where 100 equals the 1985-2019 average."
-                source={GPR_METRIC_SOURCE}
-                align="right"
-              />
-            </div>
-            <div className={`text-xs font-medium tabular-nums ${changeTone}`}>
-              {change == null ? 'UNCH' : fmt.change(change, 2)}
-            </div>
-          </div>
-
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-3 text-[11px]">
-              <span className="inline-flex items-center gap-1.5 text-terminal-text">
-                <span className="h-[2px] w-4 rounded-full bg-[#ff6b6b]" />
-                Daily GPR
-              </span>
-              <span className="inline-flex items-center gap-1.5 text-terminal-faint">
-                <span className="h-0 w-4 border-t-2 border-dashed border-[#f0c96d]" />
-                7D average
-              </span>
-            </div>
-
-            <div className="flex items-center gap-1 rounded border border-terminal-border bg-terminal-panel/60 p-1">
-              {GPR_CHART_TIMEFRAMES.map((option) => (
-                <button
-                  key={option.key}
-                  type="button"
-                  onClick={() => setChartTimeframe(option.key)}
-                  className={`rounded px-2.5 py-1 text-[10px] font-medium tracking-[0.18em] transition-colors ${
-                    option.key === chartTimeframe
-                      ? 'bg-terminal-accent text-terminal-bg'
-                      : 'text-terminal-faint hover:bg-terminal-hover hover:text-terminal-text'
-                  }`}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="mt-3 h-44 rounded border border-white/5 bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.05),transparent_44%),linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01))] px-2 py-2">
+        <div className="min-h-0 flex-1" role="img" aria-label="Daily geopolitical risk index and seven-day moving average">
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={chartData} margin={{ top: 14, right: 12, left: 6, bottom: 10 }}>
                 <defs>
@@ -457,321 +316,23 @@ function GeopoliticalRiskCard({
                 />
               </ComposedChart>
             </ResponsiveContainer>
-          </div>
-
-          <p className="mt-3 text-xs leading-relaxed text-terminal-faint">
-            {snapshot.methodology}
-          </p>
-
-          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-terminal-faint">
-            <span>{snapshot.cadence}</span>
-            <a href={snapshot.dataUrl} target="_blank" rel="noreferrer" className="hover:text-terminal-accent transition-colors">
-              Raw data
-            </a>
-            <span>{snapshot.license}</span>
-          </div>
         </div>
+        <footer className="flex shrink-0 flex-wrap items-baseline gap-x-3 text-[10px] leading-tight text-terminal-muted">
+          <span>{snapshot.cadence}</span>
+          <a href={snapshot.dataUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2 hover:text-terminal-accent">Raw data</a>
+          <span>{snapshot.license}</span>
+        </footer>
       </div>
-    </div>
   );
 }
 
-type GeopoliticsMonitorSectionProps = {
-  embedded?: boolean;
-};
-
-type GeopoliticsMonitorState = {
-  timeframe: TimeframeOption;
-  setTimeframe: (timeframe: TimeframeOption) => void;
-  showPromptDebug: boolean;
-  setShowPromptDebug: (value: boolean | ((current: boolean) => boolean)) => void;
-  showPayloadDebug: boolean;
-  setShowPayloadDebug: (value: boolean | ((current: boolean) => boolean)) => void;
-  geopoliticsModel: string;
-  debugMode: boolean;
-  hasStoredApiKey: boolean;
-  setActivePanel: (panel: PanelType) => void;
-  geopoliticalPipelinePayload: OpenAIDebugPayloadEntry | null;
-  geopoliticalEventsPayload: OpenAIDebugPayloadEntry | null;
-  countrySummariesPayload: OpenAIDebugPayloadEntry | null;
-  countryCounts: CountryNewsCount[];
-  loadingCountryCounts: boolean;
-  refetchCountryCounts: () => void;
-  fetchingCountryCounts: boolean;
-  scanStatus: GeopoliticalScanStatus;
-  classifiedCount: number;
-  candidateCount: number;
-  completedBatchCount: number;
-  totalBatchCount: number;
-  loadingCountrySummaries: boolean;
-  fetchingCountrySummaries: boolean;
-  riskSnapshot: GeopoliticalRiskSnapshot | undefined;
-  loadingRiskSnapshot: boolean;
-  riskSnapshotError: boolean;
-  refetchRiskSnapshot: () => void;
-  fetchingRiskSnapshot: boolean;
-  openAISettings: OpenAISettings;
-};
+type GeopoliticsMonitorState = ReturnType<typeof useGeopoliticsMonitorState>;
 
 type GeopoliticalCountrySummaryState = {
   countryCounts: CountryNewsCount[];
   loadingCountrySummaries: boolean;
   fetchingCountrySummaries: boolean;
 };
-
-type ProgressiveGeopoliticalScanState = {
-  countryCounts: CountryNewsCount[];
-  loadingCountryCounts: boolean;
-  fetchingCountryCounts: boolean;
-  refetchCountryCounts: () => void;
-  scanStatus: GeopoliticalScanStatus;
-  classifiedCount: number;
-  candidateCount: number;
-  completedBatchCount: number;
-  totalBatchCount: number;
-};
-
-const FIRST_GEOPOLITICAL_CLASSIFICATION_BATCH_SIZE = 40;
-const GEOPOLITICAL_CLASSIFICATION_BATCH_SIZE = 60;
-const GEOPOLITICAL_CLASSIFICATION_MAX_CONCURRENCY = 2;
-
-function buildGeopoliticalClassificationBatches(headlines: NewsItem[]): NewsItem[][] {
-  if (!headlines.length) return [];
-
-  const [firstBatch, ...remaining] = headlines;
-  const batches: NewsItem[][] = [[firstBatch]];
-  for (let index = 0; index < Math.min(FIRST_GEOPOLITICAL_CLASSIFICATION_BATCH_SIZE - 1, remaining.length); index += 1) {
-    batches[0].push(remaining[index]);
-  }
-
-  for (
-    let index = Math.max(0, FIRST_GEOPOLITICAL_CLASSIFICATION_BATCH_SIZE - 1);
-    index < remaining.length;
-    index += GEOPOLITICAL_CLASSIFICATION_BATCH_SIZE
-  ) {
-    batches.push(remaining.slice(index, index + GEOPOLITICAL_CLASSIFICATION_BATCH_SIZE));
-  }
-
-  return batches.filter((batch) => batch.length > 0);
-}
-
-function useProgressiveGeopoliticalCountryCounts({
-  lookbackHours,
-  model,
-  systemPrompt,
-  enabled,
-  debugMode,
-}: {
-  lookbackHours: number;
-  model: string;
-  systemPrompt: string;
-  enabled: boolean;
-  debugMode: boolean;
-}): ProgressiveGeopoliticalScanState {
-  const [countryCounts, setCountryCounts] = useState<CountryNewsCount[]>(() => buildEmptyGeopoliticalCountryCounts());
-  const [scanStatus, setScanStatus] = useState<GeopoliticalScanStatus>('idle');
-  const [loadingCountryCounts, setLoadingCountryCounts] = useState(false);
-  const [fetchingCountryCounts, setFetchingCountryCounts] = useState(false);
-  const [classifiedCount, setClassifiedCount] = useState(0);
-  const [candidateCount, setCandidateCount] = useState(0);
-  const [completedBatchCount, setCompletedBatchCount] = useState(0);
-  const [totalBatchCount, setTotalBatchCount] = useState(0);
-  const [refreshNonce, setRefreshNonce] = useState(0);
-  const requestVersionRef = useRef(0);
-
-  useEffect(() => {
-    if (!enabled) {
-      requestVersionRef.current += 1;
-      setCountryCounts(buildEmptyGeopoliticalCountryCounts());
-      setScanStatus('idle');
-      setLoadingCountryCounts(false);
-      setFetchingCountryCounts(false);
-      setClassifiedCount(0);
-      setCandidateCount(0);
-      setCompletedBatchCount(0);
-      setTotalBatchCount(0);
-      return;
-    }
-
-    const requestVersion = requestVersionRef.current + 1;
-    requestVersionRef.current = requestVersion;
-    const classifiedStories: NewsItem[] = [];
-    let completedBatches = 0;
-    let classifiedHeadlines = 0;
-    let source = 'Yahoo Finance News Feed + GDELT DOC 2.0 · progressive scan';
-    let queryLabel = GEOPOLITICS_TOPIC_QUERY;
-    let sawLaterBatchFailure = false;
-
-    const isCurrentRequest = () => requestVersionRef.current === requestVersion;
-    const buildProgressCountries = (isComplete: boolean) => aggregateGeopoliticalStoriesToCountries(
-      classifiedStories,
-      source,
-      queryLabel,
-      {
-        isPartial: !isComplete,
-        lastClassifiedAt: Date.now(),
-      }
-    );
-    const setProgressCountries = (isComplete: boolean) => {
-      if (!isCurrentRequest()) return null;
-      const nextCountryCounts = buildProgressCountries(isComplete);
-      setCountryCounts(nextCountryCounts);
-      return nextCountryCounts;
-    };
-
-    setCountryCounts(buildEmptyGeopoliticalCountryCounts());
-    setScanStatus('fetching-feeds');
-    setLoadingCountryCounts(true);
-    setFetchingCountryCounts(true);
-    setClassifiedCount(0);
-    setCandidateCount(0);
-    setCompletedBatchCount(0);
-    setTotalBatchCount(0);
-
-    const runScan = async () => {
-      try {
-        const cacheOptions = {
-          enableAI: true,
-          model,
-          systemPrompt,
-          debugMode,
-          includeHotspotSummaries: false,
-        };
-        const cachedCountryCounts = readCachedGeopoliticalMapCountryCounts(lookbackHours, cacheOptions);
-        if (cachedCountryCounts) {
-          if (!isCurrentRequest()) return;
-          setCountryCounts(cachedCountryCounts);
-          setScanStatus('complete');
-          setLoadingCountryCounts(false);
-          setFetchingCountryCounts(false);
-          setClassifiedCount(0);
-          setCandidateCount(0);
-          setCompletedBatchCount(0);
-          setTotalBatchCount(0);
-          return;
-        }
-
-        const candidateDataset = await fetchGeopoliticalHeadlineCandidates(lookbackHours, debugMode);
-        if (!isCurrentRequest()) return;
-
-        source = candidateDataset.source;
-        queryLabel = candidateDataset.queryLabel;
-        const rankedCandidates = rankGeopoliticalHeadlineCandidates(candidateDataset.headlines);
-        const batches = buildGeopoliticalClassificationBatches(rankedCandidates);
-        setCandidateCount(rankedCandidates.length);
-        setTotalBatchCount(batches.length);
-        setCountryCounts(buildEmptyGeopoliticalCountryCounts(source, queryLabel));
-
-        if (!batches.length) {
-          setScanStatus('complete');
-          setLoadingCountryCounts(false);
-          setFetchingCountryCounts(false);
-          return;
-        }
-
-        setScanStatus('classifying');
-
-        const classifyBatch = async (batch: NewsItem[]) => {
-          const batchStories = await classifyGeopoliticalHeadlineBatch(batch, lookbackHours, {
-            ...cacheOptions,
-          });
-          if (!isCurrentRequest()) return;
-          classifiedStories.push(...batchStories);
-          completedBatches += 1;
-          classifiedHeadlines += batch.length;
-          setCompletedBatchCount(completedBatches);
-          setClassifiedCount(classifiedHeadlines);
-        };
-
-        try {
-          await classifyBatch(batches[0]);
-        } catch (error) {
-          console.warn('[geopolitics-map] First classification batch failed.', error);
-          if (!isCurrentRequest()) return;
-          setScanStatus('error');
-          setLoadingCountryCounts(false);
-          setFetchingCountryCounts(false);
-          setProgressCountries(false);
-          return;
-        }
-
-        if (!isCurrentRequest()) return;
-        setLoadingCountryCounts(false);
-        if (batches.length === 1) {
-          setScanStatus('complete');
-          const completeCountryCounts = setProgressCountries(true);
-          if (completeCountryCounts) {
-            writeGeopoliticalMapCountryCountCache(lookbackHours, completeCountryCounts, source, queryLabel, cacheOptions);
-          }
-          setFetchingCountryCounts(false);
-          return;
-        }
-
-        setScanStatus('partial');
-        setProgressCountries(false);
-
-        let nextBatchIndex = 1;
-        const workerCount = Math.min(GEOPOLITICAL_CLASSIFICATION_MAX_CONCURRENCY, Math.max(0, batches.length - 1));
-        await Promise.all(
-          Array.from({ length: workerCount }, async () => {
-            while (nextBatchIndex < batches.length) {
-              const batchIndex = nextBatchIndex;
-              nextBatchIndex += 1;
-              try {
-                await classifyBatch(batches[batchIndex]);
-              } catch (error) {
-                if (!isCurrentRequest()) return;
-                sawLaterBatchFailure = true;
-                completedBatches += 1;
-                setCompletedBatchCount(completedBatches);
-                console.warn('[geopolitics-map] Classification batch failed; preserving partial results.', error);
-              }
-
-              if (!isCurrentRequest()) return;
-              setScanStatus('partial');
-              setProgressCountries(false);
-            }
-          })
-        );
-
-        if (!isCurrentRequest()) return;
-        setScanStatus(sawLaterBatchFailure ? 'partial' : 'complete');
-        const completeCountryCounts = setProgressCountries(!sawLaterBatchFailure);
-        if (!sawLaterBatchFailure && completeCountryCounts) {
-          writeGeopoliticalMapCountryCountCache(lookbackHours, completeCountryCounts, source, queryLabel, cacheOptions);
-        }
-        setFetchingCountryCounts(false);
-      } catch (error) {
-        console.warn('[geopolitics-map] Progressive scan failed.', error);
-        if (!isCurrentRequest()) return;
-        setScanStatus('error');
-        setLoadingCountryCounts(false);
-        setFetchingCountryCounts(false);
-        setCountryCounts(buildEmptyGeopoliticalCountryCounts(source, queryLabel));
-      }
-    };
-
-    void runScan();
-
-    return () => {
-      if (requestVersionRef.current === requestVersion) {
-        requestVersionRef.current += 1;
-      }
-    };
-  }, [debugMode, enabled, lookbackHours, model, refreshNonce, systemPrompt]);
-
-  return {
-    countryCounts,
-    loadingCountryCounts,
-    fetchingCountryCounts,
-    refetchCountryCounts: () => setRefreshNonce((current) => current + 1),
-    scanStatus,
-    classifiedCount,
-    candidateCount,
-    completedBatchCount,
-    totalBatchCount,
-  };
-}
 
 function useGeopoliticalCountrySummaryState(
   baseCountryCounts: CountryNewsCount[],
@@ -802,6 +363,7 @@ function useGeopoliticalCountrySummaryState(
 
     const requestVersion = requestVersionRef.current + 1;
     requestVersionRef.current = requestVersion;
+    const abortController = new AbortController();
     const cachedSummaries = getCachedGeopoliticalCountrySummaries(activeCountries, lookbackHours, model);
     const cachedCountryCodes = new Set(Object.keys(cachedSummaries));
 
@@ -842,7 +404,8 @@ function useGeopoliticalCountrySummaryState(
           ),
         }));
         setLoadingCountrySummaries(false);
-      }
+      },
+      abortController.signal
     ).then(({ summariesByCountryCode, failedCountryCodes }) => {
       if (requestVersionRef.current !== requestVersion) return;
 
@@ -864,9 +427,15 @@ function useGeopoliticalCountrySummaryState(
       });
       setLoadingCountrySummaries(false);
       setFetchingCountrySummaries(false);
+    }).catch(() => {
+      if (requestVersionRef.current !== requestVersion || abortController.signal.aborted) return;
+      setLoadingCountrySummaries(false);
+      setFetchingCountrySummaries(false);
+      setSummaryStatuses(Object.fromEntries(activeCountries.map((country) => [country.countryCode.toUpperCase(), 'error'])));
     });
 
     return () => {
+      abortController.abort();
       if (requestVersionRef.current === requestVersion) {
         requestVersionRef.current += 1;
       }
@@ -891,109 +460,117 @@ function useGeopoliticalCountrySummaryState(
   };
 }
 
-function useGeopoliticsMonitorState(): GeopoliticsMonitorState {
+const EMPTY_HEADLINES: NewsItem[] = [];
+const EVENT_FEED_POLICY = { staleTime: 5 * 60_000, refetchInterval: 5 * 60_000, retry: 1, refetchOnWindowFocus: false };
+function sourceStatus(name: string, count: number, pending: boolean, failed: boolean) {
+  if (failed) return count ? `${name} · ${count} from last refresh` : `${name} unavailable`;
+  return pending ? `${name} loading…` : `${name} · ${count} articles`;
+}
+
+function useGeopoliticsMonitorState() {
   const [timeframe, setTimeframe] = useState<TimeframeOption>(TIMEFRAMES[2]);
   const [showPromptDebug, setShowPromptDebug] = useState(false);
   const [showPayloadDebug, setShowPayloadDebug] = useState(false);
-  const { openAISettings, updateOpenAISettings, debugMode, setActivePanel } = useTerminalStore();
+  const { openAISettings, updateOpenAISettings, debugMode } = useTerminalStore();
   const geopoliticsModel = openAISettings.geopoliticsModel?.trim() || DEFAULT_GEOPOLITICS_OPENAI_MODEL;
-
-  const { data: keyStatus } = useQuery({
-    queryKey: ['openai-key-status'],
-    queryFn: fetchOpenAIKeyStatus,
-    staleTime: 30000,
-  });
-
+  const { data: keyStatus, isPending: checkingKey, isError: keyCheckFailed, refetch: refetchKey } = useQuery({ queryKey: ['openai-key-status'], queryFn: fetchOpenAIKeyStatus, staleTime: 30_000 });
+  const aiAvailable = keyStatus?.configured ?? openAISettings.hasStoredApiKey;
   useEffect(() => {
-    if (typeof keyStatus?.configured === 'boolean' && keyStatus.configured !== openAISettings.hasStoredApiKey) {
+    if (typeof keyStatus?.configured === 'boolean' && keyStatus.configured !== openAISettings.hasStoredApiKey)
       updateOpenAISettings({ hasStoredApiKey: keyStatus.configured });
-    }
   }, [keyStatus?.configured, openAISettings.hasStoredApiKey, updateOpenAISettings]);
 
-  useEffect(() => {
-    if (!debugMode) {
-      setShowPromptDebug(false);
-      setShowPayloadDebug(false);
-    }
-  }, [debugMode]);
-
-  const geopoliticalPipelinePayload = getOpenAIDebugPayload('geopolitical-pipeline');
-  const geopoliticalEventsPayload = getOpenAIDebugPayload('geopolitical-events');
-  const countrySummariesPayload = getOpenAIDebugPayload('geopolitical-country-summaries');
-
-  const {
-    countryCounts: baseCountryCounts,
-    loadingCountryCounts,
-    refetchCountryCounts,
-    fetchingCountryCounts,
-    scanStatus,
-    classifiedCount,
-    candidateCount,
-    completedBatchCount,
-    totalBatchCount,
-  } = useProgressiveGeopoliticalCountryCounts({
-    lookbackHours: timeframe.hours,
-    model: geopoliticsModel,
-    systemPrompt: openAISettings.geopoliticsSystemPrompt,
-    enabled: openAISettings.hasStoredApiKey,
-    debugMode,
+  const hours = timeframe.hours;
+  const savedFeeds = useMemo(() => ({ yahoo: readEventFeed('yahoo-finance', hours), gdelt: readEventFeed('gdelt', hours) }), [hours]);
+  const yahoo = useQuery({ ...EVENT_FEED_POLICY, initialData: savedFeeds.yahoo?.items, initialDataUpdatedAt: savedFeeds.yahoo?.at, queryKey: ['event-headlines-yahoo', hours],
+    queryFn: async ({ signal }) => saveEventFeed('yahoo-finance', hours, await fetchGeopoliticalYahooHeadlines(hours, signal)) });
+  const gdelt = useQuery({ ...EVENT_FEED_POLICY, initialData: savedFeeds.gdelt?.items, initialDataUpdatedAt: savedFeeds.gdelt?.at, queryKey: ['event-headlines-gdelt', hours],
+    queryFn: async ({ signal }) => saveEventFeed('gdelt', hours, await fetchGeopoliticalGdeltHeadlines(hours, undefined, signal)) });
+  const headlines = useMemo(() => selectEventCandidates([...(yahoo.data ?? EMPTY_HEADLINES), ...(gdelt.data ?? EMPTY_HEADLINES)], hours),
+    [yahoo.data, gdelt.data, yahoo.dataUpdatedAt, gdelt.dataUpdatedAt, yahoo.errorUpdatedAt, gdelt.errorUpdatedAt, hours]);
+  const now = Date.now();
+  const recent = (items: NewsItem[] | undefined) => items?.filter(h => h.publishedAt >= now - hours * 3600000 && h.publishedAt <= now) ?? [];
+  const gdeltItems = recent(gdelt.data);
+  const hasArchive = gdeltItems.some(h => h.gdeltCollection === 'GKG');
+  const cachedGdelt = gdeltItems.some(h => h.gdeltCached);
+  const source = [
+    sourceStatus('Yahoo Finance', recent(yahoo.data).length, yahoo.isPending, yahoo.isError),
+    sourceStatus(hasArchive ? 'GDELT archive' : 'GDELT', gdeltItems.length, gdelt.isPending, gdelt.isError || cachedGdelt),
+  ].join('   ·   ');
+  const pendingFeeds = yahoo.isPending || gdelt.isPending;
+  const readyForAI = aiAvailable && !pendingFeeds && headlines.length > 0;
+  const reviewOptions = useMemo(() => ({
+    enableAI: aiAvailable, model: geopoliticsModel, systemPrompt: openAISettings.geopoliticsSystemPrompt, debugMode,
+  }), [aiAvailable, geopoliticsModel, openAISettings.geopoliticsSystemPrompt, debugMode]);
+  const cachedStories = useMemo(() => cachedGeopoliticalEvents(headlines, reviewOptions), [headlines, reviewOptions]);
+  const analysis = useQuery({
+    queryKey: ['news-event-analysis-ai-only', hours, geopoliticsModel, openAISettings.geopoliticsSystemPrompt, headlines.map(h => [h.link, h.title, h.publishedAt])],
+    queryFn: ({ signal }) => reviewGeopoliticalEvents(headlines, hours, { ...reviewOptions, signal }),
+    enabled: readyForAI,
+    staleTime: 15 * 60_000,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchInterval: query => query.state.status === 'error' || query.state.data?.failed ? 5 * 60_000 : false,
   });
+  const result = readyForAI ? analysis.data : undefined;
+  const reviewedStories = aiAvailable ? result?.stories ?? cachedStories : EMPTY_HEADLINES;
+  const hasCompletedBatch = Boolean(result && result.batches > result.failed);
+  const hasReview = hasCompletedBatch || reviewedStories.length > 0;
+  const sourcePartial = yahoo.isError || gdelt.isError || cachedGdelt;
+  const reviewFailed = analysis.isError || Boolean(result?.failed);
+  const partial = pendingFeeds || sourcePartial || reviewFailed || !hasCompletedBatch;
+  const lastClassifiedAt = hasCompletedBatch ? analysis.dataUpdatedAt : undefined;
+  const counts = useMemo(() => aggregateGeopoliticalStoriesToCountries(reviewedStories, source, 'geopolitics',
+    { isPartial: partial, lastClassifiedAt }), [reviewedStories, source, partial, lastClassifiedAt]);
+  const summaries = useGeopoliticalCountrySummaryState(counts, hours, geopoliticsModel, hasReview && aiAvailable);
 
-  const {
-    countryCounts,
-    loadingCountrySummaries,
-    fetchingCountrySummaries,
-  } = useGeopoliticalCountrySummaryState(
-    baseCountryCounts,
-    timeframe.hours,
-    geopoliticsModel,
-    openAISettings.hasStoredApiKey && scanStatus === 'complete'
-  );
-
-  const {
-    data: riskSnapshot,
-    isLoading: loadingRiskSnapshot,
-    isError: riskSnapshotError,
-    refetch: refetchRiskSnapshot,
-    isFetching: fetchingRiskSnapshot,
-  } = useQuery({
-    queryKey: ['geopolitical-risk-snapshot'],
-    queryFn: () => fetchGeopoliticalRiskSnapshot(),
-    refetchInterval: 3600000,
-    staleTime: 900000,
-  });
-
+  let scanStatus: GeopoliticalScanStatus = 'complete';
+  let scanStatusLabel = 'Complete';
+  let analysisLabel = 'Events reviewed with OpenAI.';
+  if (!aiAvailable) {
+    scanStatus = keyCheckFailed ? 'error' : 'idle';
+    scanStatusLabel = checkingKey ? 'Connecting' : keyCheckFailed ? 'Connection unavailable' : 'OpenAI required';
+    analysisLabel = checkingKey ? 'Checking the OpenAI connection.'
+      : keyCheckFailed ? 'Unable to check the OpenAI connection. Use Refresh to try again.'
+        : 'Connect OpenAI in Settings to see event assessments.';
+  } else if (pendingFeeds) {
+    scanStatus = 'fetching-feeds';
+    scanStatusLabel = 'Fetching feeds';
+    analysisLabel = hasReview ? 'Showing previous OpenAI assessments while the feeds load.' : 'Waiting for headlines to review.';
+  } else if (!headlines.length) {
+    scanStatus = sourcePartial ? 'partial' : 'complete';
+    scanStatusLabel = sourcePartial ? 'Partial coverage' : 'No headlines';
+    analysisLabel = 'No headlines are available to review in this time frame.';
+  } else if (analysis.isFetching || !result && !reviewFailed) {
+    scanStatus = 'classifying';
+    scanStatusLabel = 'Reviewing events';
+    analysisLabel = hasReview ? 'Updating the map. Previous OpenAI assessments are shown.' : 'Reviewing headlines with OpenAI.';
+  } else if (reviewFailed) {
+    scanStatus = hasReview ? 'partial' : 'error';
+    scanStatusLabel = hasReview ? 'Partial review' : 'Review unavailable';
+    analysisLabel = hasReview ? 'OpenAI could not finish the review. Only reviewed events are shown.'
+      : 'OpenAI could not review these headlines. Use Refresh to try again.';
+  } else if (sourcePartial) {
+    scanStatus = 'partial';
+    scanStatusLabel = 'Partial coverage';
+    analysisLabel = 'Events reviewed with OpenAI using the available headlines.';
+  }
   return {
-    timeframe,
-    setTimeframe,
-    showPromptDebug,
-    setShowPromptDebug,
-    showPayloadDebug,
-    setShowPayloadDebug,
-    geopoliticsModel,
-    debugMode,
-    hasStoredApiKey: openAISettings.hasStoredApiKey,
-    setActivePanel,
-    geopoliticalPipelinePayload,
-    geopoliticalEventsPayload,
-    countrySummariesPayload,
-    countryCounts,
-    loadingCountryCounts,
-    refetchCountryCounts,
-    fetchingCountryCounts,
-    scanStatus,
-    classifiedCount,
-    candidateCount,
-    completedBatchCount,
-    totalBatchCount,
-    loadingCountrySummaries,
-    fetchingCountrySummaries,
-    riskSnapshot,
-    loadingRiskSnapshot,
-    riskSnapshotError,
-    refetchRiskSnapshot,
-    fetchingRiskSnapshot,
-    openAISettings,
+    timeframe, setTimeframe, debugMode, geopoliticsModel, openAISettings, scanStatus, scanStatusLabel, source, analysisLabel, hasArchive, hasReview,
+    showPromptDebug, setShowPromptDebug, showPayloadDebug, setShowPayloadDebug,
+    countryCounts: summaries.countryCounts, fetchingCountrySummaries: summaries.fetchingCountrySummaries,
+    fetchingCountryCounts: yahoo.isFetching || gdelt.isFetching || analysis.isFetching,
+    loadingCountryCounts: pendingFeeds && !headlines.length,
+    refetchCountryCounts: () => {
+      void yahoo.refetch();
+      void gdelt.refetch();
+      if (!aiAvailable) void refetchKey();
+      if (readyForAI && reviewFailed) void analysis.refetch();
+    },
+    geopoliticalPipelinePayload: { route: 'geopolitical-pipeline', capturedAt: new Date(Math.max(yahoo.dataUpdatedAt, gdelt.dataUpdatedAt)).toISOString(),
+      payload: { sources: source, candidates: headlines.length, reviewedEvents: reviewedStories.length, aiBatches: result?.batches, failedBatches: result?.failed } } as OpenAIDebugPayloadEntry,
+    geopoliticalEventsPayload: getOpenAIDebugPayload('geopolitical-events'),
+    countrySummariesPayload: getOpenAIDebugPayload('geopolitical-country-summaries'),
   };
 }
 
@@ -1012,9 +589,6 @@ function GeopoliticsMonitorControls({
     setShowPayloadDebug,
     fetchingCountryCounts,
     fetchingCountrySummaries,
-    fetchingRiskSnapshot,
-    refetchCountryCounts,
-    refetchRiskSnapshot,
   } = state;
 
   return (
@@ -1051,18 +625,15 @@ function GeopoliticsMonitorControls({
       {showRefresh ? (
         <button
           onClick={() => {
-            clearGeopoliticalMapCache();
-            clearGeopoliticalCountrySummaryCache();
-            clearGeopoliticalHeadlineAssessmentCache();
             void state.refetchCountryCounts();
-            void state.refetchRiskSnapshot();
           }}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-terminal-border text-terminal-muted hover:text-terminal-accent hover:border-terminal-accent/40 hover:bg-terminal-hover transition-colors text-xs"
+          disabled={fetchingCountryCounts || fetchingCountrySummaries}
           title="Refresh geopolitical monitor"
         >
           <RefreshCw
             size={11}
-            className={fetchingCountryCounts || fetchingCountrySummaries || fetchingRiskSnapshot ? 'animate-spin' : ''}
+            className={fetchingCountryCounts || fetchingCountrySummaries ? 'animate-spin' : ''}
           />
           REFRESH
         </button>
@@ -1129,242 +700,37 @@ function GeopoliticsDebugPanels({
   );
 }
 
-function formatGeopoliticalScanStatusLabel(status: GeopoliticalScanStatus): string {
-  switch (status) {
-    case 'fetching-feeds':
-      return 'Fetching feeds';
-    case 'classifying':
-      return 'Classifying events';
-    case 'partial':
-      return 'Partial results';
-    case 'complete':
-      return 'Complete';
-    case 'error':
-      return 'Refresh failed';
-    case 'idle':
-    default:
-      return 'Idle';
-  }
-}
-
-function formatGeopoliticalScanProgress(state: Pick<
-  GeopoliticsMonitorState,
-  'classifiedCount' | 'candidateCount' | 'completedBatchCount' | 'totalBatchCount'
->): string {
-  if (state.candidateCount <= 0) return '';
-  const headlineProgress = `${Math.min(state.classifiedCount, state.candidateCount)}/${state.candidateCount} HEADLINES`;
-  if (state.totalBatchCount <= 0) return headlineProgress;
-  return `${headlineProgress} · ${state.completedBatchCount}/${state.totalBatchCount} BATCHES`;
-}
-
-function GeopoliticsMapSection({
-  state,
-  onCountrySelect,
-}: {
-  state: GeopoliticsMonitorState;
-  onCountrySelect?: (countryKey: string) => void;
-}) {
-  const {
-    timeframe,
-    setTimeframe,
-    debugMode,
-    hasStoredApiKey,
-    setActivePanel,
-    countryCounts,
-    fetchingCountryCounts,
-    scanStatus,
-  } = state;
-
-  return hasStoredApiKey ? (
+export function NewsEventCard() {
+  const state = useGeopoliticsMonitorState();
+  const { timeframe } = state;
+  return <div className="relative h-full">
     <RegionalNewsMap
-      countryData={countryCounts}
-      topicLabel="GEOPOLITICAL"
-      timeframeLabel={timeframe.label}
-      timeframeOptions={TIMEFRAMES}
-      activeTimeframeKey={timeframe.key}
-      onTimeframeChange={(nextKey) => {
-        const nextTimeframe = TIMEFRAMES.find((item) => item.key === nextKey);
-        if (nextTimeframe) setTimeframe(nextTimeframe);
-      }}
-      onCountrySelect={onCountrySelect}
-      showDebugSources={debugMode}
-      isRefreshing={fetchingCountryCounts && countryCounts.length > 0}
-      isLoading={false}
-      scanStatus={scanStatus}
-      scanStatusLabel={formatGeopoliticalScanStatusLabel(scanStatus)}
-      scanProgressLabel={formatGeopoliticalScanProgress(state)}
-      showHotspotsSection={false}
+      countryData={state.countryCounts} topicLabel="GEOPOLITICAL" timeframeLabel={timeframe.label}
+      timeframeOptions={TIMEFRAMES} activeTimeframeKey={timeframe.key}
+      onTimeframeChange={key => { const next = TIMEFRAMES.find(t => t.key === key); if (next) state.setTimeframe(next); }}
+      showDebugSources={state.debugMode} isLoading={state.loadingCountryCounts}
+      scanStatus={state.scanStatus} scanStatusLabel={state.scanStatusLabel} showHotspotsSection={state.hasReview}
+      sourceNote={state.source} archiveMode={state.hasArchive} analysisNote={state.analysisLabel}
       headerActions={<GeopoliticsMonitorControls state={state} />}
     />
-  ) : (
-    <div className="overflow-hidden rounded border border-terminal-border bg-terminal-panel">
-      <div className="flex items-center justify-between gap-3 px-4 py-2 panel-border-b bg-terminal-elevated/40">
-        <div className="flex items-center gap-2">
-          <Globe2 size={14} className="text-terminal-accent" />
-          <span className="text-terminal-accent text-sm font-bold tracking-wider">GLOBAL EVENT MAP</span>
-        </div>
-        <div className="text-[11px] text-terminal-faint">OPENAI KEY REQUIRED</div>
-      </div>
-      <div className="p-4">
-        <div className="rounded border border-terminal-border bg-terminal-elevated px-4 py-3 text-sm text-terminal-muted">
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="whitespace-nowrap">
-              The Global Event Map only populates after you add your own OpenAI API key. Open Connections & AI Settings to configure it locally, then come back here.
-            </span>
-            <button
-              onClick={() => setActivePanel('settings')}
-              className="inline-flex items-center gap-2 rounded border border-terminal-accent/40 bg-terminal-accent/10 px-3 py-2 text-xs text-terminal-accent hover:bg-terminal-accent/20 transition-colors"
-            >
-              OPEN SETTINGS
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+    {state.debugMode && (state.showPromptDebug || state.showPayloadDebug) && <div className="absolute inset-3 z-20 overflow-auto bg-terminal-panel p-2">
+      <button onClick={() => { state.setShowPayloadDebug(false); state.setShowPromptDebug(false); }} className="mb-2 text-xs text-terminal-accent">Close debug</button>
+      <GeopoliticsDebugPanels state={state} /></div>}
+  </div>;
 }
 
-export function GeopoliticsMonitorSection({ embedded = false }: GeopoliticsMonitorSectionProps) {
-  const state = useGeopoliticsMonitorState();
-  const content = (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <Globe2 size={14} className="text-terminal-accent" />
-            <h1 className="text-terminal-accent font-bold text-sm tracking-wider">GEOPOLITICAL MONITOR</h1>
-          </div>
-          <p className="text-terminal-faint text-xs mt-1 leading-relaxed whitespace-nowrap">
-            Track geopolitical pressure through official GPR readings alongside country-specific geopolitical story clustering.
-          </p>
-        </div>
-
-        <GeopoliticsMonitorControls state={state} />
-      </div>
-
-      <GeopoliticsDebugPanels state={state} />
-
-      <GeopoliticalRiskCard
-        snapshot={state.riskSnapshot}
-        isLoading={state.loadingRiskSnapshot}
-        isError={state.riskSnapshotError}
-      />
-
-      <GeopoliticsMapSection state={state} />
-    </div>
-  );
-
-  if (embedded) {
-    return <div className="h-full overflow-y-auto p-4">{content}</div>;
-  }
-
-  return (
-    <div className="h-full overflow-y-auto p-4">
-      {content}
-    </div>
-  );
-}
-
-export function GeopoliticsPanel() {
-  return <GeopoliticsMonitorSection />;
-}
-
-function resolveCountryHotspotKey(
-  countryKey: string,
-  countries: Array<{ key: string; countryCode: string; label: string; shortLabel: string }>
-): string | null {
-  const normalizedKey = countryKey.trim().toLowerCase();
-  if (!normalizedKey) return null;
-
-  const exactKeyMatch = countries.find((country) => country.key.toLowerCase() === normalizedKey);
-  if (exactKeyMatch) return exactKeyMatch.key;
-
-  const countryCodeMatch = countries.find((country) => country.countryCode.toLowerCase() === normalizedKey);
-  if (countryCodeMatch) return countryCodeMatch.key;
-
-  const labelMatch = countries.find((country) => {
-    const label = country.label.trim().toLowerCase();
-    const shortLabel = country.shortLabel.trim().toLowerCase();
-    return label === normalizedKey || shortLabel === normalizedKey;
-  });
-
-  return labelMatch?.key ?? null;
-}
-
-export function NewsGeopoliticsPanel() {
-  const state = useGeopoliticsMonitorState();
-  const showDebugOverlay = state.debugMode && (state.showPromptDebug || state.showPayloadDebug);
-  const hotspotRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  const highlightTimeoutRef = useRef<number | null>(null);
-  const [selectedCountryKey, setSelectedCountryKey] = useState<string | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (highlightTimeoutRef.current !== null) {
-        window.clearTimeout(highlightTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  const handleCountrySelect = (countryKey: string) => {
-    const resolvedKey = resolveCountryHotspotKey(countryKey, state.countryCounts);
-    if (!resolvedKey) return;
-
-    hotspotRefs.current[resolvedKey]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    setSelectedCountryKey(resolvedKey);
-
-    if (highlightTimeoutRef.current !== null) {
-      window.clearTimeout(highlightTimeoutRef.current);
-    }
-
-    highlightTimeoutRef.current = window.setTimeout(() => {
-      setSelectedCountryKey((current) => (current === resolvedKey ? null : current));
-      highlightTimeoutRef.current = null;
-    }, 1500);
-  };
-
-  return (
-    <div className="relative h-full min-h-0 overflow-hidden p-4">
-      <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(22rem,0.9fr)] xl:grid-rows-[minmax(24rem,1.2fr)_minmax(16rem,0.8fr)]">
-        <div className="min-h-0 overflow-hidden xl:row-start-1 xl:col-start-1">
-          <div className="h-full">
-            <GeopoliticsMapSection state={state} onCountrySelect={handleCountrySelect} />
-          </div>
-        </div>
-        <div className="min-h-0 overflow-hidden xl:row-start-1 xl:col-start-2">
-          <div className="h-full overflow-y-auto">
-            <NewsPanel
-              className="h-full w-full"
-              embedded
-            />
-          </div>
-        </div>
-        <div className="min-h-0 overflow-hidden xl:row-start-2 xl:col-start-1">
-          <div className="h-full overflow-y-auto">
-            <CountryHotspotsSection
-              countryData={state.countryCounts}
-              topicLabel="GEOPOLITICAL"
-              selectedKey={selectedCountryKey}
-              hotspotRefs={hotspotRefs}
-            />
-          </div>
-        </div>
-        <div className="min-h-0 overflow-hidden xl:row-start-2 xl:col-start-2">
-          <div className="h-full overflow-y-auto">
-            <GeopoliticalRiskCard
-              snapshot={state.riskSnapshot}
-              isLoading={state.loadingRiskSnapshot}
-              isError={state.riskSnapshotError}
-            />
-          </div>
-        </div>
-      </div>
-
-      {showDebugOverlay && (
-        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center p-6">
-          <GeopoliticsDebugPanels state={state} variant="overlay" />
-        </div>
-      )}
-    </div>
-  );
+export function NewsRiskCard() {
+  const risk = useQuery({ queryKey: ['geopolitical-risk-snapshot'], queryFn: fetchGeopoliticalRiskSnapshot,
+    refetchInterval: 3600000, staleTime: 900000 });
+  return <div className="flex h-full min-h-0 flex-col overflow-hidden rounded border border-terminal-border bg-terminal-panel">
+    <header className="news-card-header">
+      <h2 className="flex items-center gap-2 text-sm font-bold tracking-wider text-terminal-accent">
+        <ShieldAlert size={14} className="shrink-0" /> GEOPOLITICAL RISK INDEX
+      </h2>
+      {risk.data && <a href={risk.data.sourceUrl} target="_blank" rel="noreferrer" className="shrink-0 text-[11px] text-terminal-muted hover:text-terminal-accent">Source ↗</a>}
+    </header>
+    {risk.data ? <RiskIndexReadings snapshot={risk.data} />
+      : risk.isPending ? <div role="status" className="shimmer m-3 flex-1 rounded"><span className="sr-only">Loading risk index</span></div>
+      : <p role="status" className="p-3 text-sm text-terminal-muted">The official geopolitical risk index is temporarily unavailable.</p>}
+  </div>;
 }
