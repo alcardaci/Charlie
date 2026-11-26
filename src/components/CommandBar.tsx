@@ -116,9 +116,13 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
           onClick={goHome}
           className="flex items-center gap-1.5 hover:opacity-80 transition-opacity"
           title="Market Overview"
+          aria-label="Charlie — Market Overview"
           style={electronNoDragStyle}
         >
-          <span className="charlie-wordmark">CHARLIE</span>
+          <span className="charlie-brand" aria-hidden="true">
+            <span className="charlie-brand-mark" />
+            <span className="charlie-brand-name" />
+          </span>
           {appVersion && (
             <span className="hidden sm:inline text-terminal-faint font-mono text-[10px] tracking-wider">{appVersion}</span>
           )}

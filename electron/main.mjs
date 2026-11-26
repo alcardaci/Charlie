@@ -40,7 +40,7 @@ async function setDockIconIfAvailable() {
 
   const possibleIcons = app.isPackaged
     ? [join(process.resourcesPath, 'icon.icns'), join(process.resourcesPath, 'Charlie.icns')]
-    : [join(projectRoot, 'build-assets', 'Charlie.icns')];
+    : [join(projectRoot, 'public', 'charlie-icon', '1024x1024.png')];
 
   for (const iconPath of possibleIcons) {
     try {

@@ -310,15 +310,35 @@ body {
   }
 }
 
-.charlie-wordmark {
-  color: var(--terminal-text);
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 0.10em;
+.charlie-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 5px;
+  border: 1px solid #eedbbd;
+  border-radius: 5px;
+  background-color: #241713;
 }
 
-.charlie-wordmark::first-letter {
-  color: var(--terminal-accent);
+/* Use the mark and lettering from the square app artwork in a horizontal lockup. */
+.charlie-brand-mark,
+.charlie-brand-name {
+  background-image: url('/charlie-icon/1024x1024.png');
+  background-repeat: no-repeat;
+}
+
+.charlie-brand-mark {
+  width: 22px;
+  height: 18px;
+  background-size: 36px;
+  background-position: -7px -6.5px;
+}
+
+.charlie-brand-name {
+  width: 56px;
+  height: 9px;
+  background-size: 93px;
+  background-position: -18.5px -66.5px;
 }
 
 .command-bar {

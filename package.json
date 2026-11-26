@@ -105,6 +105,7 @@
       "entitlementsInherit": "build/entitlements.mac.inherit.plist"
     },
     "win": {
+      "icon": "public/charlie-icon/1024x1024.png",
       "artifactName": "Charlie-${version}-${arch}.${ext}",
       "target": [
         {
@@ -130,6 +131,7 @@
       "artifactName": "Charlie-Portable-${version}-${arch}.${ext}"
     },
     "linux": {
+      "icon": "public/charlie-icon",
       "artifactName": "Charlie-${version}-${arch}.${ext}",
       "category": "Office;Finance;",
       "target": [

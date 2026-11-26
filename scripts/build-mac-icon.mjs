@@ -1,16 +1,15 @@
-import { access, mkdir, rename, rm } from 'node:fs/promises';
+import { access, mkdir, rm } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 const execFileAsync = promisify(execFile);
 const projectRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const sourceSvg = join(projectRoot, 'public', 'favicon.svg');
+const sourcePng = join(projectRoot, 'public', 'charlie-icon', '1024x1024.png');
 const buildAssetsDir = join(projectRoot, 'build-assets');
 const iconsetDir = join(buildAssetsDir, 'Charlie.iconset');
-const basePng = join(buildAssetsDir, 'Charlie-1024.png');
 const outputIcns = join(buildAssetsDir, 'Charlie.icns');
 
 const iconVariants = [
@@ -48,8 +47,7 @@ async function main() {
     return;
   }
 
-  await ensureSourceExists(sourceSvg);
-  await ensureDarwinTool('qlmanage');
+  await ensureSourceExists(sourcePng);
   await ensureDarwinTool('sips');
   await ensureDarwinTool('iconutil');
 
@@ -57,17 +55,8 @@ async function main() {
   await rm(iconsetDir, { recursive: true, force: true });
   await mkdir(iconsetDir, { recursive: true });
 
-  await execFileAsync('/usr/bin/qlmanage', ['-t', '-s', '1024', '-o', buildAssetsDir, sourceSvg], {
-    env: { ...process.env, QL_DISABLE_CONSOLE_LOGS: '1' },
-  });
-
-  const renderedPng = join(buildAssetsDir, `${basename(sourceSvg)}.png`);
-  await rename(renderedPng, basePng).catch(async () => {
-    await access(basePng, constants.R_OK);
-  });
-
   for (const [filename, size] of iconVariants) {
-    await execFileAsync('/usr/bin/sips', ['-z', String(size), String(size), basePng, '--out', join(iconsetDir, filename)]);
+    await execFileAsync('/usr/bin/sips', ['-z', String(size), String(size), sourcePng, '--out', join(iconsetDir, filename)]);
   }
 
   await execFileAsync('/usr/bin/iconutil', ['-c', 'icns', iconsetDir, '-o', outputIcns]);
