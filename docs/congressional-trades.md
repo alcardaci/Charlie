@@ -1,0 +1,17 @@
+# Congressional Trades
+
+F11 and `CONGRESS` open reported transactions in descending filing-date order. Select a member to see their chamber, party, constituency and disclosures. The ticker filter matches the symbol printed in the filing. Selecting a ticker opens Equity Research. The companion Help & Shortcuts tab is available in Settings or directly with `HELP`.
+
+## Sources and coverage
+
+- **House.** Charlie checks the Clerk’s annual index for periodic transaction reports filed in the past 90 calendar days, including the preceding year when needed. The index supplies the official filing date. For a recent filing with missing or incomplete structured rows, Charlie reads the transaction columns of its original PDF. It attempts up to 18 missing PDFs per refresh, with previously unattempted filings first. Image-only PDFs, incomplete extractions and reports awaiting processing appear under House coverage with an original filing link. [House Clerk disclosures](https://disclosures-clerk.house.gov/FinancialDisclosure) · [2026 index](https://disclosures-clerk.house.gov/public_disc/financial-pdfs/2026FD.zip)
+- **Senate and historical House.** Charlie reads the NexusTrade snapshot manifest and its `political_filings` and `political_trades` Parquet tables. It checks the schema, published file hashes and row counts. A transaction keeps its filing and source row identity, including separate rows with identical visible fields and amendments identified by the source. Senate freshness follows the published snapshot. Its coverage count describes known extraction gaps within that snapshot. The Senate site may require acknowledging its terms before viewing a filing. [Snapshot and manifest](https://huggingface.co/datasets/austin-starks/congressional-stock-trades) · [Senate eFD](https://efdsearch.senate.gov/search/home/)
+- **Member details.** The current and historical CC0 congress-legislators rosters supply party and constituency by Bioguide ID and chamber. A profile describes the member’s latest known seat in the selected chamber. For index-only reports without IDs, Charlie uses the Clerk’s name and constituency to resolve a member when possible. Missing details stay unspecified. [Congressional roster](https://github.com/unitedstates/congress-legislators)
+
+**Filing delay** counts calendar days from the disclosed trade date to the official filing date. It does not depend on the date a mirror imported the report. Values are reported ranges. A dash means the source did not supply the field. Amendments remain individually inspectable alongside earlier disclosures.
+
+The local server checks the sources when the workspace is used, roughly once a day. Refresh checks immediately. A compressed local cache retains the last successful data for each source across restarts. Expand either chamber’s coverage line for its source dates and links to known gaps. Transactions are paged locally after filtering the entire loaded history.
+
+## Use restrictions
+
+This workspace is for local personal research. The dataset notice and 5 U.S.C. § 13107(c) restrict use of covered disclosure reports for unlawful purposes, commercial purposes (with the specified public news-media exception), individual credit ratings, and fundraising or other solicitation of money. The roster’s CC0 dedication applies to member metadata. [Dataset use notice](https://huggingface.co/datasets/austin-starks/congressional-stock-trades/blob/main/LICENSE_DATA.md) · [5 U.S.C. § 13107(c)](https://uscode.house.gov/us/usc/t5/s13107/)

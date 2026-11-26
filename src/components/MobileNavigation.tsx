@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { BarChart2, Briefcase, Grip, HelpCircle, Home, Newspaper, Settings2, Wallet, X } from 'lucide-react';
+import { BarChart2, Briefcase, Grip, Landmark, Home, Newspaper, Settings2, Wallet, X } from 'lucide-react';
 import { workspaceShortcuts } from '../data/workspaceShortcuts';
 import { useTerminalStore } from '../store/useTerminalStore';
 import type { PanelType } from '../types';
@@ -11,7 +11,7 @@ type MobileNavigationProps = {
 const primaryWorkspaces = workspaceShortcuts.slice(0, 4);
 const moreWorkspaces = workspaceShortcuts.slice(4);
 const icons: Partial<Record<PanelType, typeof BarChart2>> = {
-  overview: Home, news: Newspaper, portfolio: Briefcase, help: HelpCircle, settings: Settings2,
+  overview: Home, news: Newspaper, portfolio: Briefcase, congress: Landmark, settings: Settings2,
 };
 
 export function MobileNavigation({ onOpenWatchlist }: MobileNavigationProps) {

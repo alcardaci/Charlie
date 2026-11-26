@@ -766,3 +766,8 @@ body {
   outline-offset: -3px;
   background: rgb(var(--terminal-accent-rgb) / 0.18);
 }
+
+.congress-table th:nth-child(-n+4), .congress-table td:nth-child(-n+4) { text-align: left; }
+.congress-table td { vertical-align: top; }
+.congress-table tr:hover td { cursor: auto; }
+.congress-table td:nth-child(3) { min-width: 10rem; max-width: 25rem; }

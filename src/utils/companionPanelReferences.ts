@@ -14,6 +14,7 @@ export const PANEL_MENTION_OPTIONS: PanelMentionOption[] = [
   { panel: 'macro', token: 'macro', aliases: ['rates', 'economy', 'yield'] },
   { panel: 'geopolitics', token: 'geopolitics', aliases: ['geo'] },
   { panel: 'predictions', token: 'predictions', aliases: ['pred', 'polymarket'] },
+  { panel: 'congress', token: 'congress', aliases: ['congressional-trades'] },
   { panel: 'portfolio', token: 'portfolio', aliases: ['holdings', 'positions'] },
   { panel: 'heatmap', token: 'heatmap', aliases: ['sectors'] },
   { panel: 'forex', token: 'forex', aliases: ['fx', 'currencies'] },
@@ -32,6 +33,7 @@ const PANEL_MENTION_LOOKUP = new Map(
 const panelNames = PANEL_MENTION_OPTIONS.map(({ panel, token, aliases = [] }) => {
   const names = [token, ...aliases];
   if (panel === 'predictions') names.push('prediction markets?');
+  if (panel === 'congress') names.push('congressional trades');
   return { panel, pattern: new RegExp(`\\b(?:${names.join('|')})\\s+(?:tab|panel|workspace|dashboard)\\b`, 'i') };
 });
 

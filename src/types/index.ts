@@ -15,7 +15,7 @@ export type PanelType =
   | 'yield'
   | 'etf'
   | 'screener'
-  | 'help'
+  | 'congress'
   | 'settings';
 
 export type OpenAIHarness = 'comprehensive' | 'custom';

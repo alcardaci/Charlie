@@ -2,10 +2,12 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronRight, ExternalLink } from 'lucide-react';
 import { WorkspaceHeader } from '../components/WorkspaceHeader';
+import { HelpContent } from './HelpPanel';
 import { deleteConnectionSecret, fetchConnectionStatuses, storeConnectionSecret } from '../api/finance';
 import { useTerminalStore } from '../store/useTerminalStore';
 import type { ConnectionProvider, ConnectionStatusMap } from '../types';
 import { DEFAULT_OVERVIEW_SUMMARY_SYSTEM_PROMPT, OPENAI_MODEL_OPTIONS } from '../utils/openaiConfig';
+import { useAppVersion } from '../utils/appVersion';
 
 const PROVIDERS = [
   { id: 'openai', name: 'OpenAI', purpose: 'Overview summaries, the AI companion and event map analysis.', url: 'https://platform.openai.com/api-keys' },
@@ -17,6 +19,7 @@ const fieldClass = 'min-w-0 rounded border border-terminal-border bg-terminal-el
 const buttonClass = 'rounded border border-terminal-border px-2.5 py-1.5 text-xs text-terminal-muted hover:border-terminal-accent hover:text-terminal-text disabled:opacity-50';
 const saveClass = 'rounded border border-terminal-accent/40 bg-terminal-accent/10 px-2.5 py-1.5 text-xs text-terminal-accent hover:bg-terminal-accent/20 disabled:opacity-50';
 const rowClass = 'border-b border-[color:var(--section-rule-color)] last:border-b-0';
+const tabs = [{ id: 'preferences', label: 'Preferences' }, { id: 'help', label: 'Help & Shortcuts' }] as const;
 
 type KeyChange = { provider: ConnectionProvider; action: 'save'; secret: string } | { provider: ConnectionProvider; action: 'remove' };
 
@@ -158,13 +161,41 @@ function SummaryPreferences() {
 }
 
 export function SettingsPanel() {
+  const tab = useTerminalStore(state => state.settingsTab);
+  const setActivePanel = useTerminalStore(state => state.setActivePanel);
+  const appVersion = useAppVersion();
   return <>
-    <WorkspaceHeader title="SETTINGS" />
-    <div className="min-h-0 flex-1 overflow-y-auto p-4">
+    <WorkspaceHeader title="SETTINGS">
+      {appVersion && <span className="text-xs text-terminal-faint">{appVersion}</span>}
+    </WorkspaceHeader>
+    <div role="tablist" aria-label="Settings views" className="flex shrink-0 gap-1 px-4 py-2">
+      {tabs.map(({ id, label }) => <button key={id} type="button" role="tab"
+        id={'settings-tab-' + id} aria-controls={'settings-view-' + id} aria-selected={tab === id}
+        tabIndex={tab === id ? 0 : -1} onClick={() => setActivePanel('settings', undefined, id)}
+        onKeyDown={event => {
+          if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+          event.preventDefault();
+          const other = id === 'help' ? 'preferences' : 'help';
+          const next = event.key === 'Home' ? 'preferences' : event.key === 'End' ? 'help' : other;
+          document.getElementById('settings-tab-' + next)?.focus();
+          setActivePanel('settings', undefined, next);
+        }}
+        className={'rounded border px-2.5 py-1 text-xs ' + (tab === id
+          ? 'border-terminal-accent/50 bg-terminal-accent/10 text-terminal-accent'
+          : 'border-transparent text-terminal-muted hover:bg-terminal-hover hover:text-terminal-text')}>
+        {label}
+      </button>)}
+    </div>
+    <div role="tabpanel" id="settings-view-preferences" aria-labelledby="settings-tab-preferences"
+      hidden={tab !== 'preferences'} tabIndex={0} className="min-h-0 flex-1 overflow-y-auto p-4">
       <div className="max-w-3xl space-y-6">
         <Connections />
         <div className="border-t border-[color:var(--section-rule-color)] pt-5"><SummaryPreferences /></div>
       </div>
+    </div>
+    <div role="tabpanel" id="settings-view-help" aria-labelledby="settings-tab-help"
+      hidden={tab !== 'help'} tabIndex={0} className="min-h-0 flex-1 overflow-y-auto p-4">
+      <HelpContent />
     </div>
   </>;
 }

@@ -27,6 +27,7 @@ import type {
   Quote,
 } from '../types';
 import { prepareChartPoints } from './chartData';
+import type { CongressPage } from '../data/congress';
 
 type CompanionState = {
   macroCountry?: MacroCountryCode;
@@ -87,7 +88,7 @@ const PANEL_LABELS: Record<PanelType, string> = {
   yield: 'Yield Curve',
   etf: 'ETF Monitor',
   screener: 'Screener',
-  help: 'Help',
+  congress: 'Congressional Trades',
   settings: 'Settings',
 };
 
@@ -601,25 +602,12 @@ function buildLocalOnlyContext(panel: PanelType, state: CompanionState, rendered
     return buildBaseContext(
       panel,
       'local-state',
-      'Provider connections and Overview summary preferences.',
+      'Provider connections, Overview summary preferences, and the Help & Shortcuts reference.',
       {
         activePanel: state.activePanel,
         activeSymbol: state.activeSymbol,
         watchlistCount: state.watchlist.length,
         portfolioCount: state.portfolio.length,
-      },
-      renderedText
-    );
-  }
-
-  if (panel === 'help') {
-    return buildBaseContext(
-      panel,
-      'local-state',
-      'Help and command reference panel.',
-      {
-        activeSymbol: state.activeSymbol,
-        activePanel: state.activePanel,
       },
       renderedText
     );
@@ -656,6 +644,16 @@ export async function buildPanelCompanionContext(args: BuildPanelContextArgs): P
       return buildPortfolioContext({ ...args, panel: normalizedPanel });
     case 'predictions':
       return buildPredictionsContext({ ...args, panel: normalizedPanel });
+    case 'congress': {
+      const displayed = args.queryClient.getQueriesData<CongressPage>({
+        queryKey: ['congress-trades'], type: 'active',
+      }).find(([, page]) => page)?.[1];
+      return buildBaseContext('congress', 'visible-panel',
+        displayed ? `${displayed.total} reported trades match the current filters. The sample contains up to 20 displayed transaction rows.`
+          : 'Open Congressional Trades to include its displayed disclosures.',
+        displayed ? { total: displayed.total, rows: displayed.rows.slice(0, 20) } : null,
+        args.renderedText);
+    }
     case 'geopolitics':
       return buildGeopoliticsContext({ ...args, panel: normalizedPanel });
     case 'news':

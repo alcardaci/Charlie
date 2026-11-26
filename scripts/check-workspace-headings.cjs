@@ -14,6 +14,22 @@ const companionRequests = [];
 const companionQuestions = ['What stands out today?', 'What are the predictions for MSFT next quarter?'];
 const companionModels = ['gpt-6.2-sol', 'gpt-6.2-astra'];
 const overviewCardIds = ['summary', 'sentiment', 'indices', 'portfolio', 'watchlist', 'sectors', 'gainers', 'losers', 'commodities', 'fx', 'predictions', 'calendar'];
+const hernFiling = 'https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20036875.pdf';
+const congressMembers = [
+  { id: 'H001082', name: 'Kevin Hern', chamber: 'House', party: 'Republican', state: 'OK', district: '1' },
+  { id: 'fixture-senator', name: 'Fixture Senator', chamber: 'Senate', party: 'Independent', state: 'VT', district: null },
+];
+const rockwellSale = {
+  memberId: 'H001082', memberName: 'Kevin Hern', chamber: 'House', ticker: 'ROK', asset: 'Rockwell Automation',
+  action: 'Partial sale', amount: '$50,001 - $100,000', owner: 'Joint', tradeDate: '2026-11-17', filingDate: '2026-11-24',
+  filingId: '20036875', filingUrl: hernFiling, amendment: false,
+};
+const congressRows = [
+  { ...rockwellSale, id: '20036875:7' }, { ...rockwellSale, id: '20036875:8' },
+  { ...rockwellSale, id: 'senate:0', filingId: 'senate', memberName: 'Fixture Senator', memberId: 'fixture-senator',
+    chamber: 'Senate', ticker: null, asset: 'Fixture asset', owner: null, action: 'Purchase', amendment: true,
+    filingDate: '2026-11-23', filingUrl: 'https://efdsearch.senate.gov/search/view/ptr/fixture/' },
+];
 const connections = { openai: true, fred: false, finnhub: false };
 let failFirstFredSave = true;
 let savedState = JSON.stringify({ version: 0, state: {
@@ -30,6 +46,18 @@ app.once('quit', () => rmSync(profile, { recursive: true, force: true }));
 async function localResponse(request) {
   const url = new URL(request.url);
   if (url.origin !== origin) return new Response(null, { status: 404 });
+  if (url.pathname === '/api/congress/trades') {
+    if (url.searchParams.get('refresh') === '1') return new Response(null, { status: 503 });
+    const chamber = url.searchParams.get('chamber'), member = url.searchParams.get('member'), ticker = url.searchParams.get('ticker');
+    const rows = congressRows.filter(row => (!chamber || row.chamber === chamber)
+      && (!member || row.chamber + ':' + row.memberId === member) && (!ticker || row.ticker === ticker));
+    const coverage = ['House', 'Senate'].map(chamber => ({
+      chamber, latestFiling: chamber === 'House' ? '2026-11-24' : '2026-11-23',
+      indexChecked: chamber === 'House' ? '2026-11-25' : null,
+      windowStart: null, snapshotAsOf: '2026-11-24', snapshotChecked: '2026-11-25', warnings: [], gaps: [],
+    }));
+    return Response.json({ members: congressMembers, rows, total: rows.length, offset: 0, coverage });
+  }
   if (url.pathname === '/api/connections/status') return Response.json(connections);
   if (url.pathname === '/api/openai/panel-chat' && request.method === 'POST') {
     const body = await request.json();
@@ -118,14 +146,14 @@ async function measureHeadings({ theme, width, question, replyNumber, companionM
     return buttons;
   }
   if (width >= 768) {
-    const labels = ['OVERVIEW', 'NEWS', 'PORT', 'EQUITY', 'HEAT', 'MACRO', 'FX', 'ETF', 'CRYPTO', 'PRED', 'HELP', 'SETTINGS'];
+    const labels = ['OVERVIEW', 'NEWS', 'PORT', 'EQUITY', 'HEAT', 'MACRO', 'FX', 'ETF', 'CRYPTO', 'PRED', 'CONGRESS', 'SETTINGS'];
     await checkNavigation('Workspace shortcuts', labels.map((label, index) => 'F' + (index + 1) + label));
   } else {
     const primary = await checkNavigation('Mobile workspaces', ['Home', 'News+Geo', 'Port', 'Equity', 'More']);
     primary.at(-1).click();
-    const more = await checkNavigation('More workspaces', ['Heatmap', 'Macro+Yield', 'Forex', 'ETF', 'Crypto', 'Predictions', 'Help', 'Settings', 'Watch']);
-    more[0].click();
-    await until(() => headers().some(el => el.textContent === 'Sector Heatmap'), 'mobile Heatmap selection');
+    const more = await checkNavigation('More workspaces', ['Heatmap', 'Macro+Yield', 'Forex', 'ETF', 'Crypto', 'Predictions', 'Congress', 'Settings', 'Watch']);
+    more.find(el => el.textContent === 'Congress').click();
+    await until(() => headers().some(el => el.textContent.toUpperCase() === 'CONGRESSIONAL TRADES'), 'mobile Congress selection');
     primary.at(-1).click();
     const watch = await until(() => Array.from(document.querySelectorAll('[aria-label="More workspaces"] button'))
       .find(el => el.textContent === 'Watch'), 'mobile watchlist shortcut');
@@ -354,11 +382,55 @@ async function measureHeadings({ theme, width, question, replyNumber, companionM
   }
 
   function checkPanelWidth(label) {
-    const body = headers()[0].closest('.workspace-header').nextElementSibling;
+    const body = workspace.querySelector('[role="tabpanel"]:not([hidden])') ?? headers()[0].closest('.workspace-header').nextElementSibling;
     if (body.scrollWidth > body.clientWidth + 1) throw new Error(width + 'px ' + label + ' overflows');
   }
 
+  async function checkCongress() {
+    const rows = () => Array.from(workspace.querySelectorAll('section[aria-label="Disclosed trades"] tbody tr'));
+    const filter = text => Array.from(workspace.querySelectorAll('label')).find(el => el.firstChild?.textContent === text).querySelector('select,input');
+    const selected = () => workspace.querySelector('[aria-label="Selected politician"]');
+    await until(() => rows().length === 3, 'all disclosed transaction rows');
+    setValue(filter('Chamber'), 'Senate', 'change');
+    await until(() => rows().length === 1 && rows()[0].innerText.includes('Fixture Senator'), 'Senate filter');
+    const cells = rows()[0].cells;
+    if (cells[1].textContent !== '—' || cells[2].querySelector('button') || !cells[3].innerText.includes('Amendment')) {
+      throw new Error('Congress must preserve unspecified owners/tickers and disclosed amendments');
+    }
+    setValue(filter('Politician'), 'Senate:fixture-senator', 'change');
+    await until(() => selected()?.innerText.includes('Independent · Senate · VT'), 'Senate member profile');
+    button('Clear filters').click();
+    await until(() => rows().length === 3 && !selected(), 'clear chamber and politician');
+    setValue(filter('Ticker'), 'rok', 'input');
+    await until(() => rows().length === 2, 'case-insensitive ROK ticker filter');
+    rows()[0].querySelector('button').click();
+    await until(() => selected()?.innerText.includes('Kevin Hern') && selected()?.innerText.includes('Republican · House · OK · District 1') && rows().length === 2, 'Hern profile from trade row');
+    for (const row of rows()) {
+      const source = row.querySelector('a[aria-label="Open original filing"]');
+      if (row.cells[3].textContent !== 'Partial sale' || row.cells[7].textContent !== '7 days'
+        || source?.getAttribute('href') !== 'https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20036875.pdf') {
+        throw new Error('Each Hern sale needs its filing, action and seven-day filing delay');
+      }
+    }
+    button('Refresh').click();
+    await until(() => workspace.innerText.includes('Showing the last received results.') && rows().length === 2, 'keep filtered disclosures after refresh failure');
+    button('ROK').click();
+    await until(() => workspace.querySelector('button[aria-label="Refresh company research"]') && workspace.innerText.includes('ROK'), 'ticker opens ROK in Equity Research');
+    document.querySelector('.command-bar button[title="Go back"]').click();
+    await until(() => headers().some(el => el.textContent.toUpperCase() === 'CONGRESSIONAL TRADES') && selected()?.textContent.includes('Kevin Hern') && filter('Ticker').value === 'ROK' && rows().length === 2, 'Back to filtered Congress results');
+    checkPanelWidth('Congressional Trades');
+  }
+
   async function checkHelpAndSettings() {
+    async function runCommand(command) {
+      const input = document.querySelector('.command-bar .cmd-input');
+      setValue(input, command, 'input');
+      await new Promise(resolve => setTimeout(resolve, 0));
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    }
+    const visibleTab = id => workspace.querySelector('#settings-view-' + id + ':not([hidden])');
+    await runCommand('HELP');
+    await until(() => visibleTab('help'), 'HELP opens Help & Shortcuts');
     const directory = workspace.querySelector('nav[aria-label="Workspaces"]');
     if (directory?.querySelectorAll('button').length !== 12) throw new Error('Help directory is incomplete');
     const reference = Array.from(workspace.querySelectorAll('details')).find(el => el.querySelector('summary')?.textContent.includes('Data sources'));
@@ -368,10 +440,10 @@ async function measureHeadings({ theme, width, question, replyNumber, companionM
     checkPanelWidth('expanded Help');
     button('WL').click();
     await until(() => document.activeElement?.id === 'overview-watchlist', 'Help watchlist shortcut');
-    press('F11');
-    const openSettings = await until(() => workspace.querySelector('nav [aria-label="Open Settings"]'), 'Help Settings shortcut');
+    await runCommand('HELP');
+    const openSettings = await until(() => visibleTab('help')?.querySelector('[aria-label="Open Settings"]'), 'Help Settings shortcut');
     openSettings.click();
-    await until(() => headers().some(el => el.textContent === 'SETTINGS'), 'Help opens Settings');
+    await until(() => visibleTab('preferences'), 'Settings command returns to preferences');
 
     const manager = workspace.querySelector('summary[aria-label="Manage FRED connection"]');
     manager.click();
@@ -401,9 +473,11 @@ async function measureHeadings({ theme, width, question, replyNumber, companionM
     await until(() => !button('Save preferences').disabled, 'edited preferences can save');
     button('Save preferences').click();
     press('F11');
-    await until(() => headers().some(el => el.textContent === 'HELP'), 'Help reopened');
+    await until(() => headers().some(el => el.textContent.toUpperCase() === 'CONGRESSIONAL TRADES'), 'F11 returns to Congress');
+    await runCommand('HELP');
+    await until(() => visibleTab('help'), 'Help reopened directly from Congress');
     press('F12');
-    await until(() => headers().some(el => el.textContent === 'SETTINGS'), 'Settings reopened');
+    await until(() => visibleTab('preferences'), 'F12 reopens Settings controls from Help');
     Array.from(workspace.querySelectorAll('summary')).find(el => el.textContent.includes('Summary instructions')).click();
     if (workspace.querySelector('textarea')?.value !== 'Fixture market summary preference.'
       || workspace.querySelector('select')?.value !== 'gpt-4.1') throw new Error('Saved AI preferences lost when reopening Settings');
@@ -412,13 +486,14 @@ async function measureHeadings({ theme, width, question, replyNumber, companionM
   for (const [key, label] of [
     ['F1', 'MARKET OVERVIEW'], ['F2', 'NEWS'], ['F3', 'PORTFOLIO TRACKER'], ['F5', 'SECTOR HEATMAP'],
     ['F6', 'MACRO MONITOR'], ['F7', 'FOREX'], ['F8', 'ETF MONITOR'], ['F9', 'CRYPTO MARKETS'],
-    ['F10', 'PREDICTION MARKETS'], ['F11', 'HELP'], ['F12', 'SETTINGS'],
+    ['F10', 'PREDICTION MARKETS'], ['F11', 'CONGRESSIONAL TRADES'], ['F12', 'SETTINGS'],
   ]) {
     press(key);
     await measure(label);
     if (key === 'F1') await checkOverviewSections();
     if (key === 'F11' || key === 'F12') checkPanelWidth(label);
-    if (key === 'F11' && width === 320 && theme === 'light') await checkHelpAndSettings();
+    if (key === 'F11' && theme === 'dark' && [1440, 320].includes(width)) await checkCongress();
+    if (key === 'F12' && width === 320 && theme === 'light') await checkHelpAndSettings();
     if (key === 'F2') {
       readings.at(-1).newsLayout = await checkNewsTiles();
       if (!document.querySelector('.command-bar button[aria-label="Open AI companion"]')) throw new Error('News lost access to the Companion');

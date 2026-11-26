@@ -1,13 +1,13 @@
-import { WorkspaceHeader } from '../components/WorkspaceHeader';
 import { workspaceShortcuts } from '../data/workspaceShortcuts';
 import { useTerminalStore } from '../store/useTerminalStore';
-import { useAppVersion } from '../utils/appVersion';
 
 const COMMAND_EXAMPLES = [
   { command: 'AAPL', description: 'Open Apple in Equity Research. You can also search by company name.' },
   { command: 'MSFT GP', description: 'Open Microsoft’s price chart. Use GP after any ticker.' },
   { command: 'WL', description: 'Open your watchlist. To add a ticker, type AAPL WL in the command bar.' },
   { command: 'HOME', description: 'Customize Overview. Choose Edit layout to move, resize, add, or remove cards, then Save layout.' },
+  { command: 'CONGRESS', description: 'Explore House and Senate transactions by member, ticker, or chamber.' },
+  { command: 'HELP', description: 'Open this Help & Shortcuts tab in Settings.' },
 ] as const;
 
 const KEYS = [
@@ -26,6 +26,8 @@ const SOURCES = [
   ['Finnhub', 'Earnings calendars.'],
   ['CoinGecko', 'Crypto prices and market-cap rankings.'],
   ['Polymarket', 'Market-implied probabilities and trading activity.'],
+  ['House Clerk and NexusTrade', 'U.S. House and Senate financial disclosures and links to the original filings.'],
+  ['congress-legislators', 'Member names, party affiliations, and constituencies.'],
   ['GDELT', 'Global coverage from article search and news archives.'],
   ['Caldara–Iacoviello', 'The Geopolitical Risk Index.'],
 ] as const;
@@ -39,16 +41,11 @@ const heading = 'instrument-heading mb-2 text-xs font-bold tracking-wider';
 const focus = 'focus-visible:outline focus-visible:outline-1 focus-visible:outline-terminal-accent';
 const disclosure = 'cursor-pointer py-3 font-semibold text-terminal-text marker:text-terminal-accent hover:text-terminal-accent ' + focus;
 
-export function HelpPanel() {
+export function HelpContent() {
   const executeCommand = useTerminalStore(state => state.executeCommand);
-  const appVersion = useAppVersion();
 
   return (
-    <>
-      <WorkspaceHeader title="HELP">
-        {appVersion && <span className="text-terminal-faint font-mono text-xs">{appVersion}</span>}
-      </WorkspaceHeader>
-      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-4 text-xs text-terminal-muted">
+      <div className="text-xs text-terminal-muted">
         <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,19rem),1fr))] items-start gap-x-8 gap-y-6">
           <section aria-labelledby="help-commands">
             <h2 className={heading} id="help-commands">COMMAND BAR</h2>
@@ -83,7 +80,7 @@ export function HelpPanel() {
               {workspaceShortcuts.map(({ key, name, command, panel }) => (
                 <li key={panel}>
                   <button type="button" aria-label={'Open ' + name} aria-keyshortcuts={key} aria-describedby={'help-command-' + panel}
-                    aria-current={panel === 'help' ? 'page' : undefined}
+                    aria-current={panel === 'settings' ? 'page' : undefined}
                     onClick={() => executeCommand(command)}
                     className={'grid min-h-8 w-full grid-cols-[2rem_1fr_auto] items-center gap-2 px-1 text-left hover:bg-terminal-hover ' + focus}>
                     <kbd className="font-mono text-terminal-accent">{key}</kbd>
@@ -124,6 +121,5 @@ export function HelpPanel() {
           </details>
         </div>
       </div>
-    </>
   );
 }

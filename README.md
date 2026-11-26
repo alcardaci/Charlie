@@ -13,7 +13,7 @@ Charlie is a local-first desktop market workspace built with React, Vite, and El
 ## Current Feature Set
 
 - Command-driven terminal UI with a top command bar, live market ticker, main panel, status bar, and optional live player. Market Overview pairs the portfolio snapshot with your watchlist and its 30-day price charts.
-- Dedicated workspaces for market overview, ticker research, charts, news and geopolitics, prediction markets, macro and yield monitoring, portfolio tracking, sector heatmaps, forex, crypto, ETF monitoring, help, and settings.
+- Twelve workspaces for Market Overview, News + Geopolitics, Portfolio, Equity Research, Heatmap, Macro + Yield, Forex, ETFs, Crypto, Predictions, Congressional Trades, and Settings. Equity includes the chart view. Settings includes Help & Shortcuts.
 - Fast ticker shortcuts such as `AAPL`, `AAPL GP`, `AAPL NEWS`, and `AAPL WL`.
 - Optional AI-assisted market summaries, geopolitics extraction, and a general-purpose research companion with autonomous web access and workspace awareness.
 - Local persistence for watchlists, portfolio lots, command history, companion conversations, chart style, forex pair selection, and provider settings.
@@ -40,15 +40,16 @@ npm run desktop:dev
   - `AAPL GP` or `AAPL CHART` opens the chart workspace
   - `AAPL NEWS` opens ticker-specific news
   - `AAPL WL` adds the symbol to the watchlist
-- `NEWS`, `GEO`, `PRED`, `MACRO`, `PORT`, `HEAT`, `FX`, `CRYPTO`, `ETF`, `HELP`, and `SETTINGS` jump straight to the matching workspace.
+- `NEWS`, `GEO`, `PRED`, `MACRO`, `PORT`, `HEAT`, `FX`, `CRYPTO`, `ETF`, `CONGRESS`, and `SETTINGS` jump straight to the matching workspace.
 - `ENTER` runs the command, `UP` and `DOWN` browse command history, `TAB` accepts autocomplete, and `ESC` clears or closes the command dropdown.
-- `F1` through `F12` provide shortcut-bar navigation for the core workspaces.
+- `F11` or `CONGRESS` opens Congressional Trades. `F12` or `SETTINGS` opens preferences. `HELP` opens Help & Shortcuts directly.
 
 ## Data Sources
 
 - Yahoo Finance via `yahoo-finance2`: equities, ETFs, indices, forex, futures, company fundamentals, search, charts, news, portfolio repricing, and most market screens.
 - Teleborsa / FIDA fallback parsing: quote and chart fallback for some fund-like instruments that Yahoo does not cover reliably.
 - CoinGecko: crypto prices, rankings, market caps, and breadth inputs.
+- U.S. House Clerk, the NexusTrade congressional disclosure snapshot, and congress-legislators supply Congressional Trades. [Coverage and personal-research terms](docs/congressional-trades.md).
 - Polymarket Gamma API: prediction-market contracts, probabilities, liquidity, and volume.
 - FRED: macro series and release dates used in the macro and calendar views.
 - Finnhub: earnings calendar support used in macro views.

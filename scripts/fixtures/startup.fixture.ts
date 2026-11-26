@@ -1,4 +1,6 @@
 import { deepStrictEqual } from 'node:assert';
+import { workspaceShortcuts } from '../../src/data/workspaceShortcuts';
+import { shouldUseSearch } from '../../src/utils/commandParsing';
 import {
   addOverviewCard, DEFAULT_OVERVIEW_LAYOUT, normalizeOverviewLayout, overviewCardOrder, removeOverviewCard,
   type OverviewLayout,
@@ -75,6 +77,22 @@ try {
   deepStrictEqual(overviewCardOrder(restored), ['watchlist', 'fx']);
   deepStrictEqual(addOverviewCard(restored, 'fx'), restored, 'Adding a visible card is idempotent');
   useTerminalStore.getState().setActivePanel('portfolio');
+  assert(new Set(workspaceShortcuts.map(entry => entry.panel)).size === 12 && workspaceShortcuts.length === 12, 'Exactly twelve main workspaces');
+  deepStrictEqual(workspaceShortcuts.slice(-3).map(({ key, command }) => [key, command]), [
+    ['F10', 'PRED'], ['F11', 'CONGRESS'], ['F12', 'SETTINGS'],
+  ]);
+  for (const command of ['CONGRESS', 'HELP', 'SETTINGS']) assert(!shouldUseSearch(command), command + ' must bypass ticker search');
+  const navigate = useTerminalStore.getState().executeCommand;
+  navigate('congress');
+  assert(useTerminalStore.getState().activePanel === 'congress', 'Congress command opens Congressional Trades');
+  navigate('Help');
+  assert(useTerminalStore.getState().activePanel === 'settings' && useTerminalStore.getState().settingsTab === 'help', 'Help opens Help & Shortcuts in Settings');
+  navigate('SETTINGS');
+  assert(useTerminalStore.getState().settingsTab === 'preferences', 'Settings opens the existing controls even from Help');
+  useTerminalStore.getState().goBack();
+  assert(useTerminalStore.getState().settingsTab === 'help', 'Back restores the selected Settings tab');
+  useTerminalStore.getState().goBack();
+  assert(useTerminalStore.getState().activePanel === 'congress', 'Back from the Help tab returns to Congress');
   assert(writes.every(value => JSON.parse(value).state.portfolio.length === 1), 'Hydration callbacks and navigation must preserve restored holdings');
   const { terminalStateStorage, hydrateLocalStateCache } = await import('../../src/utils/localStateStorage');
   const pending = JSON.stringify({ state: { newsLayout: [{ id: 'risk', width: 'full', height: 'tall' }], portfolio: [sample] }, version: 0 });

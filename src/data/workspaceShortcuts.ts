@@ -9,6 +9,6 @@ export const workspaceShortcuts = ([
   { panel: 'etf',         command: 'ETF',      label: 'ETF',      mobileLabel: 'ETF',         name: 'ETF Monitor' },
   { panel: 'crypto',      command: 'CRYPTO',   label: 'CRYPTO',   mobileLabel: 'Crypto',      name: 'Crypto' },
   { panel: 'predictions', command: 'PRED',     label: 'PRED',     mobileLabel: 'Predictions', name: 'Prediction Markets' },
-  { panel: 'help',        command: 'HELP',     label: 'HELP',     mobileLabel: 'Help',        name: 'Help' },
+  { panel: 'congress',    command: 'CONGRESS', label: 'CONGRESS', mobileLabel: 'Congress',    name: 'Congressional Trades' },
   { panel: 'settings',    command: 'SETTINGS', label: 'SETTINGS', mobileLabel: 'Settings',    name: 'Settings' },
 ] as const).map((workspace, index) => ({ ...workspace, key: `F${index + 1}` }));

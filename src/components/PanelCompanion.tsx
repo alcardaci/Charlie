@@ -83,6 +83,11 @@ const PANEL_SUGGESTIONS: Partial<Record<PanelType, string[]>> = {
     'Where do you see tension or inconsistency across these forecasts?',
     'What signals are these markets implying that deserve follow-up?',
   ],
+  congress: [
+    'Summarize the trades shown here.',
+    'Which of these disclosures had the longest filing delay?',
+    'What do the reported amount ranges tell me?',
+  ],
   portfolio: [
     'What concentration or hidden portfolio risk stands out?',
     'What pattern do you see in these holdings and exposures?',

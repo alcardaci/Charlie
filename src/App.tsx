@@ -29,7 +29,7 @@ export default function App() {
   const sideNewsRef = useRef<HTMLDivElement | null>(null);
 
   // News panel is shown on the right side unless we're already in the news panel
-  const showSideNews = activePanel !== 'news' && activePanel !== 'geopolitics' && activePanel !== 'predictions';
+  const showSideNews = !['news', 'geopolitics', 'predictions', 'congress'].includes(activePanel);
 
   return (
     <QueryClientProvider client={queryClient}>

@@ -54,7 +54,8 @@ const DEFAULT_OPENAI_SETTINGS: OpenAISettings = {
   hasStoredApiKey: false,
 };
 
-interface NavEntry { panel: PanelType; symbol: string }
+type SettingsTab = 'preferences' | 'help';
+interface NavEntry { panel: PanelType; symbol: string; settingsTab: SettingsTab }
 
 export type MultiAssetView = 'research' | 'chart';
 
@@ -68,6 +69,7 @@ interface TerminalState {
   macroCountry: MacroCountryCode;
   setMacroCountry: (country: MacroCountryCode) => void;
   activePanel: PanelType;
+  settingsTab: SettingsTab;
   activeSymbol: string;
   debugMode: boolean;
   overviewLayout: OverviewLayout;
@@ -94,7 +96,7 @@ interface TerminalState {
   activeCompanionConversationId: string | null;
   multiAssetTiles: MultiAssetTile[];
 
-  setActivePanel: (panel: PanelType, symbol?: string) => void;
+  setActivePanel: (panel: PanelType, symbol?: string, settingsTab?: SettingsTab) => void;
   openMultiAssetView: (symbol: string, view?: MultiAssetView) => void;
   addMultiAssetTile: (symbol: string, view?: MultiAssetView) => void;
   removeMultiAssetTile: (id: string) => void;
@@ -327,6 +329,7 @@ export const useTerminalStore = create<TerminalState>()(
       newsLayout: DEFAULT_NEWS_LAYOUT,
       setNewsLayout: layout => set({ newsLayout: normalizeNewsLayout(layout) }),
       activePanel: 'overview',
+      settingsTab: 'preferences',
       activeSymbol: 'AAPL',
       debugMode: false,
       chartSymbol: 'AAPL',
@@ -348,15 +351,16 @@ export const useTerminalStore = create<TerminalState>()(
       activeCompanionConversationId: null,
       multiAssetTiles: [],
 
-      setActivePanel: (panel, symbol) => {
+      setActivePanel: (panel, symbol, settingsTab = 'preferences') => {
         const upper = symbol?.toUpperCase();
-        const prev: NavEntry = { panel: get().activePanel, symbol: get().activeSymbol };
+        const prev: NavEntry = { panel: get().activePanel, symbol: get().activeSymbol, settingsTab: get().settingsTab };
         set((state) => ({
           activePanel: panel,
+          settingsTab,
           watchlistFocusRequested: false,
           ...(upper ? { activeSymbol: upper, chartSymbol: upper } : {}),
           // Push to nav history (max 30 entries, avoid duplicate consecutive entries)
-          navHistory: prev.panel === panel && prev.symbol === (upper ?? get().activeSymbol)
+          navHistory: prev.panel === panel && prev.symbol === (upper ?? prev.symbol) && prev.settingsTab === settingsTab
             ? state.navHistory
             : [prev, ...state.navHistory.slice(0, 29)],
         }));
@@ -365,7 +369,7 @@ export const useTerminalStore = create<TerminalState>()(
       openMultiAssetView: (symbol, view = 'research') => {
         const upper = symbol.trim().toUpperCase();
         if (!upper) return;
-        const prev: NavEntry = { panel: get().activePanel, symbol: get().activeSymbol };
+        const prev: NavEntry = { panel: get().activePanel, symbol: get().activeSymbol, settingsTab: get().settingsTab };
         set((state) => {
           const existingTiles = state.multiAssetTiles.length
             ? state.multiAssetTiles
@@ -380,6 +384,7 @@ export const useTerminalStore = create<TerminalState>()(
 
           return {
             activePanel: 'multiAsset',
+            settingsTab: 'preferences',
             watchlistFocusRequested: false,
             activeSymbol: upper,
             chartSymbol: upper,
@@ -435,6 +440,7 @@ export const useTerminalStore = create<TerminalState>()(
       goHome: () => {
         set({
           activePanel: 'overview',
+          settingsTab: 'preferences',
           watchlistFocusRequested: false,
           navHistory: [],
         });
@@ -445,6 +451,7 @@ export const useTerminalStore = create<TerminalState>()(
         if (!prev) return;
         set({
           activePanel: prev.panel,
+          settingsTab: prev.settingsTab,
           watchlistFocusRequested: false,
           activeSymbol: prev.symbol,
           chartSymbol: prev.symbol,
@@ -594,7 +601,7 @@ export const useTerminalStore = create<TerminalState>()(
             get().goHome();
             return;
           }
-          setActivePanel(mainPanel);
+          setActivePanel(mainPanel, undefined, cmd === 'HELP' ? 'help' : 'preferences');
           return;
         }
 

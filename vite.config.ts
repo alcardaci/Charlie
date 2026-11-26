@@ -1,4 +1,5 @@
 import { selectPolymarketForecasts, type PolymarketEvent } from './src/data/polymarket'
+import { createCongressService } from './server/congress'
 import { getGdeltNews } from './server/gdelt'
 import { companionSearchChoice } from './server/companionSearch'
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
@@ -3396,8 +3397,17 @@ function marketDataMiddleware(): Plugin {
   const eurostatCache = new Map<string, BlsProxyCacheEntry>()
   const eurostatInFlight = new Map<string, Promise<unknown>>()
 
+  const congress = createCongressService(join(APP_SUPPORT_DIR, 'cache', 'congress'))
+
   const registerMarketDataMiddlewares = (server: ViteDevServer | PreviewServer) => {
     registerLocalStateMiddleware(server)
+    server.middlewares.use(async (req, res, next) => {
+      const url = new URL(req.url ?? '/', 'http://localhost')
+      if (url.pathname !== '/api/congress/trades') return next()
+      if (req.method !== 'GET') return sendError(res, 'Method not allowed', 405)
+      try { return sendJSON(res, await congress(url.searchParams)) }
+      catch { return sendError(res, 'Congressional disclosures are temporarily unavailable.', 503) }
+    })
 
       server.middlewares.use(async (req, res, next) => {
         const url = new URL(req.url ?? '/', 'http://localhost')
