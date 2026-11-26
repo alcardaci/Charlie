@@ -1,7 +1,7 @@
 {
   "name": "bterminal",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "A desktop market research app for tracking a portfolio, researching stocks and indices, and following news, economic indicators, prediction markets, and congressional disclosures.",
   "author": "Alberto Cardaci",
   "type": "module",

@@ -2,7 +2,7 @@
 
 Charlie is a desktop market research app. Build a dashboard around your portfolio and watchlist, investigate a move in a stock or index, and follow the headlines and economic releases behind it. Charlie uses public market data and saves your holdings, layouts, and conversations on your device. An optional AI Companion can explain the chart you’re viewing or search the web with your own OpenAI key.
 
-**Download Charlie 1.1 for Apple Silicon Macs or Windows** from the [GitHub release](https://github.com/alcardaci/Charlie/releases/tag/v1.1.0). Linux users can run the app from source.
+**Download Charlie for Apple Silicon Macs or Windows** from the [latest GitHub release](https://github.com/alcardaci/Charlie/releases/latest). Linux users can run the app from source.
 
 ## Screenshots
 
@@ -28,7 +28,7 @@ Charlie is a desktop market research app. Build a dashboard around your portfoli
 
 ## Install and Run
 
-For a source installation of 1.1.0, download the [tagged source](https://github.com/alcardaci/Charlie/archive/refs/tags/v1.1.0.zip) and run these commands from its directory.
+For a source installation, download the source archive from the [latest release](https://github.com/alcardaci/Charlie/releases/latest) and run these commands from its directory.
 
 ```bash
 npm ci
