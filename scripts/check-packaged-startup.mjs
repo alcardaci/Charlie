@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { once } from 'node:events';
+import { on, once } from 'node:events';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -32,6 +32,54 @@ async function windowTarget() {
   throw new Error('Timed out waiting for the packaged app window.');
 }
 
+async function evaluateRenderer(socket, id, signal) {
+  const messages = on(socket, 'message', { signal, close: ['close'] });
+  try {
+    socket.send(JSON.stringify({
+      id, method: 'Runtime.evaluate', params: {
+        awaitPromise: true, returnByValue: true,
+        expression: `(async () => ({
+          rendered: !!document.querySelector('.command-bar .cmd-input'),
+          version: await window.charlie?.getVersion?.(),
+        }))()`,
+      },
+    }));
+    for await (const [data] of messages) {
+      const reply = JSON.parse(data);
+      if (reply.id === id) return reply;
+    }
+    throw new Error('The renderer closed its debugging connection before replying.');
+  } finally {
+    await messages.return();
+  }
+}
+
+async function checkRenderer(socket) {
+  const deadline = AbortSignal.timeout(20000);
+  let lastState = 'waiting for the first evaluation';
+  try {
+    for (let id = 1; !deadline.aborted; id++) {
+      const { result, error } = await evaluateRenderer(socket, id, deadline);
+      if (error && /execution context was destroyed|cannot find (?:default execution )?context|inspected target navigated/i.test(error.message)) {
+        lastState = error.message;
+      } else {
+        if (error) throw new Error(`Runtime.evaluate failed (${error.code}): ${error.message}`);
+        if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text);
+        const state = result.result.value;
+        if (state?.rendered && state.version !== undefined) {
+          assert.deepEqual(state, { rendered: true, version });
+          return;
+        }
+        lastState = JSON.stringify(state);
+      }
+      await delay(150, undefined, { signal: deadline });
+    }
+  } catch (error) {
+    if (!deadline.aborted) throw error;
+  }
+  throw new Error('Timed out waiting for the packaged renderer. Last observation: ' + lastState);
+}
+
 try {
   const page = await windowTarget();
   const api = await fetch(new URL('/api/local-state/', page.url));
@@ -40,19 +88,7 @@ try {
 
   socket = new WebSocket(page.webSocketDebuggerUrl);
   await once(socket, 'open', { signal: AbortSignal.timeout(5000) });
-  const reply = once(socket, 'message', { signal: AbortSignal.timeout(20000) });
-  socket.send(JSON.stringify({
-    id: 1, method: 'Runtime.evaluate', params: {
-      awaitPromise: true, returnByValue: true,
-      expression: `(async () => {
-        for (let i = 0; i < 100 && !document.querySelector('.command-bar .cmd-input'); i++)
-          await new Promise(resolve => setTimeout(resolve, 100));
-        return { rendered: !!document.querySelector('.command-bar .cmd-input'), version: await window.charlie.getVersion() };
-      })()`,
-    },
-  }));
-  const [message] = await reply;
-  assert.deepEqual(JSON.parse(message).result?.result?.value, { rendered: true, version });
+  await checkRenderer(socket);
   console.log('Verified native window, command bar, local API and version ' + version + '.');
 } finally {
   socket?.close();
