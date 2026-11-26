@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import './OverviewPanel.css';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bot, Info, Loader2, Sparkles } from 'lucide-react';
+import { Bot, Loader2, Plus, Sparkles } from 'lucide-react';
 import {
   fetchForexPairs,
   fetchMacroReleaseCalendar,
@@ -13,10 +14,21 @@ import {
   getOpenAIDebugPayload,
 } from '../api/finance';
 import type { OpenAIDebugPayloadEntry } from '../api/finance';
+import { OverviewSentiment } from '../components/OverviewSentiment';
+import { OverviewIndices } from '../components/OverviewIndices';
+import { OverviewWatchlist } from '../components/OverviewWatchlist';
+import { OverviewCompanionPrompt } from '../components/OverviewCompanionPrompt';
+import { OverviewSectionHeader } from '../components/OverviewSectionHeader';
+import { TileLayoutActions, TileLayoutBoard, TileLayoutHint } from '../components/TileLayoutBoard';
+import {
+  addOverviewCard, DEFAULT_OVERVIEW_LAYOUT, MAX_OVERVIEW_BOARD_HEIGHT, OVERVIEW_CARD_IDS, OVERVIEW_CARD_NAMES, OVERVIEW_SIZING,
+  overviewCardOrder, removeOverviewCard, type OverviewCardId, type OverviewLayout,
+} from '../utils/overviewLayout';
+import { getHeatPaint, heatDotBackground } from '../utils/heatmapPaint';
+import { WorkspaceHeader } from '../components/WorkspaceHeader';
 import { useTerminalStore } from '../store/useTerminalStore';
-import { AIMarketSummary, MarketSentimentPillar, NewsItem, Quote } from '../types';
+import { AIMarketSummary, NewsItem, Quote } from '../types';
 import { fmt, changeColor } from '../utils/formatters';
-import { formatSentimentScore } from '../utils/marketPanelDisplay';
 import { buildTimestampedJsonFilename, downloadJsonFile } from '../utils/downloadJson';
 import { EventsCalendar } from '../components/EventsCalendar';
 import { PredictionMarketsSection } from '../components/PredictionMarketsSection';
@@ -49,35 +61,6 @@ const SECTOR_NAMES: Record<string, string> = {
 
 const MOVERS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'BRK-B', 'JPM', 'V', 'UNH', 'JNJ', 'XOM', 'WMT', 'PG', 'AVGO', 'MA', 'HD', 'CVX', 'MRK'];
 
-const SENTIMENT_EXPLAINERS: Record<'composite' | MarketSentimentPillar['key'], { description: string; source: string }> = {
-  composite: {
-    description: 'The score is the equal-weight average of the available pillars. A higher score indicates greater risk appetite.',
-    source: 'Derived from latest available Yahoo Finance quotes for ^VIX, SPY, QQQ, IWM, RSP, HYG, LQD, TLT, and GLD.',
-  },
-  volatility: {
-    description: 'A lower score indicates greater market stress. The score reaches zero when the VIX is at least 32 and has risen at least 4% from its previous close.',
-    source: 'Latest available Yahoo Finance quote data from ^VIX.',
-  },
-  breadth: {
-    description: 'Measures how broad market participation is by comparing small caps and equal-weight performance against the S&P 500.',
-    source: 'Latest available Yahoo Finance quote data from SPY, IWM, and RSP.',
-  },
-  credit: {
-    description: 'Measures risk appetite across credit and duration by comparing high-yield credit, investment grade credit, and Treasury behavior.',
-    source: 'Latest available Yahoo Finance quote data from HYG, LQD, and TLT.',
-  },
-  leadership: {
-    description: 'Starts at 50, adds 10 times the daily QQQ return and 14 times its lead over SPY, then subtracts 6 times the GLD return. Returns are in percentage points. The score is capped at 0 and 100.',
-    source: 'Latest available Yahoo Finance quote data from QQQ, SPY, and GLD.',
-  },
-};
-
-const SENTIMENT_SYMBOL_LABELS: Record<string, string> = {
-  '^VIX': 'VIX',
-};
-const sentimentQuoteClock = new Intl.DateTimeFormat('en-US', {
-  month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York', timeZoneName: 'short',
-});
 const OVERVIEW_SUMMARY_HARNESS = 'comprehensive' as const;
 const US_EQUITY_MARKET_OPEN_STATES = new Set(['REGULAR']);
 const OVERVIEW_SUMMARY_NEWS_TOPICS = [
@@ -105,10 +88,6 @@ type OverviewSummaryNewsEntry = {
 
 function toYmd(date: Date): string {
   return date.toISOString().slice(0, 10);
-}
-
-function formatSentimentSymbol(symbol: string): string {
-  return SENTIMENT_SYMBOL_LABELS[symbol] ?? symbol;
 }
 
 function normalizeOverviewQuote(quote: Quote | undefined, label: string) {
@@ -382,31 +361,6 @@ function buildOverviewRequestContext(
   };
 }
 
-function StatCard({ label, value, change, changePct, onClick }: {
-  label: string; value: string; change?: string; changePct?: string;
-  onClick?: () => void;
-}) {
-  const isPos = (changePct ?? '').startsWith('+');
-  const isNeg = (changePct ?? '').startsWith('-');
-  const borderColor = isPos ? 'border-t-terminal-positive' : isNeg ? 'border-t-terminal-negative' : 'border-t-terminal-border';
-
-  return (
-    <div
-      onClick={onClick}
-      className={`bg-terminal-panel border border-terminal-border border-t-2 ${borderColor} rounded p-3 flex-1 min-w-0 ${onClick ? 'cursor-pointer hover:bg-terminal-hover transition-colors' : ''}`}
-    >
-      <div className="text-terminal-muted text-xs mb-1 truncate">{label}</div>
-      <div className="text-terminal-text font-bold text-sm tabular-nums truncate">{value}</div>
-      {changePct && (
-        <div className={`text-xs tabular-nums mt-0.5 ${isPos ? 'text-terminal-positive' : isNeg ? 'text-terminal-negative' : 'text-terminal-muted'}`}>
-          {change && <span className="mr-1">{change}</span>}
-          <span>{changePct}</span>
-        </div>
-      )}
-    </div>
-  );
-}
-
 export function OverviewPanel() {
   const queryClient = useQueryClient();
   const {
@@ -415,12 +369,39 @@ export function OverviewPanel() {
     openAISettings,
     portfolio,
     portfolioDisplayCurrency: displayCurrency,
+    watchlistFocusRequested,
+    overviewLayout,
+    setOverviewLayout,
     marketOverviewSummary,
     marketOverviewSummaryCollapsed,
     updateOpenAISettings,
     setMarketOverviewSummary,
     setMarketOverviewSummaryCollapsed,
   } = useTerminalStore();
+  const [draft, setDraft] = useState<OverviewLayout | null>(null);
+  const [showWatchlistForVisit, setShowWatchlistForVisit] = useState(false);
+  const watchlistSection = useRef<HTMLElement>(null);
+  const viewport = useRef<HTMLDivElement>(null);
+  const editing = draft !== null && !watchlistFocusRequested;
+  const layout = editing ? draft : overviewLayout;
+  const visible = new Set(overviewCardOrder(layout));
+  // The Watch shortcut can open a hidden watchlist for this visit without changing the saved layout.
+  const displayedLayout = !editing && (watchlistFocusRequested || showWatchlistForVisit) && !visible.has('watchlist')
+    ? addOverviewCard(layout, 'watchlist')
+    : layout;
+
+  useLayoutEffect(() => {
+    const section = watchlistSection.current;
+    if (!watchlistFocusRequested || !section) return;
+    setDraft(null);
+    setShowWatchlistForVisit(true);
+    section.focus({ preventScroll: true });
+    section.scrollIntoView({ block: 'start' });
+    useTerminalStore.setState({ watchlistFocusRequested: false });
+  }, [watchlistFocusRequested]);
+
+  // The comprehensive AI summary also uses the inputs of cards the reader has hidden.
+  const needsData = (...ids: OverviewCardId[]) => visible.has('summary') || ids.some(id => visible.has(id));
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const overviewSystemPrompt = openAISettings.systemPrompts.comprehensive?.trim() || DEFAULT_OVERVIEW_SUMMARY_SYSTEM_PROMPT;
 
@@ -430,6 +411,7 @@ export function OverviewPanel() {
 
   const { data: indices = [], isLoading: loadingIdx, isError: indexError, isFetching: refreshingIndices, dataUpdatedAt: indicesUpdatedAt } = useQuery({
     queryKey: ['indices'],
+    enabled: needsData('indices'),
     queryFn: () => fetchQuotes(INDICES),
     refetchInterval: 60000,
     staleTime: 30000,
@@ -438,6 +420,7 @@ export function OverviewPanel() {
 
   const { data: sectors = [], isLoading: loadingSectors, isError: sectorError } = useQuery({
     queryKey: ['sectors'],
+    enabled: needsData('sectors'),
     queryFn: () => fetchQuotes(SECTORS),
     refetchInterval: 60000,
     staleTime: 30000,
@@ -446,6 +429,7 @@ export function OverviewPanel() {
 
   const { data: movers = [], isError: moversError } = useQuery({
     queryKey: ['movers'],
+    enabled: needsData('gainers', 'losers'),
     queryFn: () => fetchQuotes(MOVERS),
     refetchInterval: 60000,
     staleTime: 30000,
@@ -454,6 +438,7 @@ export function OverviewPanel() {
 
   const { data: sentiment, isLoading: loadingSentiment, isError: sentimentError } = useQuery({
     queryKey: ['market-sentiment'],
+    enabled: needsData('sentiment'),
     queryFn: fetchSentimentSnapshot,
     refetchInterval: 60000,
     staleTime: 30000,
@@ -462,6 +447,7 @@ export function OverviewPanel() {
 
   const { data: crossAssetQuotes = [], isLoading: loadingCrossAssets, isError: crossAssetError } = useQuery({
     queryKey: ['overview-cross-asset'],
+    enabled: needsData('commodities', 'fx'),
     queryFn: () => fetchQuotes([...COMMODITIES, ...CURRENCIES]),
     refetchInterval: 60000,
     staleTime: 30000,
@@ -474,7 +460,7 @@ export function OverviewPanel() {
   const { data: portfolioQuotes = [], isLoading: loadingPortfolioSnapshot, isError: portfolioQuoteError } = useQuery({
     queryKey: ['portfolio-quotes', portfolioSymbols],
     queryFn: () => fetchQuotes(portfolioSymbols),
-    enabled: portfolioSymbols.length > 0,
+    enabled: needsData('portfolio') && portfolioSymbols.length > 0,
     refetchInterval: 60000,
     staleTime: 30000,
     retry: 1,
@@ -482,6 +468,7 @@ export function OverviewPanel() {
 
   const { data: predictionSnapshot, isLoading: loadingPredictions } = useQuery({
     queryKey: ['overview-predictions', 4],
+    enabled: needsData('predictions'),
     queryFn: () => fetchPredictionForecasts(4),
     refetchInterval: 2 * 60 * 1000,
     staleTime: 60 * 1000,
@@ -490,6 +477,7 @@ export function OverviewPanel() {
 
   const { data: calendarData } = useQuery({
     queryKey: ['overview-calendar-summary', monthFrom, monthTo],
+    enabled: visible.has('summary'),
     queryFn: () => fetchMacroReleaseCalendar(monthFrom, monthTo),
     staleTime: 30 * 60 * 1000,
     retry: 1,
@@ -497,6 +485,7 @@ export function OverviewPanel() {
 
   const { data: keyStatus } = useQuery({
     queryKey: ['openai-key-status'],
+    enabled: visible.has('summary'),
     queryFn: fetchOpenAIKeyStatus,
     staleTime: 30000,
   });
@@ -520,25 +509,24 @@ export function OverviewPanel() {
   const todayYmd = toYmd(today);
   const upcomingEvents = (calendarData?.events ?? []).filter((event) => event.date >= todayYmd).slice(0, 8);
   const predictions = predictionSnapshot?.forecasts ?? [];
-  const sentimentSymbols = sentiment ? Array.from(new Set(sentiment.pillars.flatMap((pillar) => pillar.symbols))) : [];
   const fxCurrencies = [...new Set([...portfolio.map((lot) => normalizePortfolioCurrency(lot.currency)), ...portfolioQuotes.map((quote) => quoteCurrencyUnit(quote.currency).currency)])].sort();
   const fxCurrencyKey = fxCurrencies.join(',');
   const { data: portfolioFx = [], isLoading: loadingPortfolioFx, isError: portfolioFxError } = useQuery({
     queryKey: ['portfolio-fx-rates', fxCurrencyKey, displayCurrency],
     queryFn: () => fetchForexPairs(fxCurrencies.filter((currency) => currency !== displayCurrency).map((currency) => ({ base: currency, quote: displayCurrency }))),
-    enabled: portfolioSymbols.length > 0 && fxCurrencies.some((currency) => currency !== displayCurrency),
+    enabled: needsData('portfolio') && portfolioSymbols.length > 0 && fxCurrencies.some((currency) => currency !== displayCurrency),
     staleTime: 300000,
     refetchInterval: 300000,
     retry: 1,
   });
   const portfolioSnapshot = useMemo(() => buildPortfolioOverviewSnapshot(portfolio, portfolioQuotes, displayCurrency, portfolioFx), [portfolio, portfolioQuotes, displayCurrency, portfolioFx]);
   const quoteIssues = [
-    indexError || (!loadingIdx && indices.length < INDICES.length) ? 'major indices' : null,
-    sectorError || (!loadingSectors && sectors.length < SECTORS.length) ? 'sectors' : null,
-    moversError ? 'tracked-stock movers' : null,
-    crossAssetError || (!loadingCrossAssets && crossAssetQuotes.length < COMMODITIES.length + CURRENCIES.length) ? 'cross-asset quotes' : null,
-    sentimentError ? 'sentiment inputs' : null,
-    portfolioQuoteError || portfolioFxError ? 'portfolio inputs' : null,
+    needsData('indices') && (indexError || (!loadingIdx && indices.length < INDICES.length)) ? 'major indices' : null,
+    needsData('sectors') && (sectorError || (!loadingSectors && sectors.length < SECTORS.length)) ? 'sectors' : null,
+    needsData('gainers', 'losers') && moversError ? 'tracked-stock movers' : null,
+    needsData('commodities', 'fx') && (crossAssetError || (!loadingCrossAssets && crossAssetQuotes.length < COMMODITIES.length + CURRENCIES.length)) ? 'cross-asset quotes' : null,
+    needsData('sentiment') && sentimentError ? 'sentiment inputs' : null,
+    needsData('portfolio') && (portfolioQuoteError || portfolioFxError) ? 'portfolio inputs' : null,
   ].filter((label): label is string => label != null);
 
   const overviewSnapshot = useMemo(() => ({
@@ -654,184 +642,129 @@ export function OverviewPanel() {
   };
 
   const overviewSummaryPayload = getOpenAIDebugPayload('overview-summary');
+  const openEquity = (symbol: string) => setActivePanel('equity', symbol);
 
-  return (
-    <div className="h-full overflow-y-auto p-3 sm:p-4 space-y-3 sm:space-y-4">
-      {/* Header */}
-      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-terminal-accent font-bold text-sm tracking-wider">MARKET OVERVIEW</h1>
-        <span className="text-terminal-faint text-[11px] sm:text-xs">
-          {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-        </span>
+  const cards: Record<OverviewCardId, ReactNode> = {
+    summary: <div className="overview-insights">
+      <OverviewSectionHeader title="AI INSIGHTS" />
+      <div className="overview-insights-grid">
+        <AISummaryCard
+          summary={marketOverviewSummary}
+          isCollapsed={marketOverviewSummaryCollapsed}
+          selectedModel={openAISettings.model}
+          error={summaryError}
+          hasApiKey={Boolean(keyStatus?.configured ?? openAISettings.hasStoredApiKey)}
+          isLoading={summaryMutation.isPending}
+          onGenerate={handleGenerateSummary}
+          onOpenSettings={() => setActivePanel('settings')}
+          onToggleCollapsed={() => setMarketOverviewSummaryCollapsed(!marketOverviewSummaryCollapsed)}
+          debugMode={debugMode}
+          aiPayload={overviewSummaryPayload}
+        />
+        <OverviewCompanionPrompt />
       </div>
+    </div>,
+    sentiment: <OverviewSentiment sentiment={sentiment} isLoading={loadingSentiment} onSelectSymbol={openEquity} />,
+    indices: <OverviewIndices symbols={INDICES} names={INDEX_NAMES} quotes={indices} loading={loadingIdx} onSelect={openEquity} />,
+    portfolio: <PortfolioSnapshotCard
+      snapshot={portfolioSnapshot}
+      loading={loadingPortfolioSnapshot || loadingPortfolioFx}
+      onOpenPortfolio={() => setActivePanel('portfolio')}
+      onSelectSymbol={openEquity}
+    />,
+    watchlist: <OverviewWatchlist sectionRef={watchlistSection} />,
+    sectors: <SectorPerformance sectors={sectors} loading={loadingSectors} onSelect={openEquity} />,
+    gainers: <MoverTable title="TRACKED GAINERS" data={gainers} onSelect={openEquity} />,
+    losers: <MoverTable title="TRACKED LOSERS" data={losers} onSelect={openEquity} />,
+    commodities: <CrossAssetTable title="COMMODITIES" symbols={COMMODITIES} labels={COMMODITY_LABELS} quotes={crossAssetQuotes} loading={loadingCrossAssets} onSelect={openEquity} />,
+    fx: <CrossAssetTable title="FX RATES" symbols={CURRENCIES} labels={CURRENCY_LABELS} quotes={crossAssetQuotes} loading={loadingCrossAssets} onSelect={openEquity} />,
+    predictions: <PredictionMarketsSection predictions={predictions} loading={loadingPredictions} updatedAt={predictionSnapshot?.updatedAt ?? null} compact />,
+    calendar: <div className="overview-calendar overflow-hidden"><EventsCalendar overview /></div>,
+  };
 
-      <div className="text-[11px] text-terminal-faint" role="status">
-        Public market quotes may be delayed. {refreshingIndices ? 'Refreshing…' : indicesUpdatedAt ? `Quotes fetched ${new Date(indicesUpdatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.` : 'No quote snapshot yet.'}
-      </div>
+  return <div className="flex h-full min-h-0 flex-col" onKeyDown={event => {
+    if (editing && event.key === 'Escape') { event.preventDefault(); setDraft(null); }
+  }}>
+    <WorkspaceHeader title="MARKET OVERVIEW">
+      {editing ? <TileLayoutHint id="overview-edit-hint" /> : <span className="text-terminal-faint text-[11px] sm:text-xs">
+        {today.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+      </span>}
+      <TileLayoutActions editing={editing}
+        onEdit={() => { setShowWatchlistForVisit(false); setDraft(overviewLayout); }}
+        onReset={() => setDraft(DEFAULT_OVERVIEW_LAYOUT)}
+        onCancel={() => setDraft(null)}
+        onSave={() => { if (draft) setOverviewLayout(draft); setDraft(null); }} />
+    </WorkspaceHeader>
+    <div ref={viewport} className="min-h-0 flex-1 overflow-y-auto px-4 py-3 sm:py-4 space-y-3 sm:space-y-4">
+      {displayedLayout.tree && <div className="text-[11px] text-terminal-faint" role="status">
+        Public market quotes may be delayed. {needsData('indices') && (refreshingIndices ? 'Refreshing…' : indicesUpdatedAt ? `Quotes fetched ${new Date(indicesUpdatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.` : 'No quote snapshot yet.')}
+      </div>}
       {quoteIssues.length > 0 && <div className="rounded border border-terminal-accent/30 bg-terminal-accent/5 px-3 py-2 text-xs text-terminal-muted" role="status">Some data is unavailable or could not refresh: {quoteIssues.join(', ')}. Missing values stay blank; cached observations may still be shown.</div>}
-
-      <AISummaryCard
-        summary={marketOverviewSummary}
-        isCollapsed={marketOverviewSummaryCollapsed}
-        selectedModel={openAISettings.model}
-        error={summaryError}
-        hasApiKey={Boolean(keyStatus?.configured ?? openAISettings.hasStoredApiKey)}
-        isLoading={summaryMutation.isPending}
-        onGenerate={handleGenerateSummary}
-        onOpenSettings={() => setActivePanel('settings')}
-        onToggleCollapsed={() => setMarketOverviewSummaryCollapsed(!marketOverviewSummaryCollapsed)}
-        debugMode={debugMode}
-        aiPayload={overviewSummaryPayload}
-      />
-
-      {/* Sentiment */}
-      <div>
-        <div className="text-terminal-muted text-xs mb-2 font-bold tracking-wider">MARKET SENTIMENT</div>
-        {loadingSentiment ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-3">
-            <div className="xl:col-span-2 shimmer h-36 rounded" />
-            {Array.from({ length: 4 }).map((_, index) => (
-              <div key={index} className="shimmer h-36 rounded" />
-            ))}
-          </div>
-        ) : sentiment ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3">
-            <div className="xl:col-span-2 bg-terminal-panel border border-terminal-border rounded p-4 min-h-[8.75rem]">
-              <div className="flex items-center justify-between gap-2 mb-1">
-                <div className="text-terminal-faint text-xs">Composite Regime</div>
-                <InfoTooltip
-                  label="Composite Regime"
-                  description={SENTIMENT_EXPLAINERS.composite.description}
-                  source={SENTIMENT_EXPLAINERS.composite.source}
-                  align="right"
-                />
-              </div>
-              <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-terminal-accent font-bold text-2xl tracking-wider">{sentiment.regime}</div>
-                  <div className="text-terminal-text text-xs mt-2 leading-relaxed max-w-md">{sentiment.summary}</div>
-                </div>
-                <div className="text-left sm:text-right">
-                  <div className="text-terminal-faint text-xs">Score</div>
-                  <div className="text-terminal-text font-bold text-3xl tabular-nums">
-                    {sentiment.score?.toFixed(1) ?? '--'}
-                  </div>
-                </div>
-              </div>
-              <div className="mt-3">
-                <div className="text-terminal-faint text-[11px] mb-1">Tracked instruments</div>
-                <SentimentSymbolLinks symbols={sentimentSymbols} onSelect={(symbol) => setActivePanel('equity', symbol)} />
-              </div>
-            </div>
-
-            {sentiment.pillars.map((pillar) => (
-              <SentimentPillarCard
-                key={pillar.key}
-                pillar={pillar}
-                onSelectSymbol={(symbol) => setActivePanel('equity', symbol)}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="bg-terminal-panel border border-terminal-border rounded p-4 text-terminal-faint text-xs">
-            Sentiment inputs are unavailable right now.
-          </div>
-        )}
-      </div>
-
-      {/* Major Indices */}
-      <div>
-        <div className="text-terminal-muted text-xs mb-2 font-bold tracking-wider">MAJOR INDICES</div>
-        {loadingIdx ? (
-          <div className="flex gap-2">
-            {INDICES.map((s) => <div key={s} className="shimmer h-16 flex-1 rounded" />)}
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-2">
-            {INDICES.map((sym) => {
-              const q = indices.find((i) => i.symbol === sym);
-              return (
-                <StatCard
-                  key={sym}
-                  label={INDEX_NAMES[sym] ?? sym}
-                  value={fmt.price(q?.regularMarketPrice)}
-                  change={fmt.change(q?.regularMarketChange)}
-                  changePct={fmt.pct(q?.regularMarketChangePercent)}
-                  onClick={() => setActivePanel('equity', sym)}
-                />
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      <PortfolioSnapshotCard
-        snapshot={portfolioSnapshot}
-        loading={loadingPortfolioSnapshot || loadingPortfolioFx}
-        onOpenPortfolio={() => setActivePanel('portfolio')}
-        onSelectSymbol={(symbol) => setActivePanel('equity', symbol)}
-      />
-
-      {/* Sector Performance + Movers */}
-      <div className="flex flex-col xl:flex-row gap-3 min-h-0">
-        {/* Sector heatmap */}
-        <div className="flex-1 min-w-0">
-          <div className="text-terminal-muted text-xs mb-2 font-bold tracking-wider">SECTOR PERFORMANCE</div>
-          {loadingSectors ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-1">
-              {SECTORS.map((s) => <div key={s} className="shimmer h-12 rounded" />)}
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-1.5">
-              {SECTORS.map((sym) => {
-                const q = sectors.find((s) => s.symbol === sym);
-                const pct = q && Number.isFinite(q.regularMarketChangePercent) ? q.regularMarketChangePercent : null;
-                const isPos = pct != null && pct > 0;
-                const intensity = pct == null ? 0 : Math.min(Math.abs(pct) / 3, 1);
-                const bg = pct == null || pct === 0 ? 'rgba(128,128,128,0.08)' : isPos
-                  ? `rgba(63,185,80,${0.1 + intensity * 0.3})`
-                  : `rgba(248,81,73,${0.1 + intensity * 0.3})`;
-
-                return (
-                  <div
-                    key={sym}
-                    onClick={() => setActivePanel('equity', sym)}
-                    className="rounded p-2 cursor-pointer hover:ring-1 hover:ring-terminal-border transition-all"
-                    style={{ backgroundColor: bg }}
-                  >
-                    <div className="text-terminal-muted text-xs truncate">{SECTOR_NAMES[sym]}</div>
-                    <div className={`text-xs font-bold tabular-nums mt-0.5 ${pct == null || pct === 0 ? 'text-terminal-muted' : isPos ? 'text-terminal-positive' : 'text-terminal-negative'}`}>
-                      {fmt.pct(pct)}
-                    </div>
-                    <div className="text-terminal-faint text-xs tabular-nums">{sym}</div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+      {editing && visible.size < OVERVIEW_CARD_IDS.length && (
+        <div role="group" aria-label="Add cards" className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-terminal-muted">Add cards</span>
+          {OVERVIEW_CARD_IDS.filter(id => !visible.has(id)).map(id => (
+            <button key={id} type="button" aria-label={'Add ' + OVERVIEW_CARD_NAMES[id]}
+              className="inline-flex items-center gap-1 rounded border border-terminal-border px-2 py-1 text-terminal-muted hover:border-terminal-accent hover:text-terminal-text"
+              onClick={() => setDraft(addOverviewCard(layout, id))}>
+              <Plus size={12} />{OVERVIEW_CARD_NAMES[id]}
+            </button>
+          ))}
         </div>
+      )}
+      {displayedLayout.tree ? <div className="overview-layout-board">
+        <TileLayoutBoard layout={{ ...displayedLayout, tree: displayedLayout.tree }} sizing={OVERVIEW_SIZING} names={OVERVIEW_CARD_NAMES}
+          viewport={viewport} editing={editing} hintId="overview-edit-hint" onChange={setDraft}
+          onRemove={id => setDraft(removeOverviewCard(layout, id))} renderCard={id => cards[id]}
+          autoSizeContent showColumnRules={false} maxBoardHeight={MAX_OVERVIEW_BOARD_HEIGHT} />
+      </div> : !editing && <p className="text-xs text-terminal-muted">Your Overview is empty. Choose Edit layout to add cards.</p>}
+    </div>
+  </div>;
+}
 
-        {/* Gainers and Losers */}
-        <div className="flex flex-col sm:flex-row gap-3 flex-shrink-0 overflow-x-auto xl:overflow-visible pb-1 xl:pb-0">
-          <MoverTable title="TRACKED GAINERS" data={gainers} onSelect={(s) => setActivePanel('equity', s)} />
-          <MoverTable title="TRACKED LOSERS" data={losers} onSelect={(s) => setActivePanel('equity', s)} />
+function SectorPerformance({ sectors, loading, onSelect }: {
+  sectors: Quote[];
+  loading: boolean;
+  onSelect: (symbol: string) => void;
+}) {
+  return (
+    <div className="min-w-0">
+      <OverviewSectionHeader title="SECTOR PERFORMANCE" />
+      {loading ? (
+        <div className="overview-sector-grid grid gap-1">
+          {SECTORS.map((s) => <div key={s} className="shimmer h-12 rounded" />)}
         </div>
-      </div>
+      ) : (
+        <div className="overview-sector-grid grid gap-1.5">
+          {SECTORS.map((sym) => {
+            const q = sectors.find((s) => s.symbol === sym);
+            const pct = q && Number.isFinite(q.regularMarketChangePercent) ? q.regularMarketChangePercent : null;
+            const paint = getHeatPaint(pct);
 
-      {/* Commodities & Currencies */}
-      <CommoditiesRow quotes={crossAssetQuotes} loading={loadingCrossAssets} onSelect={(s) => setActivePanel('equity', s)} />
-
-      <PredictionMarketsSection
-        predictions={predictions}
-        loading={loadingPredictions}
-        updatedAt={predictionSnapshot?.updatedAt ?? null}
-        compact
-      />
-
-      {/* Economic Events Calendar */}
-      <div className="h-[28rem] sm:h-96 border border-terminal-border rounded overflow-hidden">
-        <EventsCalendar />
-      </div>
+            return (
+              <button
+                key={sym}
+                type="button"
+                data-move={pct == null ? 'unavailable' : paint.tone}
+                aria-label={`Open ${SECTOR_NAMES[sym]} (${sym}), ${pct == null ? 'change unavailable' : fmt.pct(pct)}`}
+                onClick={() => onSelect(sym)}
+                className="instrument-card overview-sector min-w-0 rounded p-2 text-left cursor-pointer hover:ring-1 hover:ring-terminal-border focus-visible:outline focus-visible:outline-2 focus-visible:outline-terminal-accent transition-all"
+                style={{
+                  '--sector-background': paint.surface,
+                  '--sector-dots': heatDotBackground(paint),
+                  '--sector-change-text': paint.changeText,
+                } as CSSProperties}
+              >
+                <span className="block text-terminal-text text-xs truncate">{SECTOR_NAMES[sym]}</span>
+                <span className="overview-sector-change block text-xs font-bold tabular-nums mt-0.5">
+                  {fmt.pct(pct)}
+                </span>
+                <span className="block text-terminal-muted text-xs tabular-nums">{sym}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -869,14 +802,11 @@ function AISummaryCard({
   }, [debugMode]);
 
   return (
-    <div className="bg-terminal-panel border border-terminal-border rounded p-4">
-      <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <Bot size={13} className="text-terminal-accent" />
-            <span className="text-terminal-muted text-xs font-bold tracking-wider">AI MARKET SUMMARY</span>
-          </div>
-        </div>
+    <section aria-label="AI Market Summary" className="overview-insights-box">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <h3 className="instrument-heading flex items-center gap-2 text-xs font-bold leading-6 tracking-wider">
+          <Bot size={13} className="text-terminal-accent" aria-hidden="true" />AI MARKET SUMMARY
+        </h3>
 
         <div className="flex items-center gap-2 flex-wrap w-full lg:w-auto">
           {debugMode && (
@@ -927,7 +857,7 @@ function AISummaryCard({
       )}
 
       {debugMode && showPayloadDebug && (
-        <div className="mt-3 space-y-2 rounded border border-terminal-border bg-terminal-elevated px-3 py-3">
+        <div className="instrument-section mt-3 space-y-2 rounded border border-terminal-border bg-terminal-elevated px-3 py-3">
           <div className="text-terminal-accent text-[11px] font-bold tracking-[0.18em]">OVERVIEW AI PAYLOAD</div>
           {aiPayload ? (
             <>
@@ -962,7 +892,7 @@ function AISummaryCard({
       )}
 
       {!summary && !error && !isLoading && (
-        <div className="mt-3 rounded border border-terminal-border bg-terminal-elevated px-3 py-3 text-xs text-terminal-muted">
+        <div className="instrument-section mt-3 rounded border border-terminal-border bg-terminal-elevated px-3 py-3 text-xs text-terminal-muted">
           {hasApiKey
             ? 'Ready. Click generate to create a fresh AI summary of the current market overview.'
             : debugMode
@@ -972,14 +902,14 @@ function AISummaryCard({
       )}
 
       {isLoading && (
-        <div className="mt-3 rounded border border-terminal-border bg-terminal-elevated px-3 py-3 text-xs text-terminal-muted flex items-center gap-2">
+        <div className="instrument-section mt-3 rounded border border-terminal-border bg-terminal-elevated px-3 py-3 text-xs text-terminal-muted flex items-center gap-2">
           <Loader2 size={12} className="animate-spin text-terminal-accent" />
           Building a fresh overview summary...
         </div>
       )}
 
       {summary && !isLoading && isCollapsed && (
-        <div className="mt-3 rounded border border-terminal-border bg-terminal-elevated px-3 py-3 text-xs text-terminal-muted">
+        <div className="instrument-section mt-3 rounded border border-terminal-border bg-terminal-elevated px-3 py-3 text-xs text-terminal-muted">
           Summary saved. Expand it anytime to read the latest AI overview again.
         </div>
       )}
@@ -995,7 +925,7 @@ function AISummaryCard({
           </div>
         </div>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -1011,28 +941,27 @@ function PortfolioSnapshotCard({
   onSelectSymbol: (symbol: string) => void;
 }) {
   return (
-    <div>
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
-        <div className="text-terminal-muted text-xs font-bold tracking-wider">YOUR PORTFOLIO SNAPSHOT</div>
+    <section className="overview-portfolio-snapshot" aria-label="Your portfolio snapshot">
+      <OverviewSectionHeader title="YOUR PORTFOLIO SNAPSHOT">
         <button
           onClick={onOpenPortfolio}
-          className="w-full sm:w-auto px-2.5 py-1 text-[11px] rounded border border-terminal-border text-terminal-faint hover:text-terminal-accent hover:border-terminal-accent/40 hover:bg-terminal-hover transition-colors"
+          className="px-2.5 py-1 text-[11px] rounded border border-terminal-border text-terminal-faint hover:text-terminal-accent hover:border-terminal-accent/40 hover:bg-terminal-hover transition-colors"
         >
           OPEN PORTFOLIO
         </button>
-      </div>
+      </OverviewSectionHeader>
 
       {loading ? (
         <div className="shimmer h-28 rounded" />
       ) : snapshot.assetCount === 0 ? (
-        <div className="rounded border border-terminal-border bg-terminal-panel p-3 text-xs text-terminal-faint">
+        <div className="instrument-card rounded border border-terminal-border bg-terminal-panel p-3 text-xs text-terminal-faint">
           No portfolio lots added yet. Add positions in Portfolio to include them in this overview snapshot.
         </div>
       ) : (
-        <div className="rounded border border-terminal-border bg-terminal-panel p-3">
+        <div className="instrument-card rounded border border-terminal-border bg-terminal-panel p-3">
           <div className="mb-2 text-[11px] text-terminal-faint">Valued in {snapshot.currency} using latest available FX rates.</div>
           {!snapshot.complete && <div className="mb-3 rounded border border-terminal-accent/30 bg-terminal-accent/5 px-2 py-1.5 text-xs text-terminal-muted" role="status">Portfolio valuation is incomplete. {snapshot.missingQuoteSymbols.length > 0 && `Missing quotes: ${snapshot.missingQuoteSymbols.join(', ')}. `}{snapshot.missingFxCurrencies.length > 0 && `Missing FX: ${snapshot.missingFxCurrencies.join(', ')}. `}Current value, P&L, and allocation are withheld until coverage is complete.</div>}
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-2">
+          <div className="flex flex-wrap gap-2">
             <SnapshotStat label="ASSETS" value={String(snapshot.assetCount)} />
             <SnapshotStat label="LOTS" value={String(snapshot.lotCount)} />
             <SnapshotStat label="TOTAL VALUE" value={formatSnapshotCurrency(snapshot.totalValue, snapshot.currency)} />
@@ -1061,7 +990,7 @@ function PortfolioSnapshotCard({
           </div>}
         </div>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -1086,119 +1015,9 @@ function SnapshotStat({
       : 'text-terminal-text';
 
   return (
-    <div className="rounded border border-terminal-border bg-terminal-elevated px-3 py-2.5 shadow-sm">
+    <div className="instrument-section min-w-0 flex-[1_1_8rem] rounded border border-terminal-border bg-terminal-elevated px-3 py-2.5 shadow-sm">
       <div className="text-terminal-muted text-[10px] font-bold tracking-[0.18em]">{label}</div>
       <div className={`font-bold text-sm mt-1 tabular-nums ${valueClass}`}>{value}</div>
-    </div>
-  );
-}
-
-function SentimentPillarCard({
-  pillar,
-  onSelectSymbol,
-}: {
-  pillar: MarketSentimentPillar;
-  onSelectSymbol: (symbol: string) => void;
-}) {
-  const explainer = SENTIMENT_EXPLAINERS[pillar.key];
-  const signalClass = pillar.signal === 'positive'
-    ? 'text-terminal-positive'
-    : pillar.signal === 'negative'
-      ? 'text-terminal-negative'
-      : 'text-terminal-muted';
-
-  return (
-    <div className="bg-terminal-panel border border-terminal-border rounded p-3 min-h-[8.75rem]">
-      <div className="flex items-center justify-between gap-2 mb-1">
-        <div className="text-terminal-faint text-xs">{pillar.label}</div>
-        <InfoTooltip
-          label={pillar.label}
-          description={explainer.description}
-          source={explainer.source}
-          align="right"
-        />
-      </div>
-      <div className={`font-bold text-xl tabular-nums ${signalClass}`}>
-        {formatSentimentScore(pillar.score)}
-      </div>
-      <div className="mt-2 h-1.5 bg-terminal-elevated rounded-full overflow-hidden">
-        <div
-          className={`h-full rounded-full ${
-            pillar.signal === 'positive'
-              ? 'bg-terminal-positive'
-              : pillar.signal === 'negative'
-                ? 'bg-terminal-negative'
-                : 'bg-terminal-accent'
-          }`}
-          style={{ width: `${pillar.score ?? 0}%` }}
-        />
-      </div>
-      <div className="text-terminal-text text-xs mt-2 leading-relaxed">{pillar.detail}</div>
-      {pillar.quoteTime != null && (
-        <div className="mt-1 text-[11px] text-terminal-muted">
-          {pillar.symbols.length === 1 ? 'Quote' : 'Oldest quote'}{' '}
-          <time dateTime={new Date(pillar.quoteTime).toISOString()}>{sentimentQuoteClock.format(pillar.quoteTime)}</time>
-        </div>
-      )}
-      <div className="mt-2">
-        <SentimentSymbolLinks symbols={pillar.symbols} onSelect={onSelectSymbol} />
-      </div>
-    </div>
-  );
-}
-
-function SentimentSymbolLinks({
-  symbols,
-  onSelect,
-}: {
-  symbols: string[];
-  onSelect: (symbol: string) => void;
-}) {
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {symbols.map((symbol) => (
-        <button
-          key={symbol}
-          onClick={() => onSelect(symbol)}
-          className="rounded border border-terminal-border bg-terminal-elevated px-1.5 py-0.5 text-[11px] text-terminal-faint hover:text-terminal-accent hover:border-terminal-accent/40 hover:bg-terminal-hover transition-colors"
-          title={`Open ${formatSentimentSymbol(symbol)}`}
-        >
-          {formatSentimentSymbol(symbol)}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function InfoTooltip({
-  label,
-  description,
-  source,
-  align = 'left',
-}: {
-  label: string;
-  description: string;
-  source: string;
-  align?: 'left' | 'right';
-}) {
-  return (
-    <div className="relative flex-shrink-0 group/tooltip">
-      <button
-        type="button"
-        className="text-terminal-faint hover:text-terminal-accent transition-colors"
-        aria-label={`About ${label}`}
-      >
-        <Info size={12} />
-      </button>
-      <div
-        className={`pointer-events-none absolute top-5 z-20 w-64 rounded border border-terminal-border bg-terminal-elevated p-3 opacity-0 shadow-2xl transition-opacity duration-150 group-hover/tooltip:opacity-100 group-focus-within/tooltip:opacity-100 ${
-          align === 'right' ? 'right-0' : 'left-0'
-        }`}
-      >
-        <div className="text-terminal-accent text-[11px] font-bold tracking-wide">{label.toUpperCase()}</div>
-        <div className="text-terminal-text text-xs leading-relaxed mt-1">{description}</div>
-        <div className="text-terminal-faint text-[11px] leading-relaxed mt-2">{source}</div>
-      </div>
     </div>
   );
 }
@@ -1209,9 +1028,9 @@ function MoverTable({ title, data, onSelect }: {
   onSelect: (symbol: string) => void;
 }) {
   return (
-    <div className="w-full sm:w-52 flex-shrink-0">
-      <div className="text-terminal-muted text-xs mb-2 font-bold tracking-wider">{title}</div>
-      <div className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+    <div className="w-full min-w-0">
+      <OverviewSectionHeader title={title} />
+      <div className="instrument-card bg-terminal-panel border border-terminal-border rounded overflow-hidden">
         <table className="data-table">
           <thead>
             <tr>
@@ -1248,51 +1067,31 @@ const CURRENCY_LABELS: Record<string, string> = {
   'USDCHF=X': 'USD/CHF', 'AUDUSD=X': 'AUD/USD',
 };
 
-function CommoditiesRow({
-  quotes,
-  loading,
-  onSelect,
-}: {
+function CrossAssetTable({ title, symbols, labels, quotes, loading, onSelect }: {
+  title: 'COMMODITIES' | 'FX RATES';
+  symbols: string[];
+  labels: Record<string, string>;
   quotes: Quote[];
   loading: boolean;
-  onSelect: (s: string) => void;
+  onSelect: (symbol: string) => void;
 }) {
-  const Row = ({ sym, label }: { sym: string; label: string }) => {
-    const q = quotes.find((c) => c.symbol === sym);
-    return (
-      <tr onClick={() => onSelect(sym)} className="cursor-pointer">
-        <td className="text-terminal-muted">{label}</td>
-        <td className="tabular-nums">{fmt.price(q?.regularMarketPrice, q?.currency === 'JPY' ? 2 : undefined)}</td>
-        <td className={`tabular-nums ${changeColor(q?.regularMarketChangePercent)}`}>
-          {fmt.pct(q?.regularMarketChangePercent)}
-        </td>
-      </tr>
-    );
-  };
-
   return (
-    <div className="flex flex-col md:flex-row gap-3">
-      <div className="flex-1">
-        <div className="text-terminal-muted text-xs mb-2 font-bold tracking-wider">COMMODITIES</div>
-        <div className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
-          {loading ? <div className="shimmer h-32 rounded" /> : (
-            <table className="data-table">
-              <thead><tr><th className="text-left">ASSET</th><th>PRICE</th><th>CHG%</th></tr></thead>
-              <tbody>{COMMODITIES.map((s) => <Row key={s} sym={s} label={COMMODITY_LABELS[s]} />)}</tbody>
-            </table>
-          )}
-        </div>
-      </div>
-      <div className="flex-1">
-        <div className="text-terminal-muted text-xs mb-2 font-bold tracking-wider">FX RATES</div>
-        <div className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
-          {loading ? <div className="shimmer h-32 rounded" /> : (
-            <table className="data-table">
-              <thead><tr><th className="text-left">PAIR</th><th>RATE</th><th>CHG%</th></tr></thead>
-              <tbody>{CURRENCIES.map((s) => <Row key={s} sym={s} label={CURRENCY_LABELS[s]} />)}</tbody>
-            </table>
-          )}
-        </div>
+    <div>
+      <OverviewSectionHeader title={title} />
+      <div className="instrument-card bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+        {loading ? <div className="shimmer h-32 rounded" /> : (
+          <table className="data-table">
+            <thead><tr><th className="text-left">{title === 'COMMODITIES' ? 'ASSET' : 'PAIR'}</th><th>PRICE</th><th>CHG%</th></tr></thead>
+            <tbody>{symbols.map(symbol => {
+              const quote = quotes.find(item => item.symbol === symbol);
+              return <tr key={symbol} onClick={() => onSelect(symbol)} className="cursor-pointer">
+                <td className="text-terminal-muted">{labels[symbol]}</td>
+                <td className="tabular-nums">{fmt.price(quote?.regularMarketPrice, quote?.currency === 'JPY' ? 2 : undefined)}</td>
+                <td className={`tabular-nums ${changeColor(quote?.regularMarketChangePercent)}`}>{fmt.pct(quote?.regularMarketChangePercent)}</td>
+              </tr>;
+            })}</tbody>
+          </table>
+        )}
       </div>
     </div>
   );

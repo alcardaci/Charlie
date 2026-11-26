@@ -7,6 +7,7 @@ import type {
   SecMetricKey,
   SecMetricObservation,
   SecPeriodType,
+  SecRegistrantProfile,
   SecSourceEnvelope,
   UnifiedCompanyFiling,
 } from '../types';
@@ -38,7 +39,10 @@ export const SEC_METRIC_LABELS: Record<SecMetricKey, string> = {
   debt: 'Debt',
 };
 
-const SEC_FORMS = new Set(['10-K', '10-K/A', '10-Q', '10-Q/A', '8-K', '8-K/A', '20-F', '20-F/A', '40-F', '40-F/A']);
+const PERIODIC_REPORTS = new Set(['10-K', '10-Q', '20-F', '40-F']);
+const PROSPECTUSES = new Set(['424B4', 'S-1', 'S-1/A', 'F-1', 'F-1/A']);
+const CURRENT_REPORTS = new Set(['6-K', '6-K/A', '8-K', '8-K/A']);
+const SEC_FORMS = new Set([...PERIODIC_REPORTS, ...Array.from(PERIODIC_REPORTS, form => form + '/A'), ...CURRENT_REPORTS, ...PROSPECTUSES]);
 const FLOW_METRICS = new Set<SecMetricKey>(['revenue', 'operatingIncome', 'netIncome']);
 const METRIC_CONCEPTS: Record<SecMetricKey, string[]> = {
   revenue: ['RevenueFromContractWithCustomerExcludingAssessedTax', 'Revenues', 'SalesRevenueNet'],
@@ -154,7 +158,7 @@ export function buildSecArchiveUrl(cik: string, accessionNumber: string, primary
     : `${SEC_ARCHIVE_BASE_URL}/${normalizedCik}/${archiveAccession}/index.json`;
 }
 
-export function normalizeSecFilings(raw: unknown, identity: SecIdentity): SecFiling[] {
+export function normalizeSecFilings(raw: unknown, identity: SecIdentity, limit = 12): SecFiling[] {
   const recent = (raw as { filings?: { recent?: unknown } } | null)?.filings?.recent;
   if (!recent || typeof recent !== 'object') return [];
 
@@ -166,9 +170,10 @@ export function normalizeSecFilings(raw: unknown, identity: SecIdentity): SecFil
     const accessionNumber = String(accessionNumbers[index] ?? '').trim();
     const form = String((Array.isArray(rows.form) ? rows.form[index] : '') ?? '').trim();
     const filedDate = asDate(Array.isArray(rows.filingDate) ? rows.filingDate[index] : null);
-    if (!accessionNumber || !SEC_FORMS.has(form) || !filedDate) continue;
+    if (!/^\d{10}-\d{2}-\d{6}$/.test(accessionNumber) || !SEC_FORMS.has(form) || !filedDate) continue;
     const reportPeriod = asDate(Array.isArray(rows.reportDate) ? rows.reportDate[index] : null);
     const primaryDocument = String((Array.isArray(rows.primaryDocument) ? rows.primaryDocument[index] : '') ?? '').trim() || null;
+    const description = Array.isArray(rows.primaryDocDescription) ? rows.primaryDocDescription[index] : null;
     filings.push({
       accessionNumber,
       form,
@@ -177,12 +182,82 @@ export function normalizeSecFilings(raw: unknown, identity: SecIdentity): SecFil
       primaryDocument,
       filingUrl: buildSecArchiveUrl(identity.cik, accessionNumber, primaryDocument),
       isAmendment: form.endsWith('/A'),
+      ...(typeof description === 'string' && description.trim() ? { documentDescription: description.trim() } : {}),
     });
   }
 
   return filings
     .sort((left, right) => `${right.filedDate}-${right.accessionNumber}`.localeCompare(`${left.filedDate}-${left.accessionNumber}`))
-    .slice(0, 12);
+    .slice(0, limit);
+}
+
+const financialExhibit = /\b(?:financial statements|(?:annual|quarterly|interim|half[- ]year|consolidated|fiscal|full[- ]year|Q[1-4])(?: .{0,32})? (?:financial |operating )?results|earnings (?:report|release))\b/i;
+
+function isFinancialDocument(description: string): boolean {
+  return financialExhibit.test(description) && !/\b(?:consent|agreement|pro forma|invitation|notice|presentation|transcript)\b/i.test(description);
+}
+
+function filingContainsStatements(filing: SecFiling): boolean {
+  return PERIODIC_REPORTS.has(filing.form) || PROSPECTUSES.has(filing.form) ||
+    (CURRENT_REPORTS.has(filing.form) && isFinancialDocument(filing.documentDescription ?? ''));
+}
+
+export function secFinancialExhibitSearch(identity: SecIdentity, filings: SecFiling[], base: SecFiling | null): string | null {
+  const candidates = filings.filter(filing => CURRENT_REPORTS.has(filing.form) && (!base || filing.filedDate >= base.filedDate));
+  if (!candidates.length) return null;
+  const query = new URLSearchParams({
+    ciks: identity.cik, forms: '6-K,8-K', q: '"financial statements"',
+    dateRange: 'custom', startdt: candidates[candidates.length - 1].filedDate, enddt: candidates[0].filedDate,
+  });
+  return 'https://efts.sec.gov/LATEST/search-index?' + query.toString();
+}
+
+export function selectSecFinancialFiling(filings: SecFiling[], identity: SecIdentity, search?: unknown): SecFiling | null {
+  const hits = (search as { hits?: { hits?: { _id?: string; _source?: { adsh?: string; ciks?: unknown; file_description?: string; form?: string } }[] } } | null)?.hits?.hits;
+  const exhibits = new Map<string, { document: string; description: string }>();
+  for (const hit of Array.isArray(hits) ? hits : []) {
+    const record = hit?._source;
+    const [accession, document] = String(hit?._id ?? '').split(':');
+    const description = record?.file_description;
+    if (!record || record.adsh !== accession || !CURRENT_REPORTS.has(String(record.form)) ||
+        !Array.isArray(record.ciks) || !record.ciks.some(cik => padSecCik(cik) === identity.cik) ||
+        !/^[\w.-]+\.(?:html?|pdf)$/i.test(document ?? '') || !description || !isFinancialDocument(description)) continue;
+    // Prefer the statements over a results press release in the same submission.
+    if (!exhibits.has(accession) || /financial statements/i.test(description)) exhibits.set(accession, { document, description });
+  }
+  for (const filing of filings) {
+    const exhibit = exhibits.get(filing.accessionNumber);
+    if (exhibit) return { ...filing, primaryDocument: exhibit.document, documentDescription: exhibit.description,
+      filingUrl: buildSecArchiveUrl(identity.cik, filing.accessionNumber, exhibit.document) };
+    if (filingContainsStatements(filing)) return filing;
+  }
+  return null;
+}
+
+function registrantProfile(raw: unknown, identity: SecIdentity): SecRegistrantProfile | undefined {
+  const issuer = raw as { sicDescription?: unknown; website?: unknown; addresses?: { business?: Record<string, unknown> } } | null;
+  if (!issuer) return;
+  const text = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  const address = issuer.addresses?.business;
+  const city = text(address?.city);
+  const industry = text(issuer.sicDescription);
+  const stateCode = text(address?.stateOrCountry);
+  const reportedCountry = text(address?.country);
+  const usState = stateCode && address?.isForeignLocation !== 1 && (!reportedCountry || /^United States/i.test(reportedCountry)) &&
+    'AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY'.split(' ').includes(stateCode);
+  const country = reportedCountry ?? (usState ? 'United States' : undefined);
+  const state = text(address?.foreignStateTerritory) ?? (usState ? stateCode : undefined);
+  const homepage = text(issuer.website);
+  let website: string | undefined;
+  if (homepage) {
+    try {
+      const url = new URL(homepage);
+      if (['https:', 'http:'].includes(url.protocol)) website = url.href;
+    } catch { /* No usable website in this submission. */ }
+  }
+  if (industry || city || country || state || website) {
+    return { industry, city, country, state, website, sourceUrl: `https://www.sec.gov/edgar/browse/?CIK=${identity.cik}` };
+  }
 }
 
 type FilingInput = CompanyFiling | SecFiling | UnifiedCompanyFiling;
@@ -534,13 +609,14 @@ export function buildSecCompanyData(args: {
   identity: SecIdentity;
   submissions: unknown;
   facts: unknown;
+  financialDocuments?: unknown;
   source: SecSourceEnvelope;
   status?: SecCompanyData['status'];
   cache?: SecCompanyData['cache'];
   warnings?: string[];
   error?: string;
 }): SecCompanyData {
-  const filings = normalizeSecFilings(args.submissions, args.identity);
+  const filings = normalizeSecFilings(args.submissions, args.identity, Infinity);
   const observations = normalizeSecFacts(args.facts, args.identity, filings);
   const metrics = Object.fromEntries((Object.keys(SEC_METRIC_LABELS) as SecMetricKey[]).map((metric) => {
     const candidates = observations.filter((observation) => observation.metric === metric && observation.availability === 'reported');
@@ -550,7 +626,11 @@ export function buildSecCompanyData(args: {
     status: args.status ?? 'ready',
     ticker: normalizeTicker(args.ticker),
     identity: args.identity,
-    filings,
+    filings: filings.slice(0, 12),
+    financialFiling: selectSecFinancialFiling(filings, args.identity, args.financialDocuments),
+    factsCoverage: args.cache?.facts === 'unavailable' ? 'unavailable' :
+      observations.some(observation => observation.availability === 'reported') ? 'available' : 'no-mapped-metrics',
+    profile: registrantProfile(args.submissions, args.identity),
     observations,
     metrics,
     source: args.source,

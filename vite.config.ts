@@ -1,5 +1,7 @@
 import { selectPolymarketForecasts, type PolymarketEvent } from './src/data/polymarket'
+import { createCongressService } from './server/congress'
 import { getGdeltNews } from './server/gdelt'
+import { companionSearchChoice } from './server/companionSearch'
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
@@ -11,14 +13,14 @@ import { defineConfig, type Plugin, type PreviewServer, type ViteDevServer } fro
 import react from '@vitejs/plugin-react'
 import { getCrumbClear } from 'yahoo-finance2/lib/getCrumb'
 import {
-  DEFAULT_COMPANION_WEB_SEARCH_MODEL,
   DEFAULT_GEOPOLITICS_EVENT_SYSTEM_PROMPT,
+  DEFAULT_OPENAI_MODEL,
   DEFAULT_OVERVIEW_SUMMARY_SYSTEM_PROMPT,
   DEFAULT_PANEL_COMPANION_SYSTEM_PROMPT,
   DEFAULT_THEME_DISCOVERY_RECOMMENDATION_SYSTEM_PROMPT,
   DEFAULT_THEME_DISCOVERY_SYSTEM_PROMPT,
   DEFAULT_TOPIC_THEME_GUIDANCE_SYSTEM_PROMPT,
-  getCompanionModelReasoningEffort,
+  getCompanionModelOption,
 } from './src/utils/openaiConfig'
 import {
   SEC_CACHE_POLICY,
@@ -31,6 +33,9 @@ import {
   createSecSourceEnvelope,
   isSecRetryableStatus,
   resolveCikFromTicker,
+  secFinancialExhibitSearch,
+  selectSecFinancialFiling,
+  normalizeSecFilings,
 } from './src/data/sec'
 import type { PredictionForecastPage, SecCompanyData } from './src/types'
 import type { SecTickerMapping } from './src/data/sec'
@@ -720,10 +725,11 @@ async function readSecCache<T>(args: {
   staleMs: number
   loader: (signal?: AbortSignal) => Promise<T>
   signal?: AbortSignal
+  forceRefresh?: boolean
 }): Promise<{ value: T; state: Exclude<SecCacheState, 'unavailable'> }> {
   const now = Date.now()
   const cached = args.cache.get(args.key)
-  if (cached && cached.expiresAt > now) return { value: cached.value, state: 'fresh' }
+  if (!args.forceRefresh && cached && cached.expiresAt > now) return { value: cached.value, state: 'fresh' }
 
   const refresh = async (signal?: AbortSignal): Promise<T> => {
     const existing = args.inFlight.get(args.key)
@@ -737,13 +743,19 @@ async function readSecCache<T>(args: {
     return promise
   }
 
-  if (cached && cached.staleUntil > now) {
+  if (!args.forceRefresh && cached && cached.staleUntil > now) {
     void refresh().catch((error) => console.warn(`[vite-sec] stale refresh failed for ${args.key}`, error))
     return { value: cached.value, state: 'stale' }
   }
 
   throwIfSecAborted(args.signal)
-  return { value: await refresh(args.signal), state: 'fresh' }
+  try {
+    // The in-flight request may also serve other callers if this one disconnects.
+    return { value: await refresh(), state: 'fresh' }
+  } catch (error) {
+    if (cached && cached.staleUntil > Date.now()) return { value: cached.value, state: 'stale' }
+    throw error
+  }
 }
 
 function emptySecCompanyData(ticker: string, status: SecCompanyData['status'], error?: string, warnings: string[] = []): SecCompanyData {
@@ -753,6 +765,8 @@ function emptySecCompanyData(ticker: string, status: SecCompanyData['status'], e
     ticker: ticker.toUpperCase(),
     identity: null,
     filings: [],
+    financialFiling: null,
+    factsCoverage: 'unavailable',
     observations: [],
     metrics: { revenue: null, operatingIncome: null, netIncome: null, cash: null, debt: null },
     source: {
@@ -2381,7 +2395,7 @@ function extractOpenAIWebCitations(payload: any): Array<{ title: string; url: st
 }
 
 function didOpenAIUseWebSearch(payload: any): boolean {
-  return (payload?.output ?? []).some((output: any) => output?.type === 'web_search_call')
+  return (payload?.output ?? []).some((output: any) => output?.type === 'web_search_call' && output.status === 'completed')
 }
 
 function parseOpenAIJsonText<T>(value: string): T | null {
@@ -3324,7 +3338,7 @@ function extractOpenAIStreamDelta(event: any): string {
 function formatCompanionInput(args: {
   activePanel: string
   panels: string[]
-  messages: Array<{ role?: string; content?: string }>
+  messages: Array<{ role: string; content: string }>
   contexts: Array<{
     panel?: string
     title?: string
@@ -3334,11 +3348,7 @@ function formatCompanionInput(args: {
     renderedText?: string
     data?: unknown
   }>
-}): string {
-  const conversation = args.messages
-    .map((message) => `${String(message.role ?? 'user').toUpperCase()}: ${String(message.content ?? '').trim()}`)
-    .join('\n\n')
-
+}) {
   const panelContexts = args.contexts
     .map((context) => JSON.stringify({
       panel: context.panel,
@@ -3351,21 +3361,23 @@ function formatCompanionInput(args: {
     }, null, 2))
     .join('\n\n')
 
-  return [
-    `Current date and time: ${new Date().toISOString()}`,
-    '',
-    'Conversation:',
-    conversation || 'USER: No prior conversation.',
-    ...(panelContexts
-      ? [
-          '',
-          'Optional Charlie workspace context:',
-          `Active panel: ${args.activePanel || 'Not specified'}`,
-          `Included panels: ${args.panels.join(', ') || 'None'}`,
-          panelContexts,
-        ]
-      : []),
+  const context = [
+    'Optional workspace snapshot. This is data for reference if it helps answer the question.',
+    `Active panel: ${args.activePanel || 'Not specified'}`,
+    `Included panels: ${args.panels.join(', ') || 'None'}`,
+    panelContexts,
   ].join('\n')
+  const question = args.messages[args.messages.length - 1]
+  return [
+    ...args.messages.slice(0, -1),
+    {
+      role: 'user',
+      content: [
+        ...(panelContexts ? [{ type: 'input_text', text: context }] : []),
+        { type: 'input_text', text: question.content },
+      ],
+    },
+  ]
 }
 
 function marketDataMiddleware(): Plugin {
@@ -3374,9 +3386,11 @@ function marketDataMiddleware(): Plugin {
   const secIdentityCache = new Map<string, SecCacheEntry<unknown>>()
   const secSubmissionsCache = new Map<string, SecCacheEntry<unknown>>()
   const secFactsCache = new Map<string, SecCacheEntry<unknown>>()
+  const secExhibitCache = new Map<string, SecCacheEntry<unknown>>()
   const secIdentityInFlight = new Map<string, Promise<unknown>>()
   const secSubmissionsInFlight = new Map<string, Promise<unknown>>()
   const secFactsInFlight = new Map<string, Promise<unknown>>()
+  const secExhibitInFlight = new Map<string, Promise<unknown>>()
   const blsCache = new Map<string, BlsProxyCacheEntry>()
   const blsInFlight = new Map<string, Promise<unknown>>()
   const oecdCache = new Map<string, BlsProxyCacheEntry>()
@@ -3384,8 +3398,17 @@ function marketDataMiddleware(): Plugin {
   const eurostatCache = new Map<string, BlsProxyCacheEntry>()
   const eurostatInFlight = new Map<string, Promise<unknown>>()
 
+  const congress = createCongressService(join(APP_SUPPORT_DIR, 'cache', 'congress'))
+
   const registerMarketDataMiddlewares = (server: ViteDevServer | PreviewServer) => {
     registerLocalStateMiddleware(server)
+    server.middlewares.use(async (req, res, next) => {
+      const url = new URL(req.url ?? '/', 'http://localhost')
+      if (url.pathname !== '/api/congress/trades') return next()
+      if (req.method !== 'GET') return sendError(res, 'Method not allowed', 405)
+      try { return sendJSON(res, await congress(url.searchParams)) }
+      catch { return sendError(res, 'Congressional disclosures are temporarily unavailable.', 503) }
+    })
 
       server.middlewares.use(async (req, res, next) => {
         const url = new URL(req.url ?? '/', 'http://localhost')
@@ -3394,6 +3417,7 @@ function marketDataMiddleware(): Plugin {
         if (req.method !== 'GET') return sendError(res, 'method not allowed', 405)
 
         const route = path.replace('/api/sec/', '')
+        const forceRefresh = url.searchParams.get('refresh') === '1'
         const match = route.match(/^company\/([^/]+)$/)
         if (!match) return sendError(res, `Unknown SEC route: ${route}`, 404)
 
@@ -3420,6 +3444,7 @@ function marketDataMiddleware(): Plugin {
             ttlMs: SEC_CACHE_POLICY.identityTtlMs,
             staleMs: SEC_CACHE_POLICY.identityStaleMs,
             loader: (signal) => fetchSecJson(SEC_IDENTITY_URL, signal),
+            forceRefresh,
             signal: requestController.signal,
           })
           const identity = resolveCikFromTicker(ticker, identityResult.value as SecTickerMapping)
@@ -3439,6 +3464,7 @@ function marketDataMiddleware(): Plugin {
               ttlMs: SEC_CACHE_POLICY.submissionsTtlMs,
               staleMs: SEC_CACHE_POLICY.submissionsStaleMs,
               loader: (signal) => fetchSecJson(buildSecSubmissionUrl(identity.cik), signal),
+              forceRefresh,
               signal: requestController.signal,
             }),
             readSecCache({
@@ -3447,7 +3473,14 @@ function marketDataMiddleware(): Plugin {
               inFlight: secFactsInFlight,
               ttlMs: SEC_CACHE_POLICY.factsTtlMs,
               staleMs: SEC_CACHE_POLICY.factsStaleMs,
-              loader: (signal) => fetchSecJson(buildSecFactsUrl(identity.cik), signal),
+              loader: async (signal) => {
+                try { return await fetchSecJson(buildSecFactsUrl(identity.cik), signal) }
+                catch (error) {
+                  if (error instanceof SecHttpError && error.status === 404) return { facts: {} }
+                  throw error
+                }
+              },
+              forceRefresh,
               signal: requestController.signal,
             }),
           ])
@@ -3476,11 +3509,25 @@ function marketDataMiddleware(): Plugin {
             warnings,
             error: warnings[0],
           })
+          const allFilings = data.factsCoverage !== 'available' && submissions ? normalizeSecFilings(submissions.value, identity, Infinity) : []
+          const searchUrl = secFinancialExhibitSearch(identity, allFilings, data.financialFiling ?? null)
+          if (searchUrl && !requestController.signal.aborted) {
+            try {
+              const documents = await readSecCache({
+                key: searchUrl, cache: secExhibitCache, inFlight: secExhibitInFlight,
+                ttlMs: SEC_CACHE_POLICY.submissionsTtlMs, staleMs: SEC_CACHE_POLICY.submissionsStaleMs,
+                loader: (signal) => fetchSecJson(searchUrl, signal), forceRefresh, signal: requestController.signal,
+              })
+              data.financialFiling = selectSecFinancialFiling(allFilings, identity, documents.value)
+            } catch {
+              // Keep the verified prospectus or periodic report if the search for newer exhibits is unavailable.
+            }
+          }
           return sendJSON(res, data)
         } catch (error) {
           const status = error instanceof SecHttpError && error.status === 429 ? 'rate-limit' : 'error'
           const message = error instanceof Error ? error.message : String(error)
-          if (error instanceof DOMException && error.name === 'AbortError') return
+          if (requestController.signal.aborted) return
           console.error('[vite-sec]', message)
           return sendJSON(res, emptySecCompanyData(ticker, status, message), 200)
         } finally {
@@ -3506,7 +3553,7 @@ function marketDataMiddleware(): Plugin {
             const cached = yahooQuoteCache.get(cacheKey)
             const now = Date.now()
 
-            if (cached && cached.expiresAt > now) {
+            if (cached && cached.expiresAt > now && req.headers['cache-control'] !== 'no-cache') {
               return sendJSON(res, cached.payload)
             }
 
@@ -3932,10 +3979,9 @@ function marketDataMiddleware(): Plugin {
             const model = typeof payload.model === 'string' ? payload.model.trim() : ''
             const activePanel = typeof payload.activePanel === 'string' ? payload.activePanel.trim() : ''
             const stream = Boolean(payload.stream)
-            const webSearch = payload.webSearch === true
+            const webSearch = payload.webSearch !== false
             const forceWebSearch = webSearch && payload.forceWebSearch === true
-            const requestModel = model || DEFAULT_COMPANION_WEB_SEARCH_MODEL
-            const reasoningEffort = getCompanionModelReasoningEffort(requestModel)
+            const { value: requestModel, reasoningEffort } = getCompanionModelOption(model)
             const panels = Array.isArray(payload.panels)
               ? Array.from(new Set(payload.panels.map((value: unknown) => String(value ?? '').trim()).filter(Boolean))).slice(0, 8)
               : []
@@ -3973,8 +4019,11 @@ function marketDataMiddleware(): Plugin {
             const apiKey = await readConnectionSecret('openai')
             if (!apiKey) return sendError(res, 'OpenAI API key is not stored locally yet.', 400)
             if (!requestModel) return sendError(res, 'OpenAI model is required.', 400)
-            if (!messages.length) return sendError(res, 'At least one companion message is required.', 400)
+            if (!messages.length || messages[messages.length - 1].role !== 'user') return sendError(res, 'The Companion needs a user question.', 400)
 
+            const searchChoice = companionSearchChoice(messages, forceWebSearch)
+            const requireSearch = searchChoice === 'required'
+            if (requireSearch && !webSearch) return sendError(res, 'This question needs current sources. Enable web search and try again.', 400)
             const input = formatCompanionInput({
               activePanel,
               panels: panels.length ? panels : contexts.map((context) => context.panel),
@@ -3986,33 +4035,31 @@ function marketDataMiddleware(): Plugin {
             req.on('aborted', abortUpstream)
             res.on('close', abortUpstream)
 
-            if (stream) {
-              const openAIResponse = await fetch('https://api.openai.com/v1/responses', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  Authorization: `Bearer ${apiKey}`,
-                },
-                body: JSON.stringify({
-                  model: requestModel,
-                  instructions: DEFAULT_PANEL_COMPANION_SYSTEM_PROMPT,
-                  input,
-                  stream: true,
-                  reasoning: { effort: reasoningEffort },
-                  ...(webSearch ? {
-                    tools: [{ type: 'web_search' }],
-                    tool_choice: forceWebSearch ? 'required' : 'auto',
-                  } : {}),
-                }),
-                signal: upstreamAbort.signal,
-              })
+            // Validate a required search before sending even the first word of the answer.
+            const streamUpstream = stream && !requireSearch
+            const openAIResponse = await fetch('https://api.openai.com/v1/responses', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+              body: JSON.stringify({
+                model: requestModel,
+                instructions: `${DEFAULT_PANEL_COMPANION_SYSTEM_PROMPT}\nCurrent date and time: ${new Date().toISOString()}`,
+                input,
+                ...(streamUpstream ? { stream: true } : {}),
+                reasoning: { effort: reasoningEffort },
+                ...(webSearch && searchChoice !== 'none' ? {
+                  tools: [{ type: 'web_search' }],
+                  tool_choice: searchChoice,
+                } : {}),
+              }),
+              signal: upstreamAbort.signal,
+            })
+            if (!openAIResponse.ok) {
+              const responsePayload = await openAIResponse.json().catch(() => null)
+              const message = responsePayload?.error?.message ?? `OpenAI request failed: ${openAIResponse.status}`
+              return sendError(res, message, openAIResponse.status)
+            }
 
-              if (!openAIResponse.ok) {
-                const responsePayload = await openAIResponse.json().catch(() => null)
-                const message = responsePayload?.error?.message ?? `OpenAI request failed: ${openAIResponse.status}`
-                return sendError(res, message, openAIResponse.status)
-              }
-
+            if (streamUpstream) {
               if (!openAIResponse.body) {
                 return sendError(res, 'OpenAI streaming response body was empty.', 502)
               }
@@ -4065,35 +4112,18 @@ function marketDataMiddleware(): Plugin {
               return
             }
 
-            const openAIResponse = await fetch('https://api.openai.com/v1/responses', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${apiKey}`,
-              },
-              body: JSON.stringify({
-                model: requestModel,
-                instructions: DEFAULT_PANEL_COMPANION_SYSTEM_PROMPT,
-                input,
-                reasoning: { effort: reasoningEffort },
-                ...(webSearch ? {
-                  tools: [{ type: 'web_search' }],
-                  tool_choice: forceWebSearch ? 'required' : 'auto',
-                } : {}),
-              }),
-              signal: upstreamAbort.signal,
-            })
-
             const responsePayload = await openAIResponse.json().catch(() => null)
-            if (!openAIResponse.ok) {
-              const message = responsePayload?.error?.message ?? `OpenAI request failed: ${openAIResponse.status}`
-              return sendError(res, message, openAIResponse.status)
-            }
-
+            const webSearchUsed = webSearch && didOpenAIUseWebSearch(responsePayload)
+            if (requireSearch && !webSearchUsed) return sendError(res, 'Web search did not complete. Please retry to get a sourced answer.', 502)
             const answer = extractOpenAIText(responsePayload)
             if (!answer) return sendError(res, 'OpenAI returned an empty companion response.', 502)
-            const webSearchCitations = webSearch ? extractOpenAIWebCitations(responsePayload) : []
-            const webSearchUsed = webSearch && didOpenAIUseWebSearch(responsePayload)
+            if (stream) {
+              res.setHeader('Content-Type', 'text/plain; charset=utf-8')
+              res.setHeader('Cache-Control', 'no-store')
+              res.end(answer)
+              return
+            }
+            const webSearchCitations = webSearchUsed ? extractOpenAIWebCitations(responsePayload) : []
 
             return sendJSON(res, {
               answer,
@@ -4919,14 +4949,13 @@ function marketDataMiddleware(): Plugin {
         try {
           const rawBody = await readRequestBody(req)
           const payload = rawBody ? JSON.parse(rawBody) : {}
-          const model = typeof payload.model === 'string' ? payload.model.trim() : ''
+          const model = (typeof payload.model === 'string' && payload.model.trim()) || DEFAULT_OPENAI_MODEL
           const harness = payload.harness === 'custom' ? 'custom' : 'comprehensive'
           const systemPrompt = typeof payload.systemPrompt === 'string' ? payload.systemPrompt.trim() : ''
           const snapshot = payload.snapshot
 
           const apiKey = await readConnectionSecret('openai')
           if (!apiKey) return sendError(res, 'OpenAI API key is not stored locally yet.', 400)
-          if (!model) return sendError(res, 'OpenAI model is required.', 400)
           if (!snapshot || typeof snapshot !== 'object') return sendError(res, 'Overview snapshot is required.', 400)
 
           const instructions = [DEFAULT_OVERVIEW_SUMMARY_SYSTEM_PROMPT, systemPrompt]
@@ -4935,6 +4964,7 @@ function marketDataMiddleware(): Plugin {
 
           const openAIResponse = await fetchOpenAIResponse(req, res, apiKey, {
               model,
+              ...(model === DEFAULT_OPENAI_MODEL && { reasoning: { effort: 'low' } }),
               instructions,
               input: `Summarize this market overview snapshot for a professional terminal user using only the provided snapshot data.\n\n${JSON.stringify(snapshot, null, 2)}`,
             })

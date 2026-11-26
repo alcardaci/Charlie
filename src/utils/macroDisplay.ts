@@ -8,7 +8,7 @@ type TrendPalette = {
   negative: string;
 };
 
-const DASH_PATTERNS = [undefined, '8 4', '2 4', '10 3 2 3', '4 3', '12 4', '2 2', '8 3 2 3', '4 2 2 2', '12 3 3 3'];
+const DASH_PATTERNS = ['0.1 3.6', '8 4', '2 4', '10 3 2 3', '4 3', '12 4', '2 2', '8 3 2 3', '4 2 2 2', '12 3 3 3'];
 
 const MACRO_NUMBER_FORMATS = [0, 1, 2].map(maximumFractionDigits => (
   new Intl.NumberFormat('en-US', { maximumFractionDigits })
@@ -32,11 +32,12 @@ export function collapseRateHistory(series: MacroSeriesPoint[]): MacroSeriesPoin
   return series.filter((point, index) => index === 0 || index === series.length - 1 || point.value !== series[index - 1].value);
 }
 
-/** The default accent is blue, so using both verbatim gives two identical lines. */
+/** Keep longer comparisons distinguishable in either theme, including their legend labels. */
 export function getMacroSeriesStyle(index: number, palette: TrendPalette) {
   const colors = Array.from(new Set([
     palette.accent, palette.blue, palette.purple, palette.positive, palette.negative,
-    '#e0a526', '#21b7c7', '#ef80b0', '#9bbf45', '#a2a9bd', '#b78c63',
+    ...['#e0a526', '#21b7c7', '#ef80b0', '#9bbf45', '#a2a9bd', '#b78c63']
+      .map(color => `color-mix(in srgb, ${color} 64%, var(--terminal-text))`),
   ]));
   return {
     stroke: colors[index % colors.length],

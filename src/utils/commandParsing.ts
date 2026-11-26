@@ -15,7 +15,8 @@ export const SCREEN_COMMANDS: Record<string, PanelType> = {
   SCREEN: 'overview', EQS: 'overview',
   HOME: 'overview', OVERVIEW: 'overview', WB: 'overview', WL: 'overview',
   SETTINGS: 'settings', SETUP: 'settings', CONFIG: 'settings', AI: 'settings',
-  HELP: 'help',
+  CONGRESS: 'congress',
+  HELP: 'settings',
 };
 
 const TICKER_SUBCOMMANDS = new Set(['EQ', 'US', 'EQUITY', 'GP', 'CHART', 'G', 'N', 'NEWS', 'WL', 'ADD']);

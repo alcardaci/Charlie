@@ -1,0 +1,18 @@
+.regional-news-map {
+  --map-ocean: color-mix(in srgb, var(--terminal-panel), var(--terminal-bg) 55%);
+  --map-low: #f0cc56;
+  --map-medium: #ff9848;
+  --map-high: #ff7653;
+  --map-severe: #ff475e;
+}
+
+:root[data-theme='light'] .regional-news-map {
+  --map-low: #856100;
+  --map-medium: #a64b0b;
+  --map-high: #b63a24;
+  --map-severe: #991536;
+}
+
+.regional-news-map .map-surface {
+  background: var(--map-ocean);
+}

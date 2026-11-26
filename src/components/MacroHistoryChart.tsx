@@ -50,9 +50,9 @@ export function MacroHistoryChart({ title, lines, unit, palette, height = 'h-28'
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={rows} margin={{ left: 0, right: 8, top: 4, bottom: 0 }}>
           {single && <defs><linearGradient id={gradient} x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor={lines[0].stroke} stopOpacity={0.3} /><stop offset="100%" stopColor={lines[0].stroke} stopOpacity={0} />
+            <stop offset="0%" stopColor={lines[0].stroke} stopOpacity={0.16} /><stop offset="100%" stopColor={lines[0].stroke} stopOpacity={0} />
           </linearGradient></defs>}
-          <CartesianGrid stroke={palette.chartGrid} strokeDasharray="3 3" />
+          <CartesianGrid stroke={palette.chartGrid} strokeDasharray="1 4" />
           <XAxis dataKey="timestamp" type="number" scale="utc" domain={[start, end]} ticks={start === end ? [start] : undefined}
             tickCount={4} minTickGap={18} tickFormatter={value => axisDate.format(value)} tick={{ fill: palette.muted, fontSize: 10 }} tickLine={false} axisLine={{ stroke: palette.border }} />
           <YAxis width={unit === 'jobs' ? 82 : 48} domain={['auto', 'auto']} tick={{ fill: palette.muted, fontSize: 10 }}
@@ -60,13 +60,14 @@ export function MacroHistoryChart({ title, lines, unit, palette, height = 'h-28'
           <Tooltip contentStyle={{ background: palette.elevated, border: `1px solid ${palette.border}`, borderRadius: 4, fontSize: 11 }}
             labelStyle={{ color: palette.text }} labelFormatter={value => fullDate.format(Number(value))}
             formatter={(value: number, name: string) => [formatMacroReading(value, unit), name]} />
-          {!single && <Legend wrapperStyle={{ color: palette.muted, fontSize: 10 }} />}
+          {!single && <Legend wrapperStyle={{ color: palette.muted, fontSize: 10, strokeLinecap: 'round' }} />}
           {reference !== undefined && <ReferenceLine y={reference} stroke={palette.muted} strokeDasharray="3 3" />}
           {lines.map(line => single
             ? <Area key={line.id} dataKey={line.id} name={line.label} type={line.step ? 'stepAfter' : 'linear'} stroke={line.stroke}
-                fill={`url(#${gradient})`} strokeWidth={2} dot={rows.length === 1} isAnimationActive={false} />
-            : <Line key={line.id} dataKey={line.id} name={line.label} type="linear" stroke={line.stroke} strokeDasharray={line.strokeDasharray}
-                strokeWidth={2} dot={line.series.length === 1} activeDot={{ r: 3 }} connectNulls={false} isAnimationActive={false} />)}
+                fill={`url(#${gradient})`} strokeWidth={2} strokeDasharray="0.1 3.6" strokeLinecap="round"
+                dot={rows.length === 1} activeDot={{ r: 3, stroke: palette.panel }} isAnimationActive={false} />
+            : <Line key={line.id} dataKey={line.id} name={line.label} type="linear" stroke={line.stroke} strokeDasharray={line.strokeDasharray ?? '0.1 3.6'} strokeLinecap="round"
+                strokeWidth={2} legendType="plainline" dot={line.series.length === 1} activeDot={{ r: 3 }} connectNulls={false} isAnimationActive={false} />)}
         </ComposedChart>
       </ResponsiveContainer>
     </div>

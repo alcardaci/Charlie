@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react';
-import { BarChart2, Briefcase, Globe2, Grip, Home, Newspaper, Settings2, Wallet, X } from 'lucide-react';
+import { useState } from 'react';
+import { BarChart2, Briefcase, Grip, Landmark, Home, Newspaper, Settings2, Wallet, X } from 'lucide-react';
+import { workspaceShortcuts } from '../data/workspaceShortcuts';
 import { useTerminalStore } from '../store/useTerminalStore';
 import type { PanelType } from '../types';
 
@@ -7,37 +8,28 @@ type MobileNavigationProps = {
   onOpenWatchlist: () => void;
 };
 
-const MORE_PANELS: Array<{ panel: PanelType; label: string; icon: typeof Globe2 }> = [
-  { panel: 'predictions', label: 'Predictions', icon: BarChart2 },
-  { panel: 'macro', label: 'Macro+Yield', icon: BarChart2 },
-  { panel: 'heatmap', label: 'Heatmap', icon: BarChart2 },
-  { panel: 'forex', label: 'Forex', icon: BarChart2 },
-  { panel: 'crypto', label: 'Crypto', icon: BarChart2 },
-  { panel: 'etf', label: 'ETF', icon: BarChart2 },
-  { panel: 'settings', label: 'Settings', icon: Settings2 },
-  { panel: 'help', label: 'Help', icon: Settings2 },
-];
+const primaryWorkspaces = workspaceShortcuts.slice(0, 4);
+const moreWorkspaces = workspaceShortcuts.slice(4);
+const icons: Partial<Record<PanelType, typeof BarChart2>> = {
+  overview: Home, news: Newspaper, portfolio: Briefcase, congress: Landmark, settings: Settings2,
+};
 
 export function MobileNavigation({ onOpenWatchlist }: MobileNavigationProps) {
   const { activePanel, setActivePanel } = useTerminalStore();
   const [showMore, setShowMore] = useState(false);
-  const morePanels = useMemo(() => MORE_PANELS, []);
-
-  const primaryItems = useMemo(
-    () => [
-      { key: 'overview', label: 'Home', icon: Home, active: activePanel === 'overview', onClick: () => setActivePanel('overview') },
-      { key: 'watchlist', label: 'Watch', icon: Wallet, active: false, onClick: onOpenWatchlist },
-      { key: 'news', label: 'News+Geo', icon: Newspaper, active: activePanel === 'news' || activePanel === 'geopolitics', onClick: () => setActivePanel('news') },
-      { key: 'portfolio', label: 'Port', icon: Briefcase, active: activePanel === 'portfolio', onClick: () => setActivePanel('portfolio') },
-      { key: 'more', label: 'More', icon: Grip, active: false, onClick: () => setShowMore(true) },
-    ],
-    [activePanel, onOpenWatchlist, setActivePanel]
-  );
+  const activeWorkspace = activePanel === 'geopolitics' ? 'news'
+    : activePanel === 'chart' || activePanel === 'multiAsset' ? 'equity'
+    : activePanel === 'yield' ? 'macro' : activePanel;
+  const primaryItems = primaryWorkspaces.map(({ panel, mobileLabel }) => ({
+    key: panel, label: mobileLabel, icon: icons[panel] ?? BarChart2,
+    active: activeWorkspace === panel, onClick: () => setActivePanel(panel),
+  }));
+  const moreButton = { key: 'more', label: 'More', icon: Grip, active: showMore, onClick: () => setShowMore(true) };
 
   return (
     <>
-      <div className="flex items-center justify-between gap-1 border-t border-terminal-border bg-terminal-panel px-2 py-1.5 md:hidden">
-        {primaryItems.map((item) => {
+      <nav aria-label="Mobile workspaces" className="flex items-center justify-between gap-1 border-t border-terminal-border bg-terminal-panel px-2 py-1.5 md:hidden">
+        {[...primaryItems, moreButton].map((item) => {
           const Icon = item.icon;
           return (
             <button
@@ -54,7 +46,7 @@ export function MobileNavigation({ onOpenWatchlist }: MobileNavigationProps) {
             </button>
           );
         })}
-      </div>
+      </nav>
 
       {showMore && (
         <div className="fixed inset-0 z-50 flex items-end bg-black/55 md:hidden">
@@ -66,10 +58,7 @@ export function MobileNavigation({ onOpenWatchlist }: MobileNavigationProps) {
           />
           <div className="relative z-10 w-full rounded-t-2xl border border-terminal-border bg-terminal-panel p-4 shadow-2xl">
             <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <div className="text-terminal-accent text-xs font-bold tracking-[0.18em]">WORKSPACES</div>
-                <div className="mt-1 text-xs text-terminal-faint">Jump to any monitor from mobile.</div>
-              </div>
+              <h2 className="workspace-title">WORKSPACES</h2>
               <button
                 onClick={() => setShowMore(false)}
                 className="rounded border border-terminal-border p-2 text-terminal-faint hover:border-terminal-accent/40 hover:text-terminal-accent"
@@ -79,10 +68,10 @@ export function MobileNavigation({ onOpenWatchlist }: MobileNavigationProps) {
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-2">
-              {morePanels.map((item) => {
-                const Icon = item.icon;
-                const isActive = activePanel === item.panel;
+            <nav aria-label="More workspaces" className="grid grid-cols-2 gap-2">
+              {moreWorkspaces.map((item) => {
+                const Icon = icons[item.panel] ?? BarChart2;
+                const isActive = activeWorkspace === item.panel;
 
                 return (
                   <button
@@ -98,11 +87,18 @@ export function MobileNavigation({ onOpenWatchlist }: MobileNavigationProps) {
                     }`}
                   >
                     <Icon size={14} className={isActive ? 'text-terminal-accent' : 'text-terminal-muted'} />
-                    <span className="font-medium">{item.label}</span>
+                    <span className="font-medium">{item.mobileLabel}</span>
                   </button>
                 );
               })}
-            </div>
+              <button
+                onClick={() => { setShowMore(false); onOpenWatchlist(); }}
+                className="flex items-center gap-2 rounded border border-terminal-border bg-terminal-elevated px-3 py-3 text-left text-xs text-terminal-text hover:border-terminal-accent/30 hover:bg-terminal-hover"
+              >
+                <Wallet size={14} className="text-terminal-muted" />
+                <span className="font-medium">Watch</span>
+              </button>
+            </nav>
           </div>
         </div>
       )}

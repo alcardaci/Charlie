@@ -1,4 +1,5 @@
-import { DEFAULT_NEWS_LAYOUT, normalizeNewsLayout, type NewsLayout } from '../utils/newsLayout';
+import { DEFAULT_NEWS_LAYOUT, normalizeNewsLayout, restoreNewsLayout, type NewsLayout } from '../utils/newsLayout';
+import { DEFAULT_OVERVIEW_LAYOUT, normalizeOverviewLayout, type OverviewLayout } from '../utils/overviewLayout';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import {
@@ -14,11 +15,11 @@ import {
 import { TERMINAL_STORAGE_KEY, terminalStateStorage } from '../utils/localStateStorage';
 import {
   buildDefaultOpenAISystemPrompts,
-  COMPANION_MODEL_OPTIONS,
   DEFAULT_COMPANION_MODEL,
   DEFAULT_GEOPOLITICS_EVENT_SYSTEM_PROMPT,
   DEFAULT_GEOPOLITICS_OPENAI_MODEL,
   DEFAULT_OPENAI_MODEL,
+  getCompanionModelOption,
   getOpenAISystemPromptForHarness,
   OPENAI_HARNESS_OPTIONS,
 } from '../utils/openaiConfig';
@@ -53,7 +54,8 @@ const DEFAULT_OPENAI_SETTINGS: OpenAISettings = {
   hasStoredApiKey: false,
 };
 
-interface NavEntry { panel: PanelType; symbol: string }
+type SettingsTab = 'preferences' | 'help';
+interface NavEntry { panel: PanelType; symbol: string; settingsTab: SettingsTab }
 
 export type MultiAssetView = 'research' | 'chart';
 
@@ -67,12 +69,16 @@ interface TerminalState {
   macroCountry: MacroCountryCode;
   setMacroCountry: (country: MacroCountryCode) => void;
   activePanel: PanelType;
+  settingsTab: SettingsTab;
   activeSymbol: string;
   debugMode: boolean;
+  overviewLayout: OverviewLayout;
+  setOverviewLayout: (layout: OverviewLayout) => void;
   newsLayout: NewsLayout;
   setNewsLayout: (layout: NewsLayout) => void;
-  watchlistSidebarVisible: boolean;
   watchlist: string[];
+  watchlistFocusRequested: boolean;
+  openWatchlist: () => void;
   portfolio: PortfolioPosition[];
   commandHistory: string[];
   historyIndex: number;
@@ -90,13 +96,11 @@ interface TerminalState {
   activeCompanionConversationId: string | null;
   multiAssetTiles: MultiAssetTile[];
 
-  setActivePanel: (panel: PanelType, symbol?: string) => void;
+  setActivePanel: (panel: PanelType, symbol?: string, settingsTab?: SettingsTab) => void;
   openMultiAssetView: (symbol: string, view?: MultiAssetView) => void;
   addMultiAssetTile: (symbol: string, view?: MultiAssetView) => void;
   removeMultiAssetTile: (id: string) => void;
   setMultiAssetTileView: (id: string, view: MultiAssetView) => void;
-  toggleWatchlistSidebar: () => void;
-  setWatchlistSidebarVisible: (visible: boolean) => void;
   goHome: () => void;
   setChartStyle: (style: ChartStyle) => void;
   setForexPairs: (pairs: string[]) => void;
@@ -126,8 +130,7 @@ interface TerminalState {
 
 type PersistedTerminalState = Pick<
   TerminalState,
-  | 'newsLayout'
-  | 'watchlistSidebarVisible'
+  | 'overviewLayout'
   | 'watchlist'
   | 'portfolio'
   | 'commandHistory'
@@ -138,11 +141,17 @@ type PersistedTerminalState = Pick<
   | 'openAISettings'
   | 'companionConversations'
   | 'activeCompanionConversationId'
->;
+> & { newsLayout: NewsLayout & { version?: number } };
 
 function normalizeCurrencyCode(currency?: string | null): string {
   const normalized = (currency ?? '').trim().toUpperCase();
   return /^[A-Z]{3}$/.test(normalized) ? normalized : DEFAULT_PORTFOLIO_CURRENCY;
+}
+
+function restoreChartStyle(value: unknown): ChartStyle {
+  if (value === 'line') return 'area';
+  if (value === 'area' || value === 'ohlc') return value;
+  return 'candlestick';
 }
 
 function isObsoleteOverviewPrompt(prompt: string): boolean {
@@ -189,10 +198,7 @@ function normalizeOpenAISettings(value?: Partial<OpenAISettings> | null): OpenAI
     : rawGeopoliticsPrompt;
 
   const rawModel = typeof value?.model === 'string' ? value.model.trim() : '';
-  const rawCompanionModel = typeof value?.companionModel === 'string' ? value.companionModel.trim() : '';
-  const companionModel = COMPANION_MODEL_OPTIONS.some((option) => option.value === rawCompanionModel)
-    ? rawCompanionModel
-    : DEFAULT_COMPANION_MODEL;
+  const companionModel = getCompanionModelOption(typeof value?.companionModel === 'string' ? value.companionModel : undefined).value;
   const hasObsoleteOverviewPrompt =
     isObsoleteOverviewPrompt(value?.systemPrompts?.comprehensive?.trim() ?? '') ||
     (harness === 'comprehensive' && typeof value?.systemPrompt === 'string' && isObsoleteOverviewPrompt(value.systemPrompt));
@@ -318,14 +324,17 @@ export const useTerminalStore = create<TerminalState>()(
     (set, get) => ({
       macroCountry: 'US',
       setMacroCountry: macroCountry => set({ macroCountry }),
+      overviewLayout: DEFAULT_OVERVIEW_LAYOUT,
+      setOverviewLayout: layout => set({ overviewLayout: normalizeOverviewLayout(layout) }),
       newsLayout: DEFAULT_NEWS_LAYOUT,
       setNewsLayout: layout => set({ newsLayout: normalizeNewsLayout(layout) }),
       activePanel: 'overview',
+      settingsTab: 'preferences',
       activeSymbol: 'AAPL',
       debugMode: false,
-      watchlistSidebarVisible: true,
       chartSymbol: 'AAPL',
       watchlist: DEFAULT_WATCHLIST,
+      watchlistFocusRequested: false,
       portfolio: [],
       commandHistory: [],
       historyIndex: -1,
@@ -342,14 +351,16 @@ export const useTerminalStore = create<TerminalState>()(
       activeCompanionConversationId: null,
       multiAssetTiles: [],
 
-      setActivePanel: (panel, symbol) => {
+      setActivePanel: (panel, symbol, settingsTab = 'preferences') => {
         const upper = symbol?.toUpperCase();
-        const prev: NavEntry = { panel: get().activePanel, symbol: get().activeSymbol };
+        const prev: NavEntry = { panel: get().activePanel, symbol: get().activeSymbol, settingsTab: get().settingsTab };
         set((state) => ({
           activePanel: panel,
+          settingsTab,
+          watchlistFocusRequested: false,
           ...(upper ? { activeSymbol: upper, chartSymbol: upper } : {}),
           // Push to nav history (max 30 entries, avoid duplicate consecutive entries)
-          navHistory: prev.panel === panel && prev.symbol === (upper ?? get().activeSymbol)
+          navHistory: prev.panel === panel && prev.symbol === (upper ?? prev.symbol) && prev.settingsTab === settingsTab
             ? state.navHistory
             : [prev, ...state.navHistory.slice(0, 29)],
         }));
@@ -358,7 +369,7 @@ export const useTerminalStore = create<TerminalState>()(
       openMultiAssetView: (symbol, view = 'research') => {
         const upper = symbol.trim().toUpperCase();
         if (!upper) return;
-        const prev: NavEntry = { panel: get().activePanel, symbol: get().activeSymbol };
+        const prev: NavEntry = { panel: get().activePanel, symbol: get().activeSymbol, settingsTab: get().settingsTab };
         set((state) => {
           const existingTiles = state.multiAssetTiles.length
             ? state.multiAssetTiles
@@ -373,6 +384,8 @@ export const useTerminalStore = create<TerminalState>()(
 
           return {
             activePanel: 'multiAsset',
+            settingsTab: 'preferences',
+            watchlistFocusRequested: false,
             activeSymbol: upper,
             chartSymbol: upper,
             multiAssetTiles: nextTiles,
@@ -424,17 +437,11 @@ export const useTerminalStore = create<TerminalState>()(
         }));
       },
 
-      toggleWatchlistSidebar: () => {
-        set((state) => ({ watchlistSidebarVisible: !state.watchlistSidebarVisible }));
-      },
-
-      setWatchlistSidebarVisible: (visible) => {
-        set({ watchlistSidebarVisible: visible });
-      },
-
       goHome: () => {
         set({
           activePanel: 'overview',
+          settingsTab: 'preferences',
+          watchlistFocusRequested: false,
           navHistory: [],
         });
       },
@@ -444,6 +451,8 @@ export const useTerminalStore = create<TerminalState>()(
         if (!prev) return;
         set({
           activePanel: prev.panel,
+          settingsTab: prev.settingsTab,
+          watchlistFocusRequested: false,
           activeSymbol: prev.symbol,
           chartSymbol: prev.symbol,
           navHistory: rest,
@@ -503,6 +512,11 @@ export const useTerminalStore = create<TerminalState>()(
 
       setMarketOverviewSummaryCollapsed: (collapsed) => {
         set({ marketOverviewSummaryCollapsed: collapsed });
+      },
+
+      openWatchlist: () => {
+        get().setActivePanel('overview');
+        set({ watchlistFocusRequested: true });
       },
 
       addToWatchlist: (symbol) => {
@@ -577,13 +591,17 @@ export const useTerminalStore = create<TerminalState>()(
         }));
 
         const { setActivePanel } = get();
+        if (cmd === 'WL') {
+          get().openWatchlist();
+          return;
+        }
         const mainPanel = getScreenCommandPanel(cmd);
         if (mainPanel) {
           if (mainPanel === 'overview') {
             get().goHome();
             return;
           }
-          setActivePanel(mainPanel);
+          setActivePanel(mainPanel, undefined, cmd === 'HELP' ? 'help' : 'preferences');
           return;
         }
 
@@ -670,7 +688,8 @@ export const useTerminalStore = create<TerminalState>()(
       skipHydration: true,
       storage: createJSONStorage<PersistedTerminalState>(() => terminalStateStorage),
       merge: (persistedState, currentState) => {
-        const persisted = (persistedState ?? {}) as Partial<PersistedTerminalState>;
+        const { watchlistSidebarVisible: _legacySidebar, ...persisted } =
+          (persistedState ?? {}) as Partial<PersistedTerminalState> & { watchlistSidebarVisible?: boolean };
         const companionConversations = normalizeCompanionConversations(persisted.companionConversations);
         const activeCompanionConversationId = (
           typeof persisted.activeCompanionConversationId === 'string' &&
@@ -683,7 +702,9 @@ export const useTerminalStore = create<TerminalState>()(
         return {
           ...currentState,
           ...persisted,
-          newsLayout: normalizeNewsLayout(persisted.newsLayout),
+          overviewLayout: normalizeOverviewLayout(persisted.overviewLayout),
+          newsLayout: restoreNewsLayout(persisted.newsLayout),
+          chartStyle: restoreChartStyle(persisted.chartStyle),
           debugMode: false,
           portfolioDisplayCurrency: normalizeCurrencyCode(persisted.portfolioDisplayCurrency),
           openAISettings: normalizeOpenAISettings(persisted.openAISettings),
@@ -696,8 +717,8 @@ export const useTerminalStore = create<TerminalState>()(
         state.updateOpenAISettings({ hasStoredApiKey: state.openAISettings.hasStoredApiKey });
       },
       partialize: (state): PersistedTerminalState => ({
-        newsLayout: state.newsLayout,
-        watchlistSidebarVisible: state.watchlistSidebarVisible,
+        overviewLayout: state.overviewLayout,
+        newsLayout: { ...state.newsLayout, version: 2 },
         watchlist: state.watchlist,
         portfolio: state.portfolio,
         commandHistory: state.commandHistory,

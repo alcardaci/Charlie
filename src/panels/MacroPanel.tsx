@@ -1,13 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { MacroHistoryChart, MacroRangeContext, MacroRangeSelect } from '../components/MacroHistoryChart';
 import { availableMacroWindows, type MacroHistory, type MacroWindow } from '../utils/macroHistory';
 import { fetchMacroDashboard } from '../api/finance';
 import { EventsCalendar } from '../components/EventsCalendar';
+import { WorkspaceHeader } from '../components/WorkspaceHeader';
 import { MACRO_COUNTRIES, MACRO_METRICS } from '../data/macroRegistry';
 import { useTerminalStore } from '../store/useTerminalStore';
 import { BlsIndicator, EurostatIndicator, MacroDashboardData, MacroMetricKey, MacroMetricSnapshot, OecdComparableIndicator } from '../types';
-import { fmt } from '../utils/formatters';
+import { changeColor, fmt } from '../utils/formatters';
 import { getThemePalette, useTheme } from '../utils/theme';
 import { formatMacroReading, formatMacroNumber, getMacroSeriesStyle, macroDeltaUnit, macroObservationAge } from '../utils/macroDisplay';
 import { YieldPanel } from './YieldPanel';
@@ -93,11 +94,7 @@ export function MacroPanel() {
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      <div className="flex flex-col gap-2 px-4 py-2 panel-border-b bg-terminal-panel flex-shrink-0 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <span className="text-terminal-accent font-bold text-sm tracking-wider">MACRO MONITOR</span>
-          <span className="block sm:inline text-terminal-faint text-xs sm:ml-3">Ten economies · source dates and coverage vary</span>
-        </div>
+      <WorkspaceHeader title="MACRO MONITOR">
         {(view === 'dashboard' || view === 'compare') && (
           <div className="flex items-center justify-between gap-4">
             {view === 'dashboard' && <span aria-live="polite" className="text-terminal-text text-xs font-bold">{selectedCountryName}</span>}
@@ -111,7 +108,7 @@ export function MacroPanel() {
             </button>
           </div>
         )}
-      </div>
+      </WorkspaceHeader>
 
       <div className="flex flex-col gap-2 px-4 py-2 bg-terminal-bg panel-border-b flex-shrink-0">
         <div role="tablist" aria-label="Macro views" className="flex gap-1 overflow-x-auto pb-1">
@@ -192,7 +189,7 @@ export function MacroPanel() {
             ) : !selectedCountry ? (
               <PanelMessage text="Could not load macro dashboard" />
             ) : (
-              <>
+              <div className="section-stack space-y-4">
                 <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-3">
                   {METRIC_KEYS.map((metricKey) => (
                     <MetricCard
@@ -207,7 +204,7 @@ export function MacroPanel() {
                 <OecdComparableTrends data={dashboardData.oecdCountry} palette={themePalette} />
                 {country === 'US' && <BlsLaborTrends data={dashboardData.bls} palette={themePalette} />}
                 {country === 'EA' && <EurostatLocalDetail data={dashboardData.eurostat} palette={themePalette} />}
-              </>
+              </div>
             )}
             </MacroRangeContext.Provider>
           </div>
@@ -228,7 +225,7 @@ export function MacroPanel() {
             ) : (
               <>
                 <div className="text-terminal-faint text-xs leading-relaxed">Compare source definitions as well as values: GDP may be annualized or quarter-on-quarter, CPI may be annual or monthly, and short rates may be interbank proxies. Observation dates can differ. Open a cell's source for its exact series.</div>
-                <div className="bg-terminal-panel border border-terminal-border rounded overflow-x-auto">
+                <div className="workspace-section instrument-card bg-terminal-panel border border-terminal-border rounded overflow-x-auto">
                   <table className="data-table w-full">
                     <thead>
                       <tr>
@@ -267,7 +264,7 @@ export function MacroPanel() {
 
         {view === 'calendar' && (
           <div className="h-full p-4">
-            <div className="h-full border border-terminal-border rounded overflow-hidden">
+            <div className="instrument-section h-full border border-terminal-border rounded overflow-hidden">
               <EventsCalendar />
             </div>
           </div>
@@ -292,21 +289,19 @@ function MetricCard({
 }) {
   const stepHistory = snapshot?.chartType === 'step';
   return (
-    <div className="bg-terminal-panel border border-terminal-border rounded p-3 min-h-[12rem]">
+    <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-3 min-h-[12rem]">
       <div className="flex items-center justify-between mb-2">
-        <div className="text-terminal-muted text-xs font-bold tracking-wider">{title}</div>
+        <div className="instrument-heading text-terminal-muted text-xs font-bold tracking-wider">{title}</div>
         {snapshot?.sourceUrl ? <a href={snapshot.sourceUrl} target="_blank" rel="noreferrer" className="text-terminal-faint text-xs hover:text-terminal-text" title="Open the official source series">{snapshot.source ?? 'Source'} ↗</a> : <span className="text-terminal-faint text-xs">{snapshot?.source ?? 'FRED'}</span>}
       </div>
 
       {snapshot ? (
         <>
-          <div className="text-terminal-text font-bold text-2xl tabular-nums">
+          <div className="instrument-value text-terminal-text font-bold text-2xl tabular-nums">
             {formatMacroValue(snapshot)}
           </div>
           <div className="text-terminal-muted text-xs mt-1">
-            {stepHistory ? 'Rate history · changes shown on their effective dates' : snapshot.change == null
-              ? 'No prior print'
-              : `Change vs prior print ${formatSignedValue(snapshot.change, 2)} ${macroDeltaUnit(snapshot.unit)}`}
+            {stepHistory ? 'Rate history · changes shown on their effective dates' : <PriorPrintChange change={snapshot.change} unit={snapshot.unit} decimals={2} />}
           </div>
           <div className="text-terminal-faint text-[10px] mt-1">
             {[snapshot.frequency, snapshot.areaScope, snapshot.date].filter(Boolean).join(' · ')}
@@ -339,22 +334,27 @@ function formatSignedValue(value: number, decimals: 0 | 1 | 2): string {
   return `${normalized >= 0 ? '+' : ''}${formatMacroNumber(normalized, decimals)}`;
 }
 
+function PriorPrintChange({ change, unit, decimals }: { change: number | null; unit: string; decimals: 1 | 2 }) {
+  if (change == null) return <>No prior print</>;
+  return <>Change vs prior print <span className={changeColor(normalizeRoundedZero(change, decimals))}>{formatSignedValue(change, decimals)} {macroDeltaUnit(unit)}</span></>;
+}
+
 function OecdComparableTrends({ data, palette }: {
   data: NonNullable<MacroDashboardData['oecdCountry']> | undefined;
   palette: ReturnType<typeof getThemePalette>;
 }) {
   if (!data) {
     return (
-      <section className="bg-terminal-panel border border-terminal-border rounded px-4 py-3 text-terminal-faint text-xs">
+      <section className="instrument-card bg-terminal-panel border border-terminal-border rounded px-4 py-3 text-terminal-faint text-xs">
         Comparable activity and labour indicators are unavailable right now; the core Macro charts remain usable.
       </section>
     );
   }
   return (
-    <section className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+    <section className="instrument-card bg-terminal-panel border border-terminal-border rounded overflow-hidden">
       <div className="px-4 py-2 panel-border-b flex flex-wrap items-center justify-between gap-2">
         <div>
-          <div className="text-terminal-muted text-xs font-bold tracking-wider">COMPARABLE ACTIVITY, LABOUR & CONFIDENCE</div>
+          <div className="instrument-heading text-terminal-muted text-xs font-bold tracking-wider">COMPARABLE ACTIVITY, LABOUR & CONFIDENCE</div>
           <div className="text-terminal-faint text-[10px] mt-1">Common OECD contracts · exact country and series mapping · {data.status.toUpperCase()}</div>
         </div>
         <a href="https://data-explorer.oecd.org/" target="_blank" rel="noreferrer" className="text-terminal-faint text-[10px] hover:text-terminal-text">OECD SOURCE ↗</a>
@@ -370,8 +370,8 @@ function OecdComparableTrends({ data, palette }: {
 function OecdComparableCard({ indicator, palette }: { indicator: OecdComparableIndicator; palette: ReturnType<typeof getThemePalette> }) {
   if (indicator.status === 'unavailable') {
     return (
-      <div className="bg-terminal-elevated border border-terminal-border rounded p-3 min-h-[10rem] flex flex-col">
-        <div className="text-terminal-muted text-xs font-bold tracking-wider">{indicator.label}</div>
+      <div className="instrument-section bg-terminal-elevated border border-terminal-border rounded p-3 min-h-[10rem] flex flex-col">
+        <div className="instrument-heading text-terminal-muted text-xs font-bold tracking-wider">{indicator.label}</div>
         <div className="text-terminal-faint text-xs mt-4">Coverage unavailable</div>
         <div className="text-terminal-faint text-[10px] mt-2 leading-relaxed">{indicator.coverageNote}</div>
         <div className="text-terminal-faint text-[10px] mt-auto pt-3">{indicator.frequency} · {indicator.unitLabel}</div>
@@ -379,17 +379,16 @@ function OecdComparableCard({ indicator, palette }: { indicator: OecdComparableI
     );
   }
   const value = formatMacroReading(indicator.value, indicator.unit);
-  const change = indicator.change == null ? 'No prior print' : `Change vs prior print ${formatSignedValue(indicator.change, 2)} ${macroDeltaUnit(indicator.unit)}`;
   return <SupplementalTrendCard
     title={indicator.label}
     value={value}
-    detail={`${change} · ${indicator.date ?? 'Latest unavailable'} · ${indicator.frequency} · ${indicator.unitLabel}`}
+    detail={<><PriorPrintChange change={indicator.change} unit={indicator.unit} decimals={2} /> · {indicator.date ?? 'Latest unavailable'} · {indicator.frequency} · {indicator.unitLabel}</>}
     series={indicator.series}
     observationDate={indicator.date}
     observationFrequency={indicator.frequency}
     unit={indicator.unit}
     sourceUrl={indicator.sourceUrl}
-    color={indicator.key === 'employmentGrowth' ? palette.accent : indicator.key === 'businessConfidence' ? palette.purple : palette.blue}
+    color={palette.accent}
     palette={palette}
   />;
 }
@@ -403,17 +402,17 @@ function BlsLaborTrends({
 }) {
   if (!data || data.indicators.length === 0) {
     return (
-      <div className="bg-terminal-panel border border-terminal-border rounded px-4 py-3 text-terminal-faint text-xs">
+      <div className="instrument-card bg-terminal-panel border border-terminal-border rounded px-4 py-3 text-terminal-faint text-xs">
         BLS local labour indicators are unavailable right now; the core Macro charts remain usable.
       </div>
     );
   }
 
   return (
-    <section className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+    <section className="instrument-card bg-terminal-panel border border-terminal-border rounded overflow-hidden">
       <div className="px-4 py-2 panel-border-b flex flex-wrap items-center justify-between gap-2">
         <div>
-          <div className="text-terminal-muted text-xs font-bold tracking-wider">US LOCAL DETAIL</div>
+          <div className="instrument-heading text-terminal-muted text-xs font-bold tracking-wider">US LOCAL DETAIL</div>
           <div className="text-terminal-faint text-[10px] mt-1">Monthly and quarterly labour, cost and productivity trends · {data.status.toUpperCase()}</div>
         </div>
         <a href="https://www.bls.gov/developers/" target="_blank" rel="noreferrer" className="text-terminal-faint text-[10px] hover:text-terminal-text">
@@ -457,11 +456,10 @@ function BlsFamilySection({ title, indicators, palette, mode = 'lines', compact 
 
 function BlsIndicatorChart({ indicator, palette }: { indicator: BlsIndicator; palette: ReturnType<typeof getThemePalette> }) {
   const value = formatMacroReading(indicator.value, indicator.unit);
-  const change = indicator.change == null ? 'No prior print' : `Change vs prior print ${formatSignedValue(indicator.change, 2)} ${macroDeltaUnit(indicator.unit)}`;
   return <SupplementalTrendCard
     title={indicator.label}
     value={value}
-    detail={`${change} · ${indicator.date ?? 'Latest unavailable'} · ${indicator.frequency} · ${indicator.seasonalAdjustment}`}
+    detail={<><PriorPrintChange change={indicator.change} unit={indicator.unit} decimals={2} /> · {indicator.date ?? 'Latest unavailable'} · {indicator.frequency} · {indicator.seasonalAdjustment}</>}
     series={indicator.series}
     observationDate={indicator.date}
     observationFrequency={indicator.frequency}
@@ -476,10 +474,10 @@ function OecdComparisonChart({ data, palette }: { data: NonNullable<MacroDashboa
   if (!data || data.indicators.length === 0) return null;
   const lines = data.indicators.flatMap((indicator, i) => indicator.series.length ? [{ id: indicator.countryCode, label: indicator.countryLabel, series: indicator.series, ...getMacroSeriesStyle(i, palette) }] : []);
   return (
-    <section className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+    <section className="workspace-section instrument-card bg-terminal-panel border border-terminal-border rounded overflow-hidden">
       <div className="px-4 py-2 panel-border-b flex flex-wrap items-center justify-between gap-2">
         <div>
-          <div className="text-terminal-muted text-xs font-bold tracking-wider">OECD LEADING INDICATOR COMPARISON</div>
+          <div className="instrument-heading text-terminal-muted text-xs font-bold tracking-wider">OECD LEADING INDICATOR COMPARISON</div>
           <div className="text-terminal-faint text-[10px] mt-1">Directional indicator · 100 = long-term trend · not a growth forecast · {data.status.toUpperCase()}</div>
         </div>
         <a href="https://www.oecd.org/en/data/insights/data-explainers/2024/09/api.html" target="_blank" rel="noreferrer" className="text-terminal-faint text-[10px] hover:text-terminal-text">OECD SOURCE ↗</a>
@@ -494,10 +492,10 @@ function EurostatLocalDetail({ data, palette }: { data: NonNullable<MacroDashboa
   const indicators = data?.indicators.filter((indicator) => indicator.placement === 'detail') ?? [];
   if (!data || indicators.length === 0) return null;
   return (
-    <section className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+    <section className="instrument-card bg-terminal-panel border border-terminal-border rounded overflow-hidden">
       <div className="px-4 py-2 panel-border-b flex flex-wrap items-center justify-between gap-2">
         <div>
-          <div className="text-terminal-muted text-xs font-bold tracking-wider">EURO AREA LOCAL DETAIL</div>
+          <div className="instrument-heading text-terminal-muted text-xs font-bold tracking-wider">EURO AREA LOCAL DETAIL</div>
           <div className="text-terminal-faint text-[10px] mt-1">Labour, activity and price trends · Euro Area 21 only · {data.status.toUpperCase()}</div>
         </div>
         <a href="https://ec.europa.eu/eurostat/web/user-guides/data-browser/api-data-access/api-getting-started/api" target="_blank" rel="noreferrer" className="text-terminal-faint text-[10px] hover:text-terminal-text">EUROSTAT SOURCE ↗</a>
@@ -518,17 +516,16 @@ function EurostatLocalDetail({ data, palette }: { data: NonNullable<MacroDashboa
 
 function EurostatIndicatorChart({ indicator, palette }: { indicator: EurostatIndicator; palette: ReturnType<typeof getThemePalette> }) {
   const value = formatMacroReading(indicator.value, indicator.unit);
-  const change = indicator.change == null ? 'No prior print' : `Change vs prior print ${formatSignedValue(indicator.change, 1)} ${macroDeltaUnit(indicator.unit)}`;
   return <SupplementalTrendCard
     title={indicator.label}
     value={value}
-    detail={`${change} · ${indicator.date ?? 'Latest unavailable'} · ${indicator.frequency} · ${indicator.unitLabel} · ${indicator.seasonalAdjustment}`}
+    detail={<><PriorPrintChange change={indicator.change} unit={indicator.unit} decimals={1} /> · {indicator.date ?? 'Latest unavailable'} · {indicator.frequency} · {indicator.unitLabel} · {indicator.seasonalAdjustment}</>}
     series={indicator.series}
     observationDate={indicator.date}
     observationFrequency={indicator.frequency}
     unit={indicator.unit}
     sourceUrl={indicator.sourceUrl}
-    color={palette.blue}
+    color={palette.accent}
     palette={palette}
   />;
 }
@@ -547,9 +544,9 @@ function GroupedTrendCard({ title, indicators, palette, color, compact = false }
   const lines = available.map(indicator => ({ id: indicator.id, label: indicator.shortLabel, series: indicator.series, ...getMacroSeriesStyle(indicators.indexOf(indicator), palette) }));
   const unit = Array.from(new Set(available.map((indicator) => indicator.unit))).join(' / ');
   return (
-    <div className="bg-terminal-elevated border border-terminal-border rounded p-3">
+    <div className="instrument-section bg-terminal-elevated border border-terminal-border rounded p-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="text-terminal-muted text-xs font-bold tracking-wider">{title}</div>
+        <div className="instrument-heading text-terminal-muted text-xs font-bold tracking-wider">{title}</div>
         <div className="text-terminal-faint text-[10px]">{unit} · {Array.from(new Set(available.map((indicator) => indicator.frequency))).join(' + ')}</div>
       </div>
       <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
@@ -569,8 +566,8 @@ function GroupedTrendCard({ title, indicators, palette, color, compact = false }
 
 function UnavailableTrendCard({ title, detail, cadence }: { title: string; detail: string; cadence: string }) {
   return (
-    <div className="bg-terminal-elevated border border-terminal-border rounded p-3 min-h-[10rem] flex flex-col">
-      <div className="text-terminal-muted text-xs font-bold tracking-wider">{title}</div>
+    <div className="instrument-section bg-terminal-elevated border border-terminal-border rounded p-3 min-h-[10rem] flex flex-col">
+      <div className="instrument-heading text-terminal-muted text-xs font-bold tracking-wider">{title}</div>
       <div className="text-terminal-faint text-xs mt-4">Coverage unavailable</div>
       <div className="text-terminal-faint text-[10px] mt-2 leading-relaxed">{detail}</div>
       <div className="text-terminal-faint text-[10px] mt-auto pt-3">{cadence}</div>
@@ -581,7 +578,7 @@ function UnavailableTrendCard({ title, detail, cadence }: { title: string; detai
 function SupplementalTrendCard({ title, value, detail, series, unit, sourceUrl, color, palette, observationDate, observationFrequency }: {
   title: string;
   value: string;
-  detail: string;
+  detail: ReactNode;
   series: Array<{ date: string; value: number }>;
   observationDate?: string;
   observationFrequency?: string;
@@ -591,10 +588,10 @@ function SupplementalTrendCard({ title, value, detail, series, unit, sourceUrl, 
   palette: ReturnType<typeof getThemePalette>;
 }) {
   return (
-    <div className="bg-terminal-elevated border border-terminal-border rounded p-3">
+    <div className="instrument-section bg-terminal-elevated border border-terminal-border rounded p-3">
       <div className="flex items-start justify-between gap-2">
         <div>
-          <div className="text-terminal-muted text-xs font-bold tracking-wider">{title}</div>
+          <div className="instrument-heading text-terminal-muted text-xs font-bold tracking-wider">{title}</div>
           <div className="text-terminal-text font-bold text-lg tabular-nums mt-1">{value}</div>
         </div>
         <a href={sourceUrl} target="_blank" rel="noreferrer" aria-label={`Source for ${title}`} className="text-terminal-faint text-[10px] hover:text-terminal-accent">SOURCE ↗</a>

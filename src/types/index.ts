@@ -15,7 +15,7 @@ export type PanelType =
   | 'yield'
   | 'etf'
   | 'screener'
-  | 'help'
+  | 'congress'
   | 'settings';
 
 export type OpenAIHarness = 'comprehensive' | 'custom';
@@ -119,6 +119,8 @@ export interface Quote {
   regularMarketDayHigh: number;
   regularMarketDayLow: number;
   fiftyTwoWeekHigh: number;
+  fiftyDayAverage?: number;
+  twoHundredDayAverage?: number;
   fiftyTwoWeekLow: number;
   marketCap?: number;
   trailingPE?: number;
@@ -834,6 +836,8 @@ export interface FundWorkbench {
   };
 }
 
+export type ResearchWorkbench = CompanyWorkbench | { instrumentKind: 'index'; instrumentLabel: 'INDEX'; quote: Quote };
+
 export interface CompanyWorkbench {
   quote: Quote;
   instrumentKind: InstrumentKind;
@@ -968,6 +972,16 @@ export interface SecFiling {
   primaryDocument: string | null;
   filingUrl: string;
   isAmendment: boolean;
+  documentDescription?: string;
+}
+
+export interface SecRegistrantProfile {
+  industry?: string;
+  city?: string;
+  state?: string;
+  country?: string;
+  website?: string;
+  sourceUrl: string;
 }
 
 export interface SecMetricObservation {
@@ -996,6 +1010,9 @@ export interface SecCompanyData {
   ticker: string;
   identity: SecIdentity | null;
   filings: SecFiling[];
+  financialFiling?: SecFiling | null;
+  factsCoverage?: 'available' | 'no-mapped-metrics' | 'unavailable';
+  profile?: SecRegistrantProfile;
   observations: SecMetricObservation[];
   metrics: Record<SecMetricKey, SecMetricObservation | null>;
   source: SecSourceEnvelope;
@@ -1201,7 +1218,7 @@ export interface MacroCalendarData {
 
 export type ChartInterval = '1m' | '5m' | '15m' | '1h' | '1d' | '1wk' | '1mo';
 export type ChartRange = '1d' | '5d' | '1mo' | '3mo' | '6mo' | '1y' | '2y' | '5y' | '10y' | 'max';
-export type ChartStyle = 'candlestick' | 'ohlc' | 'line' | 'area';
+export type ChartStyle = 'candlestick' | 'ohlc' | 'area';
 
 export interface ChartWindowRequest {
   range?: ChartRange;

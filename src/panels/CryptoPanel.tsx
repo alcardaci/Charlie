@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { fetchCryptoMarkets } from '../api/crypto';
+import { WorkspaceHeader } from '../components/WorkspaceHeader';
 import { useTerminalStore } from '../store/useTerminalStore';
 import { fmt, changeColor } from '../utils/formatters';
 import { cryptoChartSymbol, finiteMarketValue, trackedMarketCap } from '../utils/marketPanelDisplay';
@@ -18,18 +19,17 @@ export function CryptoPanel() {
 
   const totalMktCap = trackedMarketCap(coins);
 
-  return (
-    <div className="h-full overflow-y-auto p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-        <h1 className="text-terminal-accent font-bold text-sm tracking-wider">CRYPTO MARKETS</h1>
-        <div className="text-xs text-terminal-muted">
-          Tracked sample cap: <span className="text-terminal-text">{fmt.marketCap(totalMktCap)}</span>
-          <span className="text-terminal-faint ml-3">via CoinGecko</span>
-        </div>
-        <button type="button" onClick={() => void refetch()} disabled={isFetching} className="rounded border border-terminal-border px-3 py-1 text-xs text-terminal-muted hover:text-terminal-text disabled:opacity-50">{isFetching ? 'Refreshing…' : 'Refresh'}</button>
+  return <>
+    <WorkspaceHeader title="CRYPTO MARKETS">
+      <div className="text-xs text-terminal-muted">
+        Tracked sample cap: <span className="text-terminal-text">{fmt.marketCap(totalMktCap)}</span>
+        <span className="text-terminal-faint ml-3">via CoinGecko</span>
       </div>
-      <div className="text-xs text-terminal-faint mb-3">{coins.length ? `${coins.length} assets returned` : 'Top 50 requested'} · USD · change over rolling 24 hours. Sample shares are not global market dominance. {dataUpdatedAt ? `Checked ${new Date(dataUpdatedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}.` : ''}</div>
-      {isError && <div role="status" className="text-terminal-muted border border-terminal-border rounded text-xs p-3 mb-3">{coins.length ? 'Refresh failed; the last received market data remains visible.' : 'CoinGecko data is unavailable or rate-limited. Use Refresh to try again.'}</div>}
+      <button type="button" onClick={() => void refetch()} disabled={isFetching} className="rounded border border-terminal-border px-3 py-1 text-xs text-terminal-muted hover:text-terminal-text disabled:opacity-50">{isFetching ? 'Refreshing…' : 'Refresh'}</button>
+    </WorkspaceHeader>
+    <div className="min-h-0 flex-1 overflow-y-auto p-4">
+      <div className="text-xs text-terminal-faint mb-3">{coins.length ? `${coins.length} assets returned` : 'Top 50 requested'} · USD · change over rolling 24 hours. {dataUpdatedAt ? `Checked ${new Date(dataUpdatedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}.` : ''}</div>
+      {isError && <div role="status" className="instrument-section text-terminal-muted border border-terminal-border rounded text-xs p-3 mb-3">{coins.length ? 'Refresh failed; the last received market data remains visible.' : 'CoinGecko data is unavailable or rate-limited. Use Refresh to try again.'}</div>}
 
       {isLoading ? (
         <div className="space-y-1">
@@ -38,7 +38,7 @@ export function CryptoPanel() {
       ) : coins.length === 0 ? (
         <div className="text-terminal-faint text-sm p-4">No crypto market data is available.</div>
       ) : (
-        <div className="bg-terminal-panel border border-terminal-border rounded overflow-x-auto">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded overflow-x-auto">
           <table className="data-table w-full">
             <thead>
               <tr>
@@ -99,8 +99,8 @@ export function CryptoPanel() {
                       <div className="text-terminal-faint text-xs">{mktCapPct == null ? 'Share unavailable' : `${mktCapPct.toFixed(2)}% of sample`}</div>
                     </td>
                     <td className="tabular-nums text-terminal-muted">{fmt.marketCap(finiteMarketValue(coin.total_volume))}</td>
-                    <td className="tabular-nums text-terminal-positive">{fmt.usdPrice(finiteMarketValue(coin.high_24h))}</td>
-                    <td className="tabular-nums text-terminal-negative">{fmt.usdPrice(finiteMarketValue(coin.low_24h))}</td>
+                    <td className="tabular-nums text-terminal-muted">{fmt.usdPrice(finiteMarketValue(coin.high_24h))}</td>
+                    <td className="tabular-nums text-terminal-muted">{fmt.usdPrice(finiteMarketValue(coin.low_24h))}</td>
                     <td className="tabular-nums text-terminal-faint hidden xl:table-cell">
                       {fmt.volume(finiteMarketValue(coin.circulating_supply))} {coin.symbol.toUpperCase()}
                     </td>
@@ -112,5 +112,5 @@ export function CryptoPanel() {
         </div>
       )}
     </div>
-  );
+  </>;
 }

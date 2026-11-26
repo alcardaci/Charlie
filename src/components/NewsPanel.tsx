@@ -149,8 +149,8 @@ export function NewsPanel({
   const handleRefresh = () => refetch({ cancelRefetch: false });
 
   return (
-    <div ref={panelRef} className={`flex h-full flex-col overflow-hidden bg-terminal-panel ${embedded ? 'rounded border border-terminal-border' : 'panel-border-l'} ${className}`}>
-      <header className={embedded ? 'news-card-header' : 'flex items-center justify-between gap-3 px-4 py-2 panel-border-b bg-terminal-elevated/40 flex-shrink-0'}>
+    <div ref={panelRef} className={`flex h-full flex-col overflow-hidden bg-terminal-panel ${embedded ? 'instrument-card rounded border border-terminal-border' : 'instrument-section panel-border-l'} ${className}`}>
+      <header className={embedded ? 'news-card-header' : 'instrument-section flex items-center justify-between gap-3 px-4 py-2 panel-border-b bg-terminal-elevated/40 flex-shrink-0'}>
         <div className="flex items-center gap-2">
           <Newspaper size={14} className="text-terminal-accent" />
           <span className="text-terminal-accent text-sm font-bold tracking-wider">{headerLabel}</span>
@@ -424,7 +424,7 @@ function NewsResults({ batch, mergedFeed, updatedAt, lastAttempt, loading, faile
                   {item.tickers && item.tickers.length > 0 && (
                     <>
                       <span className="text-terminal-faint/50 text-xs">·</span>
-                      <span className="text-terminal-blue text-xs">{item.tickers.slice(0, 2).join(', ')}</span>
+                      <span className="text-terminal-accent text-xs">{item.tickers.slice(0, 2).join(', ')}</span>
                     </>
                   )}
                 </div>

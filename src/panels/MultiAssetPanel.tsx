@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import { PanelBoundary } from '../components/PanelBoundary';
+import { WorkspaceHeader } from '../components/WorkspaceHeader';
 import { ChartPanel } from './ChartPanel';
 import { EquityPanel } from './EquityPanel';
 import { useTerminalStore, type MultiAssetTile, type MultiAssetView } from '../store/useTerminalStore';
@@ -35,15 +36,8 @@ export function MultiAssetPanel() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-terminal-bg">
-      <div className="flex flex-col gap-3 border-b border-terminal-border bg-terminal-panel px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <div className="text-terminal-accent text-sm font-bold tracking-wider">MULTI-ASSET WORKSPACE</div>
-          <div className="mt-1 text-[11px] text-terminal-faint">
-            View up to four assets in parallel. Each tile can switch between Research and Chart.
-          </div>
-        </div>
-
+    <div className="instrument-workspace flex h-full min-h-0 flex-col overflow-hidden bg-terminal-bg">
+      <WorkspaceHeader title="MULTI-ASSET WORKSPACE">
         <form
           className="flex flex-wrap items-center gap-2"
           onSubmit={(event) => {
@@ -72,11 +66,11 @@ export function MultiAssetPanel() {
             {multiAssetTiles.length}/{MAX_MULTI_ASSET_TILES}
           </span>
         </form>
-      </div>
+      </WorkspaceHeader>
 
       {multiAssetTiles.length === 0 ? (
         <div className="flex flex-1 items-center justify-center p-6">
-          <div className="max-w-md rounded border border-terminal-border bg-terminal-panel p-5 text-center">
+          <div className="instrument-section max-w-md rounded border border-terminal-border bg-terminal-panel p-5 text-center">
             <div className="text-terminal-accent text-xs font-bold tracking-[0.18em]">NO ASSETS SELECTED</div>
             <div className="mt-2 text-sm text-terminal-muted">
               Add a symbol above to start a parallel Research/Chart workspace.
@@ -112,12 +106,9 @@ function MultiAssetTileCard({
   onViewChange: (view: MultiAssetView) => void;
 }) {
   return (
-    <section className="flex min-h-0 flex-col overflow-hidden rounded border border-terminal-border bg-terminal-bg">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-terminal-border bg-terminal-panel px-3 py-2">
-        <div className="flex items-center gap-2">
-          <span className="text-terminal-accent text-sm font-bold tracking-wider">{tile.symbol}</span>
-          <span className="text-[10px] text-terminal-faint">PARALLEL TILE</span>
-        </div>
+    <section className="instrument-card flex min-h-0 flex-col overflow-hidden rounded border border-terminal-border bg-terminal-bg">
+      <div className="instrument-section flex flex-wrap items-center justify-between gap-2 border-b border-terminal-border bg-terminal-panel px-3 py-2">
+        <h2 className="instrument-heading text-sm font-bold tracking-wider">{tile.symbol}</h2>
 
         <div className="flex items-center gap-1">
           {canRemove ? (

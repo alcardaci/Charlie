@@ -1,0 +1,35 @@
+.overview-indices-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.overview-indices-table tr:not(:last-child),
+.overview-indices-table thead {
+  border-bottom: 1px solid var(--section-rule-color);
+}
+
+.overview-indices-table :is(th, td) {
+  padding: 7px 0 7px 6px;
+  text-align: right;
+}
+
+.overview-indices-table :is(th, td):first-child {
+  padding-left: 0;
+  text-align: left;
+}
+
+.overview-indices-table thead th,
+.overview-index-points {
+  color: var(--terminal-faint);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.overview-indices-table tbody th { font-weight: 500; }
+.overview-indices-table tbody tr { cursor: pointer; }
+.overview-indices-table tbody tr:is(:hover, :focus-within) button { color: var(--terminal-accent); }
+.overview-indices-table button { text-align: left; }
+.overview-indices-table button:focus-visible { outline: 1px solid var(--terminal-accent); }
+.overview-index-price { font-weight: 700; }
+.overview-index-price, .overview-index-move, .overview-indices-table thead th { white-space: nowrap; }

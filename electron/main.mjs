@@ -1,8 +1,7 @@
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { access } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { createServer, preview } from 'vite';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(__dirname, '..');
@@ -41,7 +40,7 @@ async function setDockIconIfAvailable() {
 
   const possibleIcons = app.isPackaged
     ? [join(process.resourcesPath, 'icon.icns'), join(process.resourcesPath, 'Charlie.icns')]
-    : [join(projectRoot, 'build-assets', 'Charlie.icns')];
+    : [join(projectRoot, 'public', 'charlie-icon', '1024x1024.png')];
 
   for (const iconPath of possibleIcons) {
     try {
@@ -66,18 +65,36 @@ function resolveServerUrl(server) {
   throw new Error('Unable to resolve the local renderer server URL.');
 }
 
+async function loadVite() {
+  if (process.platform !== 'win32') return import('vite');
+
+  // Rollup checks the Windows runtime by spawning process.execPath with a Node expression.
+  // During this import its child must run as Node rather than open another Charlie window.
+  const previous = process.env.ELECTRON_RUN_AS_NODE;
+  process.env.ELECTRON_RUN_AS_NODE = '1';
+  try {
+    return await import('vite');
+  } finally {
+    if (previous === undefined) delete process.env.ELECTRON_RUN_AS_NODE;
+    else process.env.ELECTRON_RUN_AS_NODE = previous;
+  }
+}
+
 async function startRendererServer() {
   if (rendererUrlPromise) return rendererUrlPromise;
 
   rendererUrlPromise = (async () => {
+    const { createServer, preview } = await loadVite();
     if (app.isPackaged) {
       const appRoot = app.getAppPath();
+      const { default: configure } = await import(pathToFileURL(join(appRoot, 'build-assets', 'desktop-config.mjs')).href);
       const requestedPort = Number.parseInt(process.env.CHARLIE_PREVIEW_PORT ?? '', 10);
       const previewPort = Number.isFinite(requestedPort) && requestedPort > 0
         ? requestedPort
         : DEFAULT_PACKAGED_PREVIEW_PORT;
       vitePreviewServer = await preview({
-        configFile: join(appRoot, 'vite.config.ts'),
+        ...configure({ command: 'serve', mode: 'production', isPreview: true, isSsrBuild: false }),
+        configFile: false,
         root: appRoot,
         preview: {
           host: '127.0.0.1',
@@ -153,7 +170,7 @@ async function createMainWindow() {
     minWidth: 1180,
     minHeight: 760,
     title: 'Charlie',
-    backgroundColor: '#0a1017',
+    backgroundColor: '#000000',
     ...(isMac ? { titleBarStyle: 'hiddenInset' } : {}),
     autoHideMenuBar: true,
     webPreferences: {

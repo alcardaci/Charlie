@@ -3,6 +3,8 @@ import { buildHeatmapEntries, heatmapNodeEntry, heatmapQuoteChange, positiveMark
 import { buildMacroTrendRows, collapseRateHistory, formatMacroNumber, getMacroSeriesStyle, macroDeltaUnit, macroObservationAge } from '../../src/utils/macroDisplay';
 import { cryptoChartSymbol, finiteMarketValue, formatPredictionMove, formatPredictionProbability, parseCurrencyAmount, yieldSpreadBasisPoints } from '../../src/utils/marketPanelDisplay';
 import './prediction-selection.fixture';
+import './companion-context.fixture';
+import './companion-search.fixture';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);

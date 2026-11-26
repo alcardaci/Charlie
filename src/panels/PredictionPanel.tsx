@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { fetchPredictionPage } from '../api/finance';
+import { WorkspaceHeader } from '../components/WorkspaceHeader';
 import { PredictionMarketsSection } from '../components/PredictionMarketsSection';
 import { predictionRowsFromPages } from '../utils/marketPanelDisplay';
 
@@ -53,21 +54,14 @@ export function PredictionPanel() {
     }
   }
 
-  return (
-    <div className="h-full overflow-y-auto p-4 space-y-4">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
-        <div>
-          <h1 className="text-terminal-accent font-bold text-sm tracking-wider">PREDICTION MARKETS</h1>
-          <p className="mt-1 text-xs text-terminal-muted">
-            Selected from Polymarket’s busiest open events. Contested outcomes with recent trading appear first.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-terminal-muted sm:shrink-0 sm:flex-col sm:items-end">
-          <button type="button" disabled={isFetching || scanning} onClick={() => void refetch()} className="rounded border border-terminal-border px-3 py-1 text-terminal-muted hover:text-terminal-text disabled:opacity-50">{isFetching && !scanning ? 'Refreshing…' : 'Refresh'}</button>
-          {updatedAt && <div>{data && data.pages.length > 1 ? 'First page checked ' : 'Feed checked '}{new Date(updatedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>}
-        </div>
+  return <>
+    <WorkspaceHeader title="PREDICTION MARKETS">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-terminal-muted">
+        <button type="button" disabled={isFetching || scanning} onClick={() => void refetch()} className="rounded border border-terminal-border px-3 py-1 text-terminal-muted hover:text-terminal-text disabled:opacity-50">{isFetching && !scanning ? 'Refreshing…' : 'Refresh'}</button>
+        {updatedAt && <div>{data && data.pages.length > 1 ? 'First page checked ' : 'Feed checked '}{new Date(updatedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>}
       </div>
-      <p className="text-xs text-terminal-muted">Single-winner events show the leading choices together. Daily changes are in percentage points.</p>
+    </WorkspaceHeader>
+    <div className="min-h-0 flex-1 overflow-y-auto p-4 space-y-4">
       {isError && !data && <p role="status" className="text-xs text-terminal-muted">The public Polymarket feed is unavailable. Use Refresh to try again.</p>}
       {isRefetchError && data && <p role="status" className="text-xs text-terminal-muted">Refresh failed. Previously received prices remain visible.</p>}
       {isLoading || displayed.length > 0 ? (
@@ -77,6 +71,10 @@ export function PredictionPanel() {
       )}
       {data && (
         <div className="flex flex-wrap items-center justify-between gap-3 pb-2 text-xs">
+          <p className="w-full text-terminal-muted">
+            Selected from Polymarket’s busiest open events. Contested outcomes with recent trading appear first.
+            Single-winner events show the leading choices together. Daily changes are in percentage points.
+          </p>
           <span role="status" className="text-terminal-muted">Showing {displayed.length} of {forecasts.length} loaded events</span>
           {isFetchNextPageError && <span role="status" className="text-terminal-muted">More events could not be loaded. Your current cards are still available.</span>}
           {(remaining > 0 || hasNextPage) && <button type="button" onClick={() => void showMore()} disabled={scanning || (isFetching && !remaining)}
@@ -86,5 +84,5 @@ export function PredictionPanel() {
         </div>
       )}
     </div>
-  );
+  </>;
 }

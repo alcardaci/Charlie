@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight, ExternalLink, Minimize2, Play } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 const LIVE_CHANNELS = [
   {
@@ -67,10 +67,14 @@ const LIVE_CHANNELS = [
   },
 ] as const;
 
-function embedUrlFor(videoId: string) {
+const youtubeOrigin = 'https://www.youtube.com';
+const defaultChannel = LIVE_CHANNELS.find(channel => channel.id === 'Bloomberg')!;
+
+function embedUrlFor(videoId: string, muted: boolean) {
   const params = new URLSearchParams({
     autoplay: '1',
-    mute: '1',
+    mute: muted ? '1' : '0',
+    enablejsapi: '1',
     playsinline: '1',
     rel: '0',
   });
@@ -79,19 +83,74 @@ function embedUrlFor(videoId: string) {
     params.set('origin', window.location.origin);
   }
 
-  return `https://www.youtube.com/embed/${videoId}?${params.toString()}`;
+  return `${youtubeOrigin}/embed/${videoId}?${params.toString()}`;
+}
+
+// Speak to the existing YouTube iframe so switching streams keeps its native audio controls
+// and playback permission. The provider's JavaScript stays in the cross-origin frame.
+function sendToPlayer(frame: HTMLIFrameElement, message: object) {
+  frame.contentWindow?.postMessage(JSON.stringify({ ...message, id: 1, channel: 'widget' }), youtubeOrigin);
 }
 
 export function CharlieLivePlayer({ embedded }: { embedded: boolean }) {
   const [isExpanded, setIsExpanded] = useState(
     () => (typeof window === 'undefined' ? true : window.innerWidth >= 768)
   );
-  const [selectedChannelId, setSelectedChannelId] = useState<(typeof LIVE_CHANNELS)[number]['id']>('Bloomberg');
-  const selectedChannel = LIVE_CHANNELS.find((channel) => channel.id === selectedChannelId) ?? LIVE_CHANNELS[0];
+  const [selectedChannel, setSelectedChannel] = useState<(typeof LIVE_CHANNELS)[number]>(defaultChannel);
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const playerReady = useRef(false);
+  const muted = useRef(true);
+
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    let timer: ReturnType<typeof setInterval>;
+    const connect = () => {
+      playerReady.current = false;
+      clearInterval(timer);
+      let attempts = 0;
+      const listen = () => sendToPlayer(frame, { event: 'listening' });
+      listen();
+      timer = setInterval(() => {
+        listen();
+        if (++attempts >= 20) clearInterval(timer);
+      }, 250);
+    };
+    const receive = (event: MessageEvent) => {
+      if (event.origin !== youtubeOrigin || event.source !== frame.contentWindow || typeof event.data !== 'string') return;
+      let data;
+      try { data = JSON.parse(event.data); } catch { return; }
+      if (data?.event === 'readyToListen') sendToPlayer(frame, { event: 'listening' });
+      if (!['initialDelivery', 'infoDelivery', 'onReady', 'alreadyInitialized'].includes(data?.event)) return;
+      playerReady.current = true;
+      clearInterval(timer);
+      if (typeof data.info?.muted === 'boolean') muted.current = data.info.muted;
+    };
+    window.addEventListener('message', receive);
+    frame.addEventListener('load', connect);
+    connect();
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('message', receive);
+      frame.removeEventListener('load', connect);
+    };
+  }, []);
+
+  const selectChannel = (channel: (typeof LIVE_CHANNELS)[number]) => {
+    if (channel.id === selectedChannel.id) return;
+    const frame = frameRef.current;
+    if (frame && playerReady.current) {
+      sendToPlayer(frame, { event: 'command', func: 'loadVideoById', args: [channel.videoId] });
+    } else if (frame) {
+      // Even if the iframe hasn't initialized its API, the channel selector still works.
+      frame.src = embedUrlFor(channel.videoId, muted.current);
+    }
+    setSelectedChannel(channel);
+  };
   const changeChannel = (direction: -1 | 1) => {
-    const currentIndex = LIVE_CHANNELS.findIndex((channel) => channel.id === selectedChannelId);
+    const currentIndex = LIVE_CHANNELS.indexOf(selectedChannel);
     const nextIndex = (currentIndex + direction + LIVE_CHANNELS.length) % LIVE_CHANNELS.length;
-    setSelectedChannelId(LIVE_CHANNELS[nextIndex].id);
+    selectChannel(LIVE_CHANNELS[nextIndex]);
   };
 
   return (
@@ -100,7 +159,7 @@ export function CharlieLivePlayer({ embedded }: { embedded: boolean }) {
         <div className="fixed bottom-16 right-3 z-40 md:bottom-8 sm:right-4">
           <button
             onClick={() => setIsExpanded(true)}
-            className="flex items-center gap-2 rounded-full border border-terminal-border bg-terminal-panel/95 px-3 py-2 text-xs text-terminal-text shadow-[0_8px_24px_rgba(0,0,0,0.35)] backdrop-blur-sm transition-colors hover:border-terminal-accent/50 hover:bg-terminal-hover"
+            className="floating-player-frame flex items-center gap-2 rounded-full border border-terminal-border bg-terminal-panel/95 px-3 py-2 text-xs text-terminal-text shadow-[0_8px_24px_rgba(0,0,0,0.35)] backdrop-blur-sm transition-colors hover:border-terminal-accent/50 hover:bg-terminal-hover"
             title={`Open ${selectedChannel.title}`}
           >
             <span className="flex items-center gap-1 text-terminal-accent">
@@ -117,8 +176,8 @@ export function CharlieLivePlayer({ embedded }: { embedded: boolean }) {
         aria-hidden={!embedded && !isExpanded}
         className={embedded ? 'h-full' : `fixed bottom-16 right-3 z-30 w-[min(92vw,360px)] md:bottom-8 sm:right-4 ${isExpanded ? '' : 'invisible pointer-events-none'}`}
       >
-        <div className={`flex flex-col overflow-hidden rounded border border-terminal-border bg-terminal-panel ${embedded ? 'h-full' : 'shadow-2xl'}`}>
-        <header className={embedded ? 'news-card-header' : 'flex items-center justify-between gap-2 border-b border-terminal-border px-3 py-2'}>
+        <div className={`instrument-card flex flex-col overflow-hidden rounded border border-terminal-border bg-terminal-panel ${embedded ? 'h-full' : 'floating-player-frame shadow-2xl'}`}>
+        <header className={embedded ? 'news-card-header' : 'instrument-section flex items-center justify-between gap-2 border-b border-terminal-border px-3 py-2'}>
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-[11px] font-bold tracking-[0.18em] text-terminal-accent">
               <span className="h-1.5 w-1.5 rounded-full bg-terminal-negative animate-pulse" />
@@ -158,8 +217,11 @@ export function CharlieLivePlayer({ embedded }: { embedded: boolean }) {
             <ChevronLeft size={14} />
           </button>
           <select
-            value={selectedChannelId}
-            onChange={(event) => setSelectedChannelId(event.target.value as (typeof LIVE_CHANNELS)[number]['id'])}
+            value={selectedChannel.id}
+            onChange={(event) => {
+              const channel = LIVE_CHANNELS.find(option => option.id === event.target.value);
+              if (channel) selectChannel(channel);
+            }}
             className="min-w-0 flex-1 rounded border border-terminal-border bg-terminal-elevated px-2 py-1 text-xs text-terminal-text outline-none transition-colors hover:border-terminal-accent/40 focus:border-terminal-accent/50"
             aria-label="Select live news channel"
           >
@@ -181,8 +243,9 @@ export function CharlieLivePlayer({ embedded }: { embedded: boolean }) {
 
         <div className={embedded ? "min-h-0 flex-1 bg-black" : "aspect-video bg-black"}>
           <iframe
+            ref={frameRef}
             className="h-full w-full"
-            src={embedUrlFor(selectedChannel.videoId)}
+            src={embedUrlFor(defaultChannel.videoId, true)}
             title={`${selectedChannel.title} live stream`}
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
             referrerPolicy="strict-origin-when-cross-origin"

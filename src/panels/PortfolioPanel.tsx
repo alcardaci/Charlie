@@ -1,8 +1,10 @@
-import { Fragment, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { Fragment, useId, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronUp, DollarSign, Download, Pencil, Plus, Trash2, TrendingDown, TrendingUp, Upload } from 'lucide-react';
 import { Area, CartesianGrid, Cell, ComposedChart, Legend, Line, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { ChartDotPattern } from '../components/ChartDotPattern';
 import { fetchChartWindow, fetchForexPairs, fetchQuotes, searchSymbols } from '../api/finance';
+import { WorkspaceHeader } from '../components/WorkspaceHeader';
 import { useTerminalStore } from '../store/useTerminalStore';
 import { ChartInterval, ChartRange, PortfolioPosition, Quote } from '../types';
 import { changeColor, fmt } from '../utils/formatters';
@@ -11,7 +13,6 @@ import { buildAdaptiveAxisScale, buildBenchmarkOverlay, buildPortfolioHistory, t
 import { getThemePalette, useTheme } from '../utils/theme';
 import { buildPortfolioFxMap, normalizePortfolioCurrency, quoteCurrencyUnit, valuePortfolioLot } from '../utils/portfolioValuation';
 
-const COLORS = ['#f0a500', '#58a6ff', '#3fb950', '#d2a8ff', '#f85149', '#ffa657', '#39d353', '#a5d6ff'];
 const DEFAULT_PORTFOLIO_CURRENCY = 'USD';
 const PORTFOLIO_CURRENCIES = ['USD', 'EUR', 'GBP', 'JPY', 'CHF', 'CAD', 'AUD', 'NZD', 'DKK', 'SEK', 'NOK', 'HKD', 'SGD'] as const;
 const MARKET_BENCHMARK_SYMBOL = '^GSPC';
@@ -283,8 +284,56 @@ function downloadCsvFile(filename: string, content: string): void {
   URL.revokeObjectURL(url);
 }
 
+function AllocationChart({ data, currency, mode, palette }: {
+  data: Array<{ name: string; value: number; pct: number }>;
+  currency: string;
+  mode: 'dark' | 'light';
+  palette: ReturnType<typeof getThemePalette>;
+}) {
+  const patternId = useId();
+  // Spacing hues around the wheel gives adjacent slices a distinct color, even in a long symbol list.
+  const swatches = data.map((item, index) => {
+    const hue = (233 + (index - 1) * 137.508) % 360;
+    const ink = index === 0 ? palette.accent : `oklch(${mode === 'dark' ? '75%' : '48%'} 0.13 ${hue})`;
+    const surface = `color-mix(in srgb, ${ink} 19%, ${palette.panel})`;
+    return { name: item.name, pct: item.pct, ink, surface, id: `${patternId}-slice-${index}` };
+  });
+  return (
+    <>
+      <ResponsiveContainer width="100%" height={200}>
+        <PieChart>
+          <defs>
+            {swatches.map(swatch => <ChartDotPattern key={swatch.name} id={swatch.id} ink={swatch.ink} surface={swatch.surface} />)}
+          </defs>
+          <Pie data={data} cx="50%" cy="50%" innerRadius={50} outerRadius={85} paddingAngle={2} dataKey="value">
+            {swatches.map(swatch => <Cell key={swatch.name} fill={`url(#${swatch.id})`} stroke={swatch.ink} strokeWidth={0.85} />)}
+          </Pie>
+          <Tooltip
+            formatter={(value: number) => [formatCurrencyAmount(value, currency, 2), 'Value']}
+            contentStyle={{ background: palette.elevated, border: `1px solid ${palette.border}`, borderRadius: 4, fontSize: 11 }}
+            labelStyle={{ color: palette.text }} itemStyle={{ color: palette.muted }}
+          />
+        </PieChart>
+      </ResponsiveContainer>
+      <div className="space-y-1 mt-2">
+        {swatches.map(swatch => (
+          <div key={swatch.name} className="flex items-center justify-between text-xs">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <svg width="11" height="11" className="shrink-0" aria-hidden="true">
+                <rect x="0.5" y="0.5" width="10" height="10" rx="2" fill={`url(#${swatch.id})`} stroke={swatch.ink} />
+              </svg>
+              <span className="text-terminal-text truncate">{swatch.name}</span>
+            </div>
+            <span className="text-terminal-muted tabular-nums">{swatch.pct.toFixed(1)}%</span>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
 export function PortfolioPanel() {
-  useTheme();
+  const { mode } = useTheme();
   const themePalette = getThemePalette();
   const {
     portfolio,
@@ -732,13 +781,17 @@ export function PortfolioPanel() {
     setShowEditSuggestions(false);
   };
 
+  const scrollToPortfolioTop = () => {
+    containerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   const openAddForm = (nextSymbol = '') => {
     const normalizedSymbol = nextSymbol.trim().toUpperCase();
     closeEditForm();
     resetAddForm(normalizedSymbol);
     setShowAdd(true);
     setTimeout(() => {
-      containerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+      scrollToPortfolioTop();
       if (normalizedSymbol) {
         sharesInputRef.current?.focus();
         return;
@@ -758,7 +811,7 @@ export function PortfolioPanel() {
     });
     setShowEditSuggestions(false);
     setTimeout(() => {
-      containerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+      scrollToPortfolioTop();
       editSharesInputRef.current?.focus();
     }, 0);
   };
@@ -900,6 +953,7 @@ export function PortfolioPanel() {
       });
     } finally {
       event.target.value = '';
+      scrollToPortfolioTop();
     }
   };
 
@@ -916,59 +970,50 @@ export function PortfolioPanel() {
       : 'border-terminal-negative/30 bg-terminal-negative/10 text-terminal-negative';
   const allLotsExpanded = positions.length > 0 && positions.every((position) => expandedSymbols.includes(position.symbol));
 
-  return (
-    <div ref={containerRef} className="h-full overflow-y-auto p-4 space-y-4">
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <h1 className="text-terminal-accent font-bold text-sm tracking-wider">PORTFOLIO TRACKER</h1>
-        <div className="flex flex-wrap items-center gap-2 xl:justify-end">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".csv,text/csv"
-            onChange={handleImportCsv}
-            className="hidden"
-          />
-          <button
-            onClick={openImportPicker}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-terminal-panel border border-terminal-border text-terminal-muted rounded text-xs hover:text-terminal-accent hover:border-terminal-accent/40 hover:bg-terminal-hover transition-colors"
-          >
-            <Upload size={12} />
-            IMPORT CSV
-          </button>
-          <button
-            onClick={handleExportCsv}
-            disabled={positions.length === 0}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-terminal-panel border border-terminal-border text-terminal-muted rounded text-xs hover:text-terminal-accent hover:border-terminal-accent/40 hover:bg-terminal-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            <Download size={12} />
-            EXPORT CSV
-          </button>
-          <button
-            onClick={allLotsExpanded ? handleCollapseAllLots : handleExpandAllLots}
-            disabled={positions.length === 0}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-terminal-panel border border-terminal-border text-terminal-muted rounded text-xs hover:text-terminal-accent hover:border-terminal-accent/40 hover:bg-terminal-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {allLotsExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-            {allLotsExpanded ? 'COLLAPSE ALL' : 'EXPAND ALL'}
-          </button>
-          <button
-            onClick={() => setShowClearPortfolioConfirm(true)}
-            disabled={portfolio.length === 0}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-terminal-panel border border-terminal-negative/30 text-terminal-negative rounded text-xs hover:bg-terminal-negative/10 hover:border-terminal-negative/50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            <Trash2 size={12} />
-            CLEAR PORTFOLIO
-          </button>
-          <button
-            onClick={() => (showAdd ? closeAddForm() : openAddForm())}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-terminal-accent/20 border border-terminal-accent/40 text-terminal-accent rounded text-xs hover:bg-terminal-accent/30 transition-colors"
-          >
-            <Plus size={12} />
-            ADD POSITION
-          </button>
-        </div>
-      </div>
-
+  return <>
+    <WorkspaceHeader title="PORTFOLIO TRACKER">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".csv,text/csv"
+        onChange={handleImportCsv}
+        className="hidden"
+      />
+      <button
+        onClick={openImportPicker}
+        className="flex items-center gap-1.5 px-3 py-1.5 bg-terminal-panel border border-terminal-border text-terminal-muted rounded text-xs hover:text-terminal-accent hover:border-terminal-accent/40 hover:bg-terminal-hover transition-colors"
+      >
+        <Upload size={12} />
+        IMPORT CSV
+      </button>
+      <button
+        onClick={handleExportCsv}
+        disabled={positions.length === 0}
+        className="flex items-center gap-1.5 px-3 py-1.5 bg-terminal-panel border border-terminal-border text-terminal-muted rounded text-xs hover:text-terminal-accent hover:border-terminal-accent/40 hover:bg-terminal-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        <Download size={12} />
+        EXPORT CSV
+      </button>
+      <button
+        onClick={() => {
+          setShowClearPortfolioConfirm(true);
+          scrollToPortfolioTop();
+        }}
+        disabled={portfolio.length === 0}
+        className="flex items-center gap-1.5 px-3 py-1.5 bg-terminal-panel border border-terminal-negative/30 text-terminal-negative rounded text-xs hover:bg-terminal-negative/10 hover:border-terminal-negative/50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        <Trash2 size={12} />
+        CLEAR PORTFOLIO
+      </button>
+      <button
+        onClick={() => (showAdd ? closeAddForm() : openAddForm())}
+        className="flex items-center gap-1.5 px-3 py-1.5 bg-terminal-accent/20 border border-terminal-accent/40 text-terminal-accent rounded text-xs hover:bg-terminal-accent/30 transition-colors"
+      >
+        <Plus size={12} />
+        ADD POSITION
+      </button>
+    </WorkspaceHeader>
+    <div ref={containerRef} className="min-h-0 flex-1 overflow-y-auto p-4 space-y-4">
       {showClearPortfolioConfirm && (
         <div className="rounded border border-terminal-negative/40 bg-terminal-negative/10 p-3">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -1003,7 +1048,7 @@ export function PortfolioPanel() {
       )}
 
       {editingLot && (
-        <div className="bg-terminal-panel border border-terminal-border rounded p-3 animate-fade-in">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-3 animate-fade-in">
           <div className="flex items-center justify-between gap-3 mb-3">
             <div>
               <div className="text-terminal-muted text-xs font-bold tracking-wider">
@@ -1120,7 +1165,7 @@ export function PortfolioPanel() {
       )}
 
       {showAdd && (
-        <div className="bg-terminal-panel border border-terminal-border rounded p-3 animate-fade-in">
+        <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-3 animate-fade-in">
           <div className="flex items-center justify-between gap-3 mb-3">
             <div>
               <div className="text-terminal-muted text-xs font-bold tracking-wider">
@@ -1293,12 +1338,12 @@ export function PortfolioPanel() {
           </div>
         </div>
       ) : (
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-          <div className="xl:col-span-2 space-y-3">
-            <div className="bg-terminal-panel border border-terminal-border rounded p-3">
+        <div className="section-stack section-columns-xl grid grid-cols-1 xl:grid-cols-3 gap-4">
+          <div className="section-stack xl:col-span-2 space-y-3">
+            <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-3">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <div>
-                  <div className="text-terminal-muted text-xs font-bold tracking-wider">VALUE DISPLAY</div>
+                  <div className="instrument-heading text-terminal-muted text-xs font-bold tracking-wider">VALUE DISPLAY</div>
                   <div className="text-terminal-faint text-xs mt-1">
                     {portfolioValueMode === 'aggregate'
                       ? `Aggregated totals use the latest available FX rates into ${displayCurrency}.`
@@ -1355,10 +1400,10 @@ export function PortfolioPanel() {
             </div>
 
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-              <div className="bg-terminal-panel border border-terminal-border rounded p-3">
+              <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-3">
                 <div className="text-terminal-faint text-xs mb-1">TOTAL VALUE</div>
                 {portfolioValueMode === 'aggregate' ? (
-                  <div className="text-terminal-text font-bold text-lg tabular-nums">{formatCurrencyAmount(totalValue, displayCurrency, 2)}</div>
+                  <div className="instrument-value text-terminal-text font-bold text-xl tabular-nums">{formatCurrencyAmount(totalValue, displayCurrency, 2)}</div>
                 ) : (
                   <div className="space-y-1">
                     {totalsByCurrency.map((total) => (
@@ -1371,10 +1416,10 @@ export function PortfolioPanel() {
                 )}
                 <div className="text-terminal-faint text-[10px] mt-1">ALL ASSETS</div>
               </div>
-              <div className="bg-terminal-panel border border-terminal-border rounded p-3">
+              <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-3">
                 <div className="text-terminal-faint text-xs mb-1">TOTAL COST</div>
                 {portfolioValueMode === 'aggregate' ? (
-                  <div className="text-terminal-text font-bold text-lg tabular-nums">{formatCurrencyAmount(totalCost, displayCurrency, 2)}</div>
+                  <div className="instrument-value text-terminal-text font-bold text-xl tabular-nums">{formatCurrencyAmount(totalCost, displayCurrency, 2)}</div>
                 ) : (
                   <div className="space-y-1">
                     {totalsByCurrency.map((total) => (
@@ -1387,11 +1432,11 @@ export function PortfolioPanel() {
                 )}
                 <div className="text-terminal-faint text-[10px] mt-1">ALL ASSETS</div>
               </div>
-              <div className={`bg-terminal-panel border rounded p-3 ${totalGainLoss >= 0 ? 'border-terminal-positive/30' : 'border-terminal-negative/30'}`}>
+              <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-3">
                 <div className="text-terminal-faint text-xs mb-1">TOTAL P&amp;L</div>
                 {portfolioValueMode === 'aggregate' ? (
-                  <div className={`font-bold text-lg tabular-nums ${totalGainLoss >= 0 ? 'text-terminal-positive' : 'text-terminal-negative'}`}>
-                    {formatCurrencyAmount(totalGainLoss, displayCurrency, 2)} <span className="text-sm">({fmt.pct(totalGainLossPct)})</span>
+                  <div className={`instrument-value font-bold text-xl tabular-nums ${changeColor(totalGainLoss)}`}>
+                    {formatCurrencyAmount(totalGainLoss, displayCurrency, 2)} <span className="font-mono text-sm">({fmt.pct(totalGainLossPct)})</span>
                   </div>
                 ) : (
                   <div className="space-y-1">
@@ -1407,18 +1452,18 @@ export function PortfolioPanel() {
                 )}
                 <div className="text-terminal-faint text-[10px] mt-1">ALL ASSETS</div>
               </div>
-              <div className="bg-terminal-panel border border-terminal-border rounded p-3">
+              <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-3">
                 <div className="text-terminal-faint text-xs mb-1">ASSETS / LOTS</div>
-                <div className="text-terminal-text font-bold text-lg tabular-nums">
+                <div className="instrument-value text-terminal-text font-bold text-xl tabular-nums">
                   {positions.length} / {totalLots}
                 </div>
               </div>
             </div>
 
-            <div className="bg-terminal-panel border border-terminal-border rounded p-3">
+            <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-3">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div>
-                  <div className="text-terminal-muted text-xs font-bold tracking-wider">HISTORICAL HOLDINGS VALUE</div>
+                  <div className="instrument-heading text-terminal-muted text-xs font-bold tracking-wider">HISTORICAL HOLDINGS VALUE</div>
                   <div className="text-terminal-faint text-xs mt-1">
                     Recorded holdings valued at historical closes in {displayCurrency}, using today’s FX rates. Purchases affect value; this is not a total-return chart.
                   </div>
@@ -1436,8 +1481,8 @@ export function PortfolioPanel() {
                     onClick={() => setShowMarketBenchmark((current) => !current)}
                     className={`px-2 py-1 text-[11px] rounded border transition-colors ${
                       showMarketBenchmark
-                        ? 'border-terminal-blue/40 bg-terminal-blue/15 text-terminal-blue'
-                        : 'border-terminal-border text-terminal-faint hover:text-terminal-blue hover:border-terminal-blue/30 hover:bg-terminal-hover'
+                        ? 'border-terminal-purple/40 bg-terminal-purple/15 text-terminal-purple'
+                        : 'border-terminal-border text-terminal-faint hover:text-terminal-purple hover:border-terminal-purple/30 hover:bg-terminal-hover'
                     }`}
                     title={`Overlay ${MARKET_BENCHMARK_LABEL} on its own right-side scale`}
                   >
@@ -1478,8 +1523,8 @@ export function PortfolioPanel() {
                     onClick={handleClearHistorySymbols}
                     className={`px-2 py-1 text-[11px] rounded border transition-colors ${
                       historySelectionMode === 'none'
-                        ? 'border-terminal-negative/40 bg-terminal-negative/10 text-terminal-negative'
-                        : 'border-terminal-border text-terminal-faint hover:text-terminal-negative hover:border-terminal-negative/30 hover:bg-terminal-hover'
+                        ? 'border-terminal-accent/40 bg-terminal-accent/20 text-terminal-accent'
+                        : 'border-terminal-border text-terminal-faint hover:text-terminal-accent hover:border-terminal-accent/30 hover:bg-terminal-hover'
                     }`}
                   >
                     NONE
@@ -1492,7 +1537,7 @@ export function PortfolioPanel() {
                         onClick={() => toggleHistorySymbol(position.symbol)}
                         className={`px-2 py-1 text-[11px] rounded border transition-colors ${
                           isSelected
-                            ? 'border-terminal-positive/40 bg-terminal-positive/10 text-terminal-positive'
+                            ? 'border-terminal-accent/40 bg-terminal-accent/10 text-terminal-accent'
                             : 'border-terminal-border text-terminal-faint hover:text-terminal-accent hover:border-terminal-accent/30 hover:bg-terminal-hover'
                         }`}
                       >
@@ -1505,11 +1550,11 @@ export function PortfolioPanel() {
 
               <div className="mt-3">
                 {portfolioHistory.length === 0 && (loadingHistory || loadingFxRates || refreshingQuotes) ? (
-                  <div className="flex h-[280px] items-center justify-center rounded border border-terminal-border text-terminal-muted text-xs" role="status">
+                  <div className="instrument-section flex h-[280px] items-center justify-center rounded border border-terminal-border text-terminal-muted text-xs" role="status">
                     Loading historical closes{historyFxMissing.length ? ' and FX rates' : ''}{refreshingQuotes ? ' and quote units' : ''}…
                   </div>
                 ) : portfolioHistory.length === 0 ? (
-                  <div className="flex h-[280px] items-center justify-center rounded border border-terminal-border/70 bg-terminal-elevated/30 text-terminal-faint text-xs">
+                  <div className="instrument-section flex h-[280px] items-center justify-center rounded border border-terminal-border/70 bg-terminal-elevated/30 text-terminal-faint text-xs">
                     {historySelectionMode === 'none' ? 'Select at least one asset to show its history.' : 'No usable price history is available for the selected assets and period.'}
                   </div>
                 ) : (
@@ -1521,7 +1566,7 @@ export function PortfolioPanel() {
                           <stop offset="100%" stopColor={themePalette.accent} stopOpacity={0.04} />
                         </linearGradient>
                       </defs>
-                      <CartesianGrid stroke={themePalette.chartGrid} strokeOpacity={0.7} vertical={false} />
+                      <CartesianGrid stroke={themePalette.chartGrid} strokeDasharray="1 4" vertical={false} />
                       <XAxis
                         dataKey="label"
                         tick={{ fill: themePalette.muted, fontSize: 11 }}
@@ -1571,7 +1616,7 @@ export function PortfolioPanel() {
                         labelStyle={{ color: themePalette.text }}
                         itemStyle={{ color: themePalette.muted }}
                       />
-                      <Legend wrapperStyle={{ fontSize: '11px', color: themePalette.muted }} />
+                      <Legend wrapperStyle={{ fontSize: '11px', color: themePalette.muted, strokeLinecap: 'round' }} />
                       <Area
                         type="linear"
                         baseValue={valueAxisScale.domain[0]}
@@ -1579,6 +1624,9 @@ export function PortfolioPanel() {
                         name="Portfolio Value"
                         stroke={themePalette.accent}
                         strokeWidth={2}
+                        strokeDasharray="0.1 3.6"
+                        strokeLinecap="round"
+                        legendType="plainline"
                         fill="url(#portfolio-value-fill)"
                         dot={portfolioChartData.length === 1 ? { r: 3 } : false}
                         isAnimationActive={false}
@@ -1591,6 +1639,7 @@ export function PortfolioPanel() {
                         stroke={themePalette.blue}
                         strokeWidth={1.6}
                         strokeDasharray="5 4"
+                        legendType="plainline"
                         dot={false}
                         isAnimationActive={false}
                         yAxisId="value"
@@ -1606,7 +1655,7 @@ export function PortfolioPanel() {
                           dot={false}
                           connectNulls
                           isAnimationActive={false}
-                          legendType="line"
+                          legendType="plainline"
                           yAxisId="benchmark"
                         />
                       )}
@@ -1638,10 +1687,10 @@ export function PortfolioPanel() {
               </div>
             </div>
 
-            <div className="bg-terminal-panel border border-terminal-border rounded overflow-hidden">
-              <div className="flex items-center justify-between gap-3 px-3 py-2 border-b border-terminal-border/60 bg-terminal-elevated/40">
+            <div className="instrument-card bg-terminal-panel border border-terminal-border rounded overflow-hidden">
+              <div className="instrument-section flex items-center justify-between gap-3 px-3 py-2 border-b border-terminal-border/60 bg-terminal-elevated/40">
                 <div>
-                  <div className="text-terminal-muted text-xs font-bold tracking-wider">POSITIONS & LOTS</div>
+                  <div className="instrument-heading text-terminal-muted text-xs font-bold tracking-wider">POSITIONS & LOTS</div>
                   <div className="text-terminal-faint text-[11px] mt-0.5">
                     Expand holdings to inspect or edit lot-level entries.
                   </div>
@@ -1765,9 +1814,9 @@ export function PortfolioPanel() {
                           </tr>
                           {isExpanded && (
                             <tr>
-                              <td colSpan={10} className="bg-terminal-elevated/50 px-3 py-3">
-                                <div className="rounded border border-terminal-border overflow-hidden">
-                                  <div className="px-3 py-2 panel-border-b bg-terminal-panel/80 flex items-center justify-between gap-3">
+                              <td colSpan={10} className="instrument-section bg-terminal-elevated/50 px-3 py-3">
+                                <div className="instrument-section rounded border border-terminal-border overflow-hidden">
+                                  <div className="instrument-section px-3 py-2 panel-border-b bg-terminal-panel/80 flex items-center justify-between gap-3">
                                     <span className="text-terminal-muted text-xs font-bold tracking-wider">
                                       {position.symbol} LOTS - {position.currency}
                                     </span>
@@ -1844,69 +1893,19 @@ export function PortfolioPanel() {
             </div>
           </div>
 
-          <div className="space-y-3">
-            <div className="bg-terminal-panel border border-terminal-border rounded p-3">
-              <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">ALLOCATION BY SYMBOL ({displayCurrency})</div>
-              <ResponsiveContainer width="100%" height={200}>
-                <PieChart>
-                  <Pie data={pieData} cx="50%" cy="50%" innerRadius={50} outerRadius={85} paddingAngle={2} dataKey="value">
-                    {pieData.map((_, index) => (
-                      <Cell key={index} fill={COLORS[index % COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    formatter={(value: number) => [formatCurrencyAmount(value, displayCurrency, 2), 'Value']}
-                    contentStyle={{ background: themePalette.elevated, border: `1px solid ${themePalette.border}`, borderRadius: '4px', fontSize: '11px' }}
-                    labelStyle={{ color: themePalette.text }}
-                    itemStyle={{ color: themePalette.muted }}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-              <div className="space-y-1 mt-2">
-                {pieData.map((item, index) => (
-                  <div key={item.name} className="flex items-center justify-between text-xs">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <div className="w-2 h-2 rounded-sm flex-shrink-0" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
-                      <span className="text-terminal-text truncate">{item.name}</span>
-                    </div>
-                    <span className="text-terminal-muted tabular-nums">{item.pct.toFixed(1)}%</span>
-                  </div>
-                ))}
-              </div>
+          <div className="section-stack space-y-3">
+            <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-3">
+              <div className="instrument-heading text-terminal-muted text-xs font-bold tracking-wider mb-3">ALLOCATION BY SYMBOL ({displayCurrency})</div>
+              <AllocationChart data={pieData} currency={displayCurrency} mode={mode} palette={themePalette} />
             </div>
 
-            <div className="bg-terminal-panel border border-terminal-border rounded p-3">
-              <div className="text-terminal-muted text-xs font-bold tracking-wider mb-3">ALLOCATION BY ASSET CLASS ({displayCurrency})</div>
-              <ResponsiveContainer width="100%" height={200}>
-                <PieChart>
-                  <Pie data={assetClassData} cx="50%" cy="50%" innerRadius={50} outerRadius={85} paddingAngle={2} dataKey="value">
-                    {assetClassData.map((_, index) => (
-                      <Cell key={index} fill={COLORS[index % COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    formatter={(value: number) => [formatCurrencyAmount(value, displayCurrency, 2), 'Value']}
-                    contentStyle={{ background: themePalette.elevated, border: `1px solid ${themePalette.border}`, borderRadius: '4px', fontSize: '11px' }}
-                    labelStyle={{ color: themePalette.text }}
-                    itemStyle={{ color: themePalette.muted }}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-              <div className="space-y-1 mt-2">
-                {assetClassData.map((item, index) => (
-                  <div key={item.name} className="flex items-center justify-between text-xs">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <div className="w-2 h-2 rounded-sm flex-shrink-0" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
-                      <span className="text-terminal-text truncate">{item.name}</span>
-                    </div>
-                    <span className="text-terminal-muted tabular-nums">{item.pct.toFixed(1)}%</span>
-                  </div>
-                ))}
-              </div>
+            <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-3">
+              <div className="instrument-heading text-terminal-muted text-xs font-bold tracking-wider mb-3">ALLOCATION BY ASSET CLASS ({displayCurrency})</div>
+              <AllocationChart data={assetClassData} currency={displayCurrency} mode={mode} palette={themePalette} />
             </div>
           </div>
         </div>
       )}
     </div>
-  );
+  </>;
 }

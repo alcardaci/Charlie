@@ -21,7 +21,7 @@ import { RegionalNewsMap } from '../components/RegionalNewsMap';
 import { useTerminalStore } from '../store/useTerminalStore';
 import type { CountryNewsCount, GeopoliticalScanStatus, NewsItem } from '../types';
 import { GeopoliticalRiskPoint, GeopoliticalRiskSnapshot } from '../types';
-import { fmt } from '../utils/formatters';
+import { changeColor, fmt } from '../utils/formatters';
 import { DEFAULT_GEOPOLITICS_OPENAI_MODEL } from '../utils/openaiConfig';
 import { buildTimestampedJsonFilename, downloadJsonFile } from '../utils/downloadJson';
 import { getThemePalette, useTheme } from '../utils/theme';
@@ -200,10 +200,11 @@ function RiskIndexReadings({ snapshot }: { snapshot: GeopoliticalRiskSnapshot })
   useTheme();
   const [chartTimeframe, setChartTimeframe] = useState<GprChartTimeframeKey>('30d');
   const themePalette = getThemePalette();
+  const dailyColor = themePalette.accent;
+  const averageColor = themePalette.muted;
   const latest = snapshot.latest;
   const change = snapshot.change;
   const riskRising = change != null && change > 0;
-  const changeTone = !change ? 'text-terminal-muted' : riskRising ? 'text-terminal-negative' : 'text-terminal-positive';
   const DeltaIcon = !change ? Minus : riskRising ? TrendingUp : TrendingDown;
   const chartData = getRiskChartData(snapshot.series, chartTimeframe);
   const chartMin = Math.min(...chartData.flatMap((point) => [point.value, point.movingAverage7]));
@@ -214,8 +215,8 @@ function RiskIndexReadings({ snapshot }: { snapshot: GeopoliticalRiskSnapshot })
   return (
       <div className="flex min-h-0 flex-1 flex-col gap-2 px-3 py-2">
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
-          <strong className="text-2xl leading-tight tabular-nums text-terminal-text">{fmt.number(latest.value, 2)}</strong>
-          <div className={`inline-flex items-center gap-1 text-xs tabular-nums ${changeTone}`}>
+          <strong className="instrument-value text-2xl leading-tight tabular-nums text-terminal-text">{fmt.number(latest.value, 2)}</strong>
+          <div className={`inline-flex items-center gap-1 text-xs tabular-nums ${changeColor(change)}`}>
             <DeltaIcon size={12} />
             {change == null ? 'Prior change unavailable' : `${fmt.change(change, 2)} (${fmt.pct(snapshot.changePct)})`}
           </div>
@@ -234,12 +235,12 @@ function RiskIndexReadings({ snapshot }: { snapshot: GeopoliticalRiskSnapshot })
         </div>
         <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
           <div className="flex items-center gap-3 text-[10px] text-terminal-muted">
-            <span className="inline-flex items-center gap-1"><span className="h-[2px] w-3 bg-[#ff6b6b]" /> Daily GPR</span>
-            <span className="inline-flex items-center gap-1"><span className="w-3 border-t-2 border-dashed border-[#f0c96d]" /> 7D average</span>
+            <span className="inline-flex items-center gap-1"><span className="w-3 border-t-2 border-dotted" style={{ borderColor: dailyColor }} /> Daily GPR</span>
+            <span className="inline-flex items-center gap-1"><span className="w-3 border-t-2 border-dashed" style={{ borderColor: averageColor }} /> 7D average</span>
           </div>
           <div className="flex" aria-label="Risk index time frame">
             {GPR_CHART_TIMEFRAMES.map(option => <button key={option.key} type="button" aria-pressed={option.key === chartTimeframe}
-              onClick={() => setChartTimeframe(option.key)} className={`rounded px-1.5 py-0.5 text-[10px] ${option.key === chartTimeframe ? 'bg-terminal-accent text-terminal-bg' : 'text-terminal-muted hover:bg-terminal-hover'}`}>
+              onClick={() => setChartTimeframe(option.key)} className={`rounded px-1.5 py-0.5 text-[10px] ${option.key === chartTimeframe ? 'bg-terminal-accent text-terminal-on-accent' : 'text-terminal-muted hover:bg-terminal-hover'}`}>
               {option.label}
             </button>)}
           </div>
@@ -249,8 +250,8 @@ function RiskIndexReadings({ snapshot }: { snapshot: GeopoliticalRiskSnapshot })
               <ComposedChart data={chartData} margin={{ top: 14, right: 12, left: 6, bottom: 10 }}>
                 <defs>
                   <linearGradient id="gprArea" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#ff6b6b" stopOpacity={0.22} />
-                    <stop offset="100%" stopColor="#ff6b6b" stopOpacity={0.02} />
+                    <stop offset="0%" stopColor={dailyColor} stopOpacity={0.12} />
+                    <stop offset="100%" stopColor={dailyColor} stopOpacity={0.02} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid stroke={themePalette.chartGrid} strokeDasharray="3 3" />
@@ -299,16 +300,18 @@ function RiskIndexReadings({ snapshot }: { snapshot: GeopoliticalRiskSnapshot })
                 <Area
                   type="monotone"
                   dataKey="value"
-                  stroke="#ff6b6b"
-                  strokeWidth={2.5}
+                  stroke={dailyColor}
+                  strokeWidth={2.2}
+                  strokeDasharray="0.2 4"
+                  strokeLinecap="round"
                   fill="url(#gprArea)"
                   dot={false}
-                  activeDot={{ r: 4, fill: '#ff6b6b', strokeWidth: 0 }}
+                  activeDot={{ r: 4, fill: dailyColor, strokeWidth: 0 }}
                 />
                 <Line
                   type="monotone"
                   dataKey="movingAverage7"
-                  stroke="#f0c96d"
+                  stroke={averageColor}
                   strokeWidth={2.2}
                   dot={false}
                   strokeDasharray="4 4"
@@ -473,7 +476,7 @@ function useGeopoliticsMonitorState() {
   const [showPayloadDebug, setShowPayloadDebug] = useState(false);
   const { openAISettings, updateOpenAISettings, debugMode } = useTerminalStore();
   const geopoliticsModel = openAISettings.geopoliticsModel?.trim() || DEFAULT_GEOPOLITICS_OPENAI_MODEL;
-  const { data: keyStatus, isPending: checkingKey, isError: keyCheckFailed, refetch: refetchKey } = useQuery({ queryKey: ['openai-key-status'], queryFn: fetchOpenAIKeyStatus, staleTime: 30_000 });
+  const { data: keyStatus, isLoading: checkingKey, isError: keyCheckFailed, refetch: refetchKey } = useQuery({ queryKey: ['openai-key-status'], queryFn: fetchOpenAIKeyStatus, staleTime: 30_000 });
   const aiAvailable = keyStatus?.configured ?? openAISettings.hasStoredApiKey;
   useEffect(() => {
     if (typeof keyStatus?.configured === 'boolean' && keyStatus.configured !== openAISettings.hasStoredApiKey)
@@ -555,12 +558,19 @@ function useGeopoliticsMonitorState() {
     scanStatusLabel = 'Partial coverage';
     analysisLabel = 'Events reviewed with OpenAI using the available headlines.';
   }
+  let activityLabel: string | undefined;
+  if (!aiAvailable && checkingKey) activityLabel = 'Connecting';
+  else if (aiAvailable) {
+    if (analysis.isFetching) activityLabel = 'Reviewing events';
+    else if (yahoo.isFetching || gdelt.isFetching) activityLabel = 'Fetching feeds';
+    else if (summaries.fetchingCountrySummaries) activityLabel = 'Preparing country summaries';
+  }
   return {
     timeframe, setTimeframe, debugMode, geopoliticsModel, openAISettings, scanStatus, scanStatusLabel, source, analysisLabel, hasArchive, hasReview,
     showPromptDebug, setShowPromptDebug, showPayloadDebug, setShowPayloadDebug,
     countryCounts: summaries.countryCounts, fetchingCountrySummaries: summaries.fetchingCountrySummaries,
     fetchingCountryCounts: yahoo.isFetching || gdelt.isFetching || analysis.isFetching,
-    loadingCountryCounts: pendingFeeds && !headlines.length,
+    activityLabel,
     refetchCountryCounts: () => {
       void yahoo.refetch();
       void gdelt.refetch();
@@ -674,7 +684,7 @@ function GeopoliticsDebugPanels({
   return (
     <div className={wrapperClassName}>
       {showPromptDebug && (
-        <div className={`${panelClassName} space-y-3`}>
+        <div className={`instrument-section ${panelClassName} space-y-3`}>
           <div className="text-terminal-accent text-xs font-bold tracking-[0.18em]">GEOPOL AI DEBUG</div>
           <div className="text-xs text-terminal-muted">
             Model: <span className="text-terminal-text">{geopoliticsModel}</span>
@@ -689,7 +699,7 @@ function GeopoliticsDebugPanels({
       )}
 
       {showPayloadDebug && (
-        <div className={`${panelClassName} space-y-3`}>
+        <div className={`instrument-section ${panelClassName} space-y-3`}>
           <div className="text-terminal-accent text-xs font-bold tracking-[0.18em]">GEOPOL AI PAYLOAD DEBUG</div>
           <GeopoliticsPayloadBlock title="Pipeline Stage Debug" payload={geopoliticalPipelinePayload} />
           <GeopoliticsPayloadBlock title="Headline Extraction Request" payload={geopoliticalEventsPayload} />
@@ -708,12 +718,12 @@ export function NewsEventCard() {
       countryData={state.countryCounts} topicLabel="GEOPOLITICAL" timeframeLabel={timeframe.label}
       timeframeOptions={TIMEFRAMES} activeTimeframeKey={timeframe.key}
       onTimeframeChange={key => { const next = TIMEFRAMES.find(t => t.key === key); if (next) state.setTimeframe(next); }}
-      showDebugSources={state.debugMode} isLoading={state.loadingCountryCounts}
+      showDebugSources={state.debugMode} activityLabel={state.activityLabel}
       scanStatus={state.scanStatus} scanStatusLabel={state.scanStatusLabel} showHotspotsSection={state.hasReview}
       sourceNote={state.source} archiveMode={state.hasArchive} analysisNote={state.analysisLabel}
       headerActions={<GeopoliticsMonitorControls state={state} />}
     />
-    {state.debugMode && (state.showPromptDebug || state.showPayloadDebug) && <div className="absolute inset-3 z-20 overflow-auto bg-terminal-panel p-2">
+    {state.debugMode && (state.showPromptDebug || state.showPayloadDebug) && <div className="instrument-section absolute inset-3 z-20 overflow-auto bg-terminal-panel p-2">
       <button onClick={() => { state.setShowPayloadDebug(false); state.setShowPromptDebug(false); }} className="mb-2 text-xs text-terminal-accent">Close debug</button>
       <GeopoliticsDebugPanels state={state} /></div>}
   </div>;
@@ -722,10 +732,10 @@ export function NewsEventCard() {
 export function NewsRiskCard() {
   const risk = useQuery({ queryKey: ['geopolitical-risk-snapshot'], queryFn: fetchGeopoliticalRiskSnapshot,
     refetchInterval: 3600000, staleTime: 900000 });
-  return <div className="flex h-full min-h-0 flex-col overflow-hidden rounded border border-terminal-border bg-terminal-panel">
+  return <div className="instrument-card flex h-full min-h-0 flex-col overflow-hidden rounded border border-terminal-border bg-terminal-panel">
     <header className="news-card-header">
-      <h2 className="flex items-center gap-2 text-sm font-bold tracking-wider text-terminal-accent">
-        <ShieldAlert size={14} className="shrink-0" /> GEOPOLITICAL RISK INDEX
+      <h2 className="instrument-heading flex items-center gap-2 text-sm font-bold tracking-wider text-terminal-accent">
+        <ShieldAlert size={14} className="shrink-0 text-terminal-accent" /> GEOPOLITICAL RISK INDEX
       </h2>
       {risk.data && <a href={risk.data.sourceUrl} target="_blank" rel="noreferrer" className="shrink-0 text-[11px] text-terminal-muted hover:text-terminal-accent">Source ↗</a>}
     </header>

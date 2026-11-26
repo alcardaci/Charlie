@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect, KeyboardEvent, type CSSProperties } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Bot, Bug, Moon, PanelLeftClose, PanelLeftOpen, Sparkles, Sun } from 'lucide-react';
+import { Bot, Moon, Sparkles, Star, Sun } from 'lucide-react';
 import { searchSymbols } from '../api/finance';
 import { useTerminalStore } from '../store/useTerminalStore';
 import { shouldUseSearch } from '../utils/commandParsing';
 import { fmt, isMarketOpen } from '../utils/formatters';
 import { useAppVersion } from '../utils/appVersion';
+import { overviewCardOrder } from '../utils/overviewLayout';
 import { useTheme } from '../utils/theme';
 
 interface CommandBarProps {
@@ -20,20 +21,17 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
   const {
     executeCommand,
     commandHistory,
-    activePanel,
-    activeSymbol,
     goBack,
     goHome,
     navHistory,
     setActivePanel,
-    debugMode,
-    toggleDebugMode,
-    watchlistSidebarVisible,
-    toggleWatchlistSidebar,
+    activePanel,
+    overviewLayout,
     companionOpen,
     toggleCompanionOpen,
   } = useTerminalStore();
   const { mode, toggleTheme } = useTheme();
+  const companionInOverview = activePanel === 'overview' && overviewCardOrder(overviewLayout).includes('summary');
   const appVersion = useAppVersion();
   const isElectronDesktop = typeof navigator !== 'undefined' && navigator.userAgent.includes('Electron');
   const electronDragStyle: CSSProperties | undefined = isElectronDesktop
@@ -105,34 +103,11 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
     }
   };
 
-  const panelLabel: Record<string, string> = {
-    overview: 'MARKET OVERVIEW',
-    equity: `${activeSymbol} EQUITY`,
-    chart: `${activeSymbol} CHART`,
-    multiAsset: 'MULTI-ASSET WORKSPACE',
-    news: 'NEWS + GEOPOLITICS',
-    geopolitics: 'NEWS + GEOPOLITICS',
-    predictions: 'PREDICTION MARKETS',
-    macro: 'MACRO + YIELD MONITOR',
-    portfolio: 'PORTFOLIO',
-    heatmap: 'SECTOR HEATMAP',
-    forex: 'FOREX',
-    crypto: 'CRYPTO',
-    yield: 'MACRO + YIELD MONITOR',
-    etf: 'ETF MONITOR',
-    screener: 'SCREENER',
-    help: 'HELP',
-    settings: 'CONNECTIONS & AI SETTINGS',
-  };
-
   const open = isMarketOpen();
-  const handleDebugToggle = () => {
-    toggleDebugMode();
-  };
 
   return (
     <div
-      className={`relative flex flex-wrap items-center gap-2 bg-terminal-panel px-3 py-2 panel-border-b flex-shrink-0 md:h-10 md:flex-nowrap md:gap-0 md:py-0 ${isElectronDesktop ? 'md:pl-24' : ''}`}
+      className={`command-bar relative flex flex-wrap items-center gap-2 bg-terminal-panel px-3 py-2 panel-border-b flex-shrink-0 md:h-10 md:flex-nowrap md:gap-0 md:py-0 ${isElectronDesktop ? 'md:pl-24' : ''}`}
       style={electronDragStyle}
     >
       {/* Logo — click to return to Market Overview */}
@@ -141,10 +116,13 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
           onClick={goHome}
           className="flex items-center gap-1.5 hover:opacity-80 transition-opacity"
           title="Market Overview"
+          aria-label="Charlie — Market Overview"
           style={electronNoDragStyle}
         >
-          <span className="text-terminal-accent font-bold text-base tracking-wider">C</span>
-          <span className="text-terminal-text font-bold text-sm tracking-widest">HARLIE</span>
+          <span className="charlie-brand" aria-hidden="true">
+            <span className="charlie-brand-mark" />
+            <span className="charlie-brand-name" />
+          </span>
           {appVersion && (
             <span className="hidden sm:inline text-terminal-faint font-mono text-[10px] tracking-wider">{appVersion}</span>
           )}
@@ -152,26 +130,21 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
         <div className="hidden md:block h-4 w-px bg-terminal-border" />
       </div>
 
-      {/* Back button */}
-      {navHistory.length > 0 && (
-        <button
-          onClick={goBack}
-          className="flex items-center gap-1 px-2 py-1 text-xs text-terminal-muted hover:text-terminal-accent border border-terminal-border hover:border-terminal-accent/50 rounded transition-colors flex-shrink-0 md:mr-3"
-          title="Go back"
-          style={electronNoDragStyle}
-        >
-          ← BACK
-        </button>
-      )}
-
-      {/* Context label */}
-      <div className="order-2 basis-full text-terminal-muted text-[11px] flex-shrink-0 md:order-none md:basis-auto md:mr-3 md:text-xs">
-        {panelLabel[activePanel] ?? activePanel.toUpperCase()}
-      </div>
+      {/* Reserve the Back button's space in the wrapping mobile toolbar. */}
+      <button
+        onClick={goBack}
+        disabled={!navHistory.length}
+        aria-hidden={!navHistory.length || undefined}
+        className={`flex items-center gap-1 px-2 py-1 text-xs text-terminal-muted hover:text-terminal-accent border border-terminal-border hover:border-terminal-accent/50 rounded transition-colors flex-shrink-0 md:mr-3 ${navHistory.length ? '' : 'invisible md:hidden'}`}
+        title="Go back"
+        style={electronNoDragStyle}
+      >
+        ← BACK
+      </button>
 
       {/* Command input */}
       <div className="order-3 w-full relative md:order-none md:flex-1 md:w-auto" style={electronNoDragStyle}>
-        <div className="flex items-center bg-terminal-elevated border border-terminal-border rounded px-2 h-7">
+        <div className="command-field flex items-center bg-terminal-elevated border border-terminal-border rounded px-2 h-7">
           <span className="text-terminal-accent mr-2 text-xs flex-shrink-0">⟩</span>
           <input
             ref={inputRef}
@@ -225,17 +198,7 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
       </div>
 
       {/* Right side status */}
-      <div className="ml-auto flex items-center gap-2 flex-shrink-0 md:ml-4 md:gap-4" style={electronNoDragStyle}>
-        <button
-          onClick={toggleWatchlistSidebar}
-          className="hidden md:flex items-center gap-1.5 rounded border border-terminal-border px-2 py-1 text-xs text-terminal-muted transition-colors hover:border-terminal-accent/40 hover:bg-terminal-hover hover:text-terminal-accent"
-          title={watchlistSidebarVisible ? 'Hide watchlist' : 'Show watchlist'}
-          aria-label={watchlistSidebarVisible ? 'Hide watchlist' : 'Show watchlist'}
-          style={electronNoDragStyle}
-        >
-          {watchlistSidebarVisible ? <PanelLeftClose size={12} /> : <PanelLeftOpen size={12} />}
-          <span className="hidden lg:inline">{watchlistSidebarVisible ? 'HIDE WL' : 'SHOW WL'}</span>
-        </button>
+      <div className="ml-auto flex items-center gap-1.5 flex-shrink-0 md:ml-4 md:gap-4" style={electronNoDragStyle}>
         {onOpenWatchlist && (
           <button
             onClick={onOpenWatchlist}
@@ -243,38 +206,24 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
             aria-label="Open watchlist"
             style={electronNoDragStyle}
           >
-            <PanelLeftOpen size={12} />
+            <Star size={12} />
           </button>
         )}
-        <button
+        {!companionInOverview && <button
           onClick={toggleCompanionOpen}
-          className={`flex items-center gap-1.5 rounded border px-2.5 py-1 text-xs font-semibold tracking-wide transition-colors ${
+          className={`flex items-center gap-1.5 rounded border px-2 py-1 text-xs font-semibold tracking-wide transition-colors md:px-2.5 ${
             companionOpen
-              ? 'border-cyan-400/60 bg-cyan-400/15 text-cyan-200 shadow-[0_0_16px_rgba(34,211,238,0.14)]'
-              : 'border-cyan-400/35 bg-cyan-400/10 text-cyan-200 hover:border-cyan-300/60 hover:bg-cyan-400/15'
+              ? 'border-terminal-accent/70 bg-terminal-accent/20 text-terminal-accent'
+              : 'border-terminal-accent/50 bg-terminal-accent/10 text-terminal-accent hover:border-terminal-accent/70 hover:bg-terminal-accent/15'
           }`}
           title={companionOpen ? 'Close AI companion' : 'Open AI companion'}
           aria-label={companionOpen ? 'Close AI companion' : 'Open AI companion'}
           style={electronNoDragStyle}
         >
-          <Sparkles size={12} />
+          <Sparkles size={12} className="hidden md:block" />
           <Bot size={12} />
           <span className="hidden lg:inline">AI COMPANION</span>
-        </button>
-        <button
-          onClick={handleDebugToggle}
-          className={`flex items-center gap-1.5 rounded border px-2 py-1 text-xs transition-colors ${
-            debugMode
-              ? 'border-terminal-accent/50 bg-terminal-accent/12 text-terminal-accent'
-              : 'border-terminal-border text-terminal-muted hover:border-terminal-accent/40 hover:bg-terminal-hover hover:text-terminal-accent'
-          }`}
-          title={debugMode ? 'Disable debug mode' : 'Enable debug mode'}
-          aria-label={debugMode ? 'Disable debug mode' : 'Enable debug mode'}
-          style={electronNoDragStyle}
-        >
-          <Bug size={12} />
-          <span className="hidden lg:inline">{debugMode ? 'DEBUG ON' : 'DEBUG'}</span>
-        </button>
+        </button>}
         <button
           onClick={toggleTheme}
           className="flex items-center gap-1.5 rounded border border-terminal-border px-2 py-1 text-xs text-terminal-muted transition-colors hover:border-terminal-accent/40 hover:bg-terminal-hover hover:text-terminal-accent"
@@ -283,7 +232,7 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
           style={electronNoDragStyle}
         >
           {mode === 'dark' ? <Moon size={12} /> : <Sun size={12} />}
-          <span className="hidden lg:inline">{mode === 'dark' ? 'DARK' : 'LIGHT'}</span>
+          <span className="hidden w-[5ch] text-center lg:inline-block">{mode === 'dark' ? 'DARK' : 'LIGHT'}</span>
         </button>
         <div className="hidden sm:flex items-center gap-1.5">
           <div className={`w-1.5 h-1.5 rounded-full ${open ? 'bg-terminal-positive' : 'bg-terminal-faint'}`} />

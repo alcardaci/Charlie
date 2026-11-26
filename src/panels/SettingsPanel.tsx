@@ -1,426 +1,209 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bot, KeyRound, Link2, Palette, Settings2 } from 'lucide-react';
-import {
-  deleteConnectionSecret,
-  fetchConnectionStatuses,
-  storeConnectionSecret,
-} from '../api/finance';
+import { ChevronRight, ExternalLink } from 'lucide-react';
+import { WorkspaceHeader } from '../components/WorkspaceHeader';
+import { HelpContent } from './HelpPanel';
+import { deleteConnectionSecret, fetchConnectionStatuses, storeConnectionSecret } from '../api/finance';
 import { useTerminalStore } from '../store/useTerminalStore';
-import type { ConnectionProvider } from '../types';
-import {
-  buildDefaultOpenAISystemPrompts,
-  DEFAULT_OPENAI_MODEL,
-  DEFAULT_OVERVIEW_SUMMARY_SYSTEM_PROMPT,
-  OPENAI_MODEL_OPTIONS,
-} from '../utils/openaiConfig';
-import { THEME_ACCENT_OPTIONS, useTheme, type ThemeAccent } from '../utils/theme';
+import type { ConnectionProvider, ConnectionStatusMap } from '../types';
+import { DEFAULT_OVERVIEW_SUMMARY_SYSTEM_PROMPT, OPENAI_MODEL_OPTIONS } from '../utils/openaiConfig';
+import { useAppVersion } from '../utils/appVersion';
 
-type ProviderDraftState = Record<ConnectionProvider, string>;
-type ProviderVisibilityState = Record<ConnectionProvider, boolean>;
+const PROVIDERS = [
+  { id: 'openai', name: 'OpenAI', purpose: 'Overview summaries, the AI companion and event map analysis.', url: 'https://platform.openai.com/api-keys' },
+  { id: 'fred', name: 'FRED', purpose: 'Economic indicators and release dates.', url: 'https://fredaccount.stlouisfed.org/apikeys' },
+  { id: 'finnhub', name: 'Finnhub', purpose: 'Company earnings dates in the calendar.', url: 'https://finnhub.io/dashboard' },
+] as const;
 
-const PROVIDER_LABELS: Record<ConnectionProvider, string> = {
-  openai: 'OpenAI',
-  fred: 'FRED',
-  finnhub: 'Finnhub',
-};
+const fieldClass = 'min-w-0 rounded border border-terminal-border bg-terminal-elevated px-2.5 py-1.5 text-xs text-terminal-text focus:border-terminal-accent';
+const buttonClass = 'rounded border border-terminal-border px-2.5 py-1.5 text-xs text-terminal-muted hover:border-terminal-accent hover:text-terminal-text disabled:opacity-50';
+const saveClass = 'rounded border border-terminal-accent/40 bg-terminal-accent/10 px-2.5 py-1.5 text-xs text-terminal-accent hover:bg-terminal-accent/20 disabled:opacity-50';
+const rowClass = 'border-b border-[color:var(--section-rule-color)] last:border-b-0';
+const tabs = [{ id: 'preferences', label: 'Preferences' }, { id: 'help', label: 'Help & Shortcuts' }] as const;
 
-const DEFAULT_PROVIDER_DRAFTS: ProviderDraftState = {
-  openai: '',
-  fred: '',
-  finnhub: '',
-};
+type KeyChange = { provider: ConnectionProvider; action: 'save'; secret: string } | { provider: ConnectionProvider; action: 'remove' };
 
-const DEFAULT_PROVIDER_VISIBILITY: ProviderVisibilityState = {
-  openai: false,
-  fred: false,
-  finnhub: false,
-};
+function Connections() {
+  const queryClient = useQueryClient();
+  const hasOpenAIKey = useTerminalStore(state => state.openAISettings.hasStoredApiKey);
+  const updateOpenAISettings = useTerminalStore(state => state.updateOpenAISettings);
+  const [drafts, setDrafts] = useState<Partial<Record<ConnectionProvider, string>>>({});
+  const [visible, setVisible] = useState<Partial<Record<ConnectionProvider, boolean>>>({});
+  const statuses = useQuery({ queryKey: ['connection-status'], queryFn: fetchConnectionStatuses, staleTime: 30_000 });
 
-const PROVIDER_CARDS: Array<{
-  provider: ConnectionProvider;
-  title: string;
-  placeholder: string;
-  description: string;
-  coverage: string;
-  apiKeyUrl: string;
-}> = [
-  {
-    provider: 'openai',
-    title: 'OpenAI',
-    placeholder: 'sk-...',
-    description: 'Used for overview summaries, the general research companion, geopolitics event extraction and country summaries.',
-    coverage: 'Optional. Public/no-key sources still work without it.',
-    apiKeyUrl: 'https://platform.openai.com/api-keys',
-  },
-  {
-    provider: 'fred',
-    title: 'FRED',
-    placeholder: 'FRED API key',
-    description: 'Used for macro dashboard series, release dates, and US macro calendar enrichment.',
-    coverage: 'Needed for full macro coverage.',
-    apiKeyUrl: 'https://fredaccount.stlouisfed.org/apikeys',
-  },
-  {
-    provider: 'finnhub',
-    title: 'Finnhub',
-    placeholder: 'Finnhub API key',
-    description: 'Used for earnings calendar support inside the macro and overview calendar flows.',
-    coverage: 'Optional. Static policy events and any available FRED data can still load without it.',
-    apiKeyUrl: 'https://finnhub.io/dashboard',
-  },
-];
+  const openai = statuses.data?.openai;
+  useEffect(() => {
+    if (!statuses.isError && typeof openai === 'boolean' && openai !== hasOpenAIKey) {
+      updateOpenAISettings({ hasStoredApiKey: openai });
+    }
+  }, [openai, statuses.isError, hasOpenAIKey, updateOpenAISettings]);
 
-const formatAccentRgb = (rgb: string) => `rgb(${rgb.trim().replace(/\s+/g, ', ')})`;
+  const change = useMutation({
+    mutationFn: (request: KeyChange) => request.action === 'save'
+      ? storeConnectionSecret(request.provider, request.secret)
+      : deleteConnectionSecret(request.provider),
+    onSuccess: async ({ configured }, { provider }) => {
+      setDrafts(current => ({ ...current, [provider]: '' }));
+      setVisible(current => ({ ...current, [provider]: false }));
+      queryClient.setQueryData<ConnectionStatusMap>(['connection-status'], current => current && { ...current, [provider]: configured });
+      if (provider === 'openai') {
+        updateOpenAISettings({ hasStoredApiKey: configured });
+        queryClient.setQueryData(['openai-key-status'], { configured });
+      }
+      await queryClient.invalidateQueries({ queryKey: ['connection-status'] });
+    },
+  });
+
+  return <section aria-labelledby="connections-title">
+    <h2 id="connections-title" className="instrument-heading text-xs font-bold">API CONNECTIONS</h2>
+    <p className="my-2 text-xs text-terminal-muted">Optional keys are stored on this device.</p>
+    {statuses.isError && <p role="status" className="mb-1 text-xs text-terminal-muted">
+      Couldn’t check saved keys.{' '}
+      <button type="button" className="text-terminal-accent underline" onClick={() => void statuses.refetch()}>Retry</button>
+    </p>}
+    {PROVIDERS.map(({ id, name, purpose, url }) => {
+      const configured = statuses.isError ? undefined : statuses.data?.[id];
+      const status = typeof configured === 'boolean' ? (configured ? 'Key saved' : 'No key') : statuses.isPending ? 'Checking…' : 'Unavailable';
+      const draft = drafts[id] ?? '';
+      const activeChange = change.variables?.provider === id ? change.variables : undefined;
+      const keyInputId = 'settings-key-' + id;
+
+      return <details key={id} className={'group ' + rowClass} onToggle={event => {
+        if (!event.currentTarget.open) setVisible(current => ({ ...current, [id]: false }));
+      }}>
+        <summary aria-label={'Manage ' + name + ' connection'} aria-describedby={keyInputId + '-purpose ' + keyInputId + '-status'}
+          className="flex cursor-pointer list-none items-center gap-2 py-3 hover:text-terminal-accent [&::-webkit-details-marker]:hidden">
+          <ChevronRight size={14} aria-hidden="true" className="shrink-0 text-terminal-muted group-open:rotate-90" />
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-bold">{name}</span>
+            <span id={keyInputId + '-purpose'} className="block text-xs leading-relaxed text-terminal-muted">{purpose}</span>
+          </span>
+          <span id={keyInputId + '-status'} className={'shrink-0 text-xs ' + (configured ? 'text-terminal-positive' : 'text-terminal-faint')}>{status}</span>
+        </summary>
+        <form className="space-y-2 pb-3 pl-5" onSubmit={event => {
+          event.preventDefault();
+          if (draft.trim() && !change.isPending) change.mutate({ provider: id, action: 'save', secret: draft.trim() });
+        }}>
+          <div className="flex flex-wrap items-baseline justify-between gap-2 text-xs">
+            <label htmlFor={keyInputId} className="text-terminal-muted">{configured ? 'Replace API key' : 'API key'}</label>
+            <a href={url} target="_blank" rel="noreferrer" aria-label={'Get ' + name + ' API key'} className="inline-flex items-center gap-1 text-terminal-accent hover:underline">
+              Get API key <ExternalLink size={11} aria-hidden="true" />
+            </a>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <input id={keyInputId} type={visible[id] ? 'text' : 'password'} aria-label={name + ' API key'} value={draft}
+              autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false} disabled={change.isPending}
+              className={'w-full flex-1 ' + fieldClass} onChange={event => {
+                setDrafts(current => ({ ...current, [id]: event.target.value }));
+                if (activeChange) change.reset();
+              }} />
+            <button type="button" aria-label={(visible[id] ? 'Hide ' : 'Show ') + name + ' key'}
+              className={buttonClass} onClick={() => setVisible(current => ({ ...current, [id]: !current[id] }))}>{visible[id] ? 'Hide' : 'Show'}</button>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <button type="submit" className={saveClass} aria-label={'Save ' + name + ' key'} disabled={change.isPending || !draft.trim()}>Save key</button>
+            {configured && <button type="button" className="text-xs text-terminal-muted hover:text-terminal-negative disabled:opacity-50"
+              aria-label={'Remove ' + name + ' key'} onClick={() => change.mutate({ provider: id, action: 'remove' })} disabled={change.isPending}>Remove key</button>}
+            {activeChange && <span role="status" className="text-xs text-terminal-muted">
+              {change.isPending ? 'Updating…' : change.isError ? 'Couldn’t update the key. Try again.' : change.isSuccess
+                ? (activeChange.action === 'save' ? 'Key saved.' : 'Key removed.') : ''}
+            </span>}
+          </div>
+        </form>
+      </details>;
+    })}
+  </section>;
+}
+
+function SummaryPreferences() {
+  const { model, systemPrompts } = useTerminalStore(state => state.openAISettings);
+  const updateOpenAISettings = useTerminalStore(state => state.updateOpenAISettings);
+  const [modelEdit, setModelEdit] = useState<string | null>(null);
+  const [promptEdit, setPromptEdit] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const savedPrompt = systemPrompts.comprehensive || DEFAULT_OVERVIEW_SUMMARY_SYSTEM_PROMPT;
+  const draftModel = modelEdit ?? model;
+  const draftPrompt = promptEdit ?? savedPrompt;
+  const dirty = draftModel !== model || draftPrompt !== savedPrompt;
+  const models = Array.from(new Set([model, ...OPENAI_MODEL_OPTIONS]));
+
+  return <form aria-labelledby="summary-preferences-title" className="space-y-4" onSubmit={event => {
+    event.preventDefault();
+    const prompt = draftPrompt.trim() || DEFAULT_OVERVIEW_SUMMARY_SYSTEM_PROMPT;
+    updateOpenAISettings({ model: draftModel, harness: 'comprehensive', systemPrompt: prompt });
+    setModelEdit(null);
+    setPromptEdit(null);
+    setSaved(true);
+  }}>
+    <h2 id="summary-preferences-title" className="instrument-heading text-xs font-bold">OVERVIEW AI SUMMARY</h2>
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <label htmlFor="settings-model" className="text-xs text-terminal-muted">Overview model</label>
+      <select id="settings-model" className={'max-w-full sm:max-w-[70%] ' + fieldClass} value={draftModel}
+        onChange={event => { setModelEdit(event.target.value); setSaved(false); }}>
+        {models.map(option => <option value={option} key={option}>{option}</option>)}
+      </select>
+    </div>
+    <details className="group">
+      <summary className="flex cursor-pointer list-none items-center gap-2 text-xs text-terminal-text hover:text-terminal-accent [&::-webkit-details-marker]:hidden">
+        <ChevronRight size={14} aria-hidden="true" className="group-open:rotate-90" />Summary instructions
+      </summary>
+      <textarea aria-label="Overview summary instructions" value={draftPrompt} rows={7}
+        onChange={event => { setPromptEdit(event.target.value); setSaved(false); }}
+        className={'mt-2 w-full resize-y leading-relaxed ' + fieldClass} />
+      <button type="button" className="text-xs text-terminal-accent hover:underline" disabled={draftPrompt === DEFAULT_OVERVIEW_SUMMARY_SYSTEM_PROMPT}
+        onClick={() => { setPromptEdit(DEFAULT_OVERVIEW_SUMMARY_SYSTEM_PROMPT); setSaved(false); }}>Use default instructions</button>
+    </details>
+    <div className="flex items-center gap-3">
+      <button type="submit" className={saveClass} disabled={!dirty}>Save preferences</button>
+      {saved && <span role="status" className="text-xs text-terminal-muted">Preferences saved.</span>}
+    </div>
+  </form>;
+}
 
 export function SettingsPanel() {
-  const queryClient = useQueryClient();
-  const { openAISettings, updateOpenAISettings, setActivePanel } = useTerminalStore();
-  const { accent, setAccentPreference } = useTheme();
-  const selectedAccent = THEME_ACCENT_OPTIONS.find((option) => option.key === accent) ?? THEME_ACCENT_OPTIONS[0];
-  const [draftModel, setDraftModel] = useState(openAISettings.model);
-  const [draftSummaryPrompt, setDraftSummaryPrompt] = useState(
-    openAISettings.systemPrompts.comprehensive || DEFAULT_OVERVIEW_SUMMARY_SYSTEM_PROMPT
-  );
-  const [draftSecrets, setDraftSecrets] = useState<ProviderDraftState>(DEFAULT_PROVIDER_DRAFTS);
-  const [visibleSecrets, setVisibleSecrets] = useState<ProviderVisibilityState>(DEFAULT_PROVIDER_VISIBILITY);
-  const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
-  const [connectionsMessage, setConnectionsMessage] = useState<string | null>(null);
-
-  useEffect(() => {
-    setDraftModel(openAISettings.model);
-    setDraftSummaryPrompt(openAISettings.systemPrompts.comprehensive || DEFAULT_OVERVIEW_SUMMARY_SYSTEM_PROMPT);
-  }, [openAISettings]);
-
-  const { data: connectionStatus } = useQuery({
-    queryKey: ['connection-status'],
-    queryFn: fetchConnectionStatuses,
-    staleTime: 30000,
-  });
-
-  useEffect(() => {
-    if (typeof connectionStatus?.openai === 'boolean' && connectionStatus.openai !== openAISettings.hasStoredApiKey) {
-      updateOpenAISettings({ hasStoredApiKey: connectionStatus.openai });
-    }
-  }, [connectionStatus?.openai, openAISettings.hasStoredApiKey, updateOpenAISettings]);
-
-  const connectionMutation = useMutation({
-    mutationFn: async ({
-      provider,
-      secret,
-      action,
-    }: {
-      provider: ConnectionProvider;
-      secret?: string;
-      action: 'save' | 'delete';
-    }) => {
-      if (action === 'save') {
-        const nextSecret = secret?.trim() ?? '';
-        if (!nextSecret) throw new Error(`${PROVIDER_LABELS[provider]} credential is required.`);
-        return storeConnectionSecret(provider, nextSecret);
-      }
-
-      return deleteConnectionSecret(provider);
-    },
-    onSuccess: async (_payload, variables) => {
-      await queryClient.invalidateQueries({ queryKey: ['connection-status'] });
-      await queryClient.invalidateQueries({ queryKey: ['openai-key-status'] });
-      if (variables.provider === 'openai') {
-        updateOpenAISettings({ hasStoredApiKey: variables.action === 'save' });
-      }
-      if (variables.action === 'save') {
-        setDraftSecrets((current) => ({ ...current, [variables.provider]: '' }));
-      }
-      setConnectionsMessage(
-        variables.action === 'save'
-          ? `${PROVIDER_LABELS[variables.provider]} credential saved locally on this machine.`
-          : `${PROVIDER_LABELS[variables.provider]} credential removed from this machine.`
-      );
-    },
-    onError: (error) => {
-      setConnectionsMessage(error instanceof Error ? error.message : 'Unable to update the selected connection right now.');
-    },
-  });
-
-  const providerStatus = useMemo(
-    () => ({
-      openai: Boolean(connectionStatus?.openai),
-      fred: Boolean(connectionStatus?.fred),
-      finnhub: Boolean(connectionStatus?.finnhub),
-    }),
-    [connectionStatus]
-  );
-
-  const handleSaveSettings = () => {
-    const defaultPrompts = buildDefaultOpenAISystemPrompts();
-    const overviewSummaryPrompt = draftSummaryPrompt.trim() || DEFAULT_OVERVIEW_SUMMARY_SYSTEM_PROMPT;
-    const nextSystemPrompts = {
-      ...defaultPrompts,
-      comprehensive: overviewSummaryPrompt,
-    };
-
-    updateOpenAISettings({
-      model: draftModel.trim() || DEFAULT_OPENAI_MODEL,
-      harness: 'comprehensive',
-      systemPrompts: nextSystemPrompts,
-      systemPrompt: overviewSummaryPrompt,
-    });
-
-    setSettingsMessage('AI preferences saved locally. Provider credentials remain stored separately on this machine.');
-  };
-
-  const handleAccentChange = (nextAccent: ThemeAccent) => {
-    setAccentPreference(nextAccent === 'blue' ? null : nextAccent);
-  };
-
-  return (
-    <div className="h-full overflow-y-auto p-5 space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <Settings2 size={14} className="text-terminal-accent" />
-            <h1 className="text-terminal-accent font-bold text-sm tracking-wider">CONNECTIONS & AI SETTINGS</h1>
-          </div>
-          <p className="text-terminal-faint text-xs mt-1 leading-relaxed">
-            Charlie runs public/no-key sources out of the box. Add your own OpenAI, FRED, and Finnhub
-            credentials below to unlock the keyed workflows on this device.
-          </p>
-        </div>
-
-        <button
-          onClick={() => setActivePanel('overview')}
-          className="px-3 py-1.5 text-xs rounded border border-terminal-border text-terminal-muted hover:text-terminal-accent hover:border-terminal-accent/40 hover:bg-terminal-hover transition-colors"
-        >
-          BACK TO OVERVIEW
-        </button>
-      </div>
-
-      <div className="grid grid-cols-1 xl:grid-cols-[1.1fr_0.9fr] gap-4">
-        <div className="space-y-4">
-          <div className="bg-terminal-panel border border-terminal-border rounded p-4 space-y-4">
-            <div className="flex items-center gap-2">
-              <Link2 size={13} className="text-terminal-accent" />
-              <div>
-                <div className="text-terminal-muted text-xs font-bold tracking-wider">CONNECTIONS</div>
-                <div className="text-terminal-faint text-xs mt-1">Each credential is optional and stored locally per machine.</div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {PROVIDER_CARDS.map(({ provider, title, placeholder, description, coverage, apiKeyUrl }) => {
-                const isConfigured = providerStatus[provider];
-                const isBusy = connectionMutation.isPending;
-
-                return (
-                  <section key={provider} className="rounded border border-terminal-border bg-terminal-elevated p-4 space-y-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-terminal-text text-sm font-bold">{title}</div>
-                        <div className="text-terminal-muted text-xs mt-1 leading-relaxed">{description}</div>
-                        <a
-                          href={apiKeyUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-1 mt-2 text-[11px] text-terminal-blue hover:underline"
-                        >
-                          <Link2 size={11} />
-                          API key page
-                        </a>
-                      </div>
-                      <span className={isConfigured ? 'text-terminal-positive text-xs' : 'text-terminal-negative text-xs'}>
-                        {isConfigured ? 'Configured' : 'Missing'}
-                      </span>
-                    </div>
-
-                    <div className="flex gap-2">
-                      <input
-                        type={visibleSecrets[provider] ? 'text' : 'password'}
-                        value={draftSecrets[provider]}
-                        onChange={(event) => {
-                          setDraftSecrets((current) => ({ ...current, [provider]: event.target.value }));
-                          setConnectionsMessage(null);
-                        }}
-                        placeholder={isConfigured ? `${title} credential already stored. Paste a new value to replace it.` : placeholder}
-                        className="flex-1 bg-terminal-panel border border-terminal-border rounded px-3 py-2 text-xs text-terminal-text placeholder-terminal-faint focus:outline-none focus:border-terminal-accent/50"
-                        spellCheck={false}
-                        autoCapitalize="off"
-                        autoCorrect="off"
-                      />
-                      <button
-                        onClick={() => setVisibleSecrets((current) => ({ ...current, [provider]: !current[provider] }))}
-                        className="px-3 py-2 text-xs rounded border border-terminal-border text-terminal-muted hover:text-terminal-accent hover:border-terminal-accent/40 hover:bg-terminal-hover transition-colors"
-                      >
-                        {visibleSecrets[provider] ? 'HIDE' : 'SHOW'}
-                      </button>
-                    </div>
-
-                    <div className="text-terminal-faint text-[11px] leading-relaxed">{coverage}</div>
-
-                    <div className="flex items-center justify-between gap-3">
-                      <button
-                        onClick={() => {
-                          setConnectionsMessage(null);
-                          void connectionMutation.mutateAsync({
-                            provider,
-                            secret: draftSecrets[provider],
-                            action: 'save',
-                          });
-                        }}
-                        disabled={isBusy}
-                        className="px-3 py-1.5 rounded border border-terminal-accent/40 bg-terminal-accent/10 text-terminal-accent text-xs hover:bg-terminal-accent/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        SAVE
-                      </button>
-                      {isConfigured && (
-                        <button
-                          onClick={() => {
-                            setConnectionsMessage(null);
-                            void connectionMutation.mutateAsync({ provider, action: 'delete' });
-                          }}
-                          disabled={isBusy}
-                          className="text-xs text-terminal-faint hover:text-terminal-negative transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          REMOVE
-                        </button>
-                      )}
-                    </div>
-                  </section>
-                );
-              })}
-            </div>
-
-            <div className="text-terminal-faint text-xs">
-              {connectionsMessage ?? 'Public data sources continue to work without credentials. Keyed sources activate only after you add your own connection.'}
-            </div>
-          </div>
-        </div>
-
-        <div>
-          <div className="bg-terminal-panel border border-terminal-border rounded p-4 space-y-4 mb-4">
-            <div className="flex items-center gap-2">
-              <Palette size={13} className="text-terminal-accent" />
-              <div>
-                <div className="text-terminal-muted text-xs font-bold tracking-wider">APPEARANCE</div>
-                <div className="text-terminal-faint text-xs mt-1">Brand accent color for the shell, charts, controls, and highlights.</div>
-              </div>
-            </div>
-
-            <div className="rounded border border-terminal-border bg-terminal-elevated px-3 py-3 space-y-3">
-              <div className="flex items-center gap-3">
-                <span
-                  className="inline-flex h-8 w-8 rounded border border-terminal-border"
-                  style={{
-                    backgroundColor: 'var(--terminal-accent)',
-                    boxShadow: '0 0 18px rgb(var(--terminal-accent-rgb) / 0.18)',
-                  }}
-                  aria-hidden="true"
-                />
-                <div>
-                  <div className="text-terminal-text text-xs font-bold tracking-wider">
-                    {selectedAccent.label.toUpperCase()}
-                  </div>
-                  <div className="text-terminal-faint text-[11px] mt-1">
-                    {selectedAccent.description}
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                {THEME_ACCENT_OPTIONS.map((option) => {
-                  const isActive = option.key === accent;
-                  return (
-                    <button
-                      key={option.key}
-                      onClick={() => handleAccentChange(option.key)}
-                      className={`flex items-center gap-2 rounded border px-2.5 py-2 text-left transition-colors ${
-                        isActive
-                          ? 'border-terminal-accent/60 bg-terminal-accent/12 text-terminal-accent'
-                          : 'border-terminal-border bg-terminal-panel text-terminal-muted hover:border-terminal-accent/40 hover:bg-terminal-hover hover:text-terminal-accent'
-                      }`}
-                      aria-pressed={isActive}
-                    >
-                      <span
-                        className="inline-flex h-4 w-4 flex-shrink-0 rounded-sm border border-terminal-border"
-                        style={{ backgroundColor: formatAccentRgb(option.darkRgb) }}
-                        aria-hidden="true"
-                      />
-                      <span className="min-w-0">
-                        <span className="block text-[11px] font-bold tracking-[0.12em]">{option.label.toUpperCase()}</span>
-                        <span className="block truncate text-[10px] opacity-70">
-                          {option.key === 'blue' ? 'Default' : option.key === 'yellow' ? 'Classic' : 'Accent'}
-                        </span>
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-terminal-panel border border-terminal-border rounded p-4 space-y-4">
-            <div className="flex items-center gap-2">
-              <Bot size={13} className="text-terminal-accent" />
-              <div>
-                <div className="text-terminal-muted text-xs font-bold tracking-wider">AI PREFERENCES</div>
-                <div className="text-terminal-faint text-xs mt-1">Model and prompt controls for the overview summary flow.</div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-[0.9fr_1.3fr] gap-4">
-              <div>
-                <label className="flex items-center gap-2 text-terminal-muted text-xs font-bold tracking-wider mb-2">
-                  <KeyRound size={12} />
-                  OVERVIEW MODEL
-                </label>
-                <select
-                  value={OPENAI_MODEL_OPTIONS.includes(draftModel as (typeof OPENAI_MODEL_OPTIONS)[number]) ? draftModel : DEFAULT_OPENAI_MODEL}
-                  onChange={(event) => {
-                    setDraftModel(event.target.value);
-                    setSettingsMessage(null);
-                  }}
-                  className="w-full bg-terminal-elevated border border-terminal-border rounded px-3 py-2 text-xs text-terminal-text focus:outline-none focus:border-terminal-accent/50"
-                >
-                  {OPENAI_MODEL_OPTIONS.map((model) => (
-                    <option key={model} value={model}>
-                      {model}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-terminal-muted text-xs font-bold tracking-wider mb-2">
-                  OVERVIEW SUMMARY SYSTEM PROMPT
-                </label>
-                <textarea
-                  value={draftSummaryPrompt}
-                  onChange={(event) => {
-                    setDraftSummaryPrompt(event.target.value);
-                    setSettingsMessage(null);
-                  }}
-                  className="min-h-[10rem] w-full resize-y bg-terminal-elevated border border-terminal-border rounded px-3 py-2 text-xs text-terminal-text placeholder-terminal-faint focus:outline-none focus:border-terminal-accent/50"
-                  placeholder="Enter the system prompt used to generate the overview AI summary."
-                />
-                <div className="mt-1 text-[11px] text-terminal-faint">
-                  This prompt only affects Overview summary generation.
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-terminal-faint text-xs">
-                {settingsMessage ?? 'AI preferences are persisted locally.'}
-              </div>
-              <button
-                onClick={handleSaveSettings}
-                className="px-3 py-1.5 rounded border border-terminal-accent/40 bg-terminal-accent/10 text-terminal-accent text-xs hover:bg-terminal-accent/20 transition-colors"
-              >
-                SAVE AI PREFS
-              </button>
-            </div>
-          </div>
+  const tab = useTerminalStore(state => state.settingsTab);
+  const debugMode = useTerminalStore(state => state.debugMode);
+  const setDebugMode = useTerminalStore(state => state.setDebugMode);
+  const setActivePanel = useTerminalStore(state => state.setActivePanel);
+  const appVersion = useAppVersion();
+  return <>
+    <WorkspaceHeader title="SETTINGS">
+      {appVersion && <span className="text-xs text-terminal-faint">{appVersion}</span>}
+    </WorkspaceHeader>
+    <div role="tablist" aria-label="Settings views" className="flex shrink-0 gap-1 px-4 py-2">
+      {tabs.map(({ id, label }) => <button key={id} type="button" role="tab"
+        id={'settings-tab-' + id} aria-controls={'settings-view-' + id} aria-selected={tab === id}
+        tabIndex={tab === id ? 0 : -1} onClick={() => setActivePanel('settings', undefined, id)}
+        onKeyDown={event => {
+          if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+          event.preventDefault();
+          const other = id === 'help' ? 'preferences' : 'help';
+          const next = event.key === 'Home' ? 'preferences' : event.key === 'End' ? 'help' : other;
+          document.getElementById('settings-tab-' + next)?.focus();
+          setActivePanel('settings', undefined, next);
+        }}
+        className={'rounded border px-2.5 py-1 text-xs ' + (tab === id
+          ? 'border-terminal-accent/50 bg-terminal-accent/10 text-terminal-accent'
+          : 'border-transparent text-terminal-muted hover:bg-terminal-hover hover:text-terminal-text')}>
+        {label}
+      </button>)}
+    </div>
+    <div role="tabpanel" id="settings-view-preferences" aria-labelledby="settings-tab-preferences"
+      hidden={tab !== 'preferences'} tabIndex={0} className="min-h-0 flex-1 overflow-y-auto p-4">
+      <div className="max-w-3xl space-y-6">
+        <Connections />
+        <div className="border-t border-[color:var(--section-rule-color)] pt-5"><SummaryPreferences /></div>
+        <div className="border-t border-[color:var(--section-rule-color)] pt-5">
+          <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-terminal-text">
+            <input type="checkbox" checked={debugMode} onChange={event => setDebugMode(event.target.checked)} />
+            Debug mode
+          </label>
         </div>
       </div>
     </div>
-  );
+    <div role="tabpanel" id="settings-view-help" aria-labelledby="settings-tab-help"
+      hidden={tab !== 'help'} tabIndex={0} className="min-h-0 flex-1 overflow-y-auto p-4">
+      <HelpContent />
+    </div>
+  </>;
 }

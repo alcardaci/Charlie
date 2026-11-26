@@ -13,7 +13,7 @@ const PortfolioPanel = lazy(() => import('../panels/PortfolioPanel').then(m => (
 const HeatmapPanel = lazy(() => import('../panels/HeatmapPanel').then(m => ({ default: m.HeatmapPanel })));
 const ForexPanel = lazy(() => import('../panels/ForexPanel').then(m => ({ default: m.ForexPanel })));
 const CryptoPanel = lazy(() => import('../panels/CryptoPanel').then(m => ({ default: m.CryptoPanel })));
-const HelpPanel = lazy(() => import('../panels/HelpPanel').then(m => ({ default: m.HelpPanel })));
+const CongressPanel = lazy(() => import('../panels/CongressPanel'));
 const ETFPanel = lazy(() => import('../panels/ETFPanel').then(m => ({ default: m.ETFPanel })));
 const SettingsPanel = lazy(() => import('../panels/SettingsPanel').then(m => ({ default: m.SettingsPanel })));
 const MultiAssetPanel = lazy(() => import('../panels/MultiAssetPanel').then(m => ({ default: m.MultiAssetPanel })));
@@ -36,12 +36,12 @@ export function MainPanel() {
     // Keep legacy `yield` routes pointed at the merged Macro panel.
     yield: <MacroPanel />,
     etf: <ETFPanel />,
-    help: <HelpPanel />,
+    congress: <CongressPanel />,
     settings: <SettingsPanel />,
   };
 
   return (
-    <div className="h-full overflow-hidden bg-terminal-bg">
+    <div className="instrument-workspace flex h-full min-h-0 flex-col overflow-hidden bg-terminal-bg">
       {!news && <PanelBoundary key={activePanel}>
         <Suspense fallback={<div role="status" className="p-4 text-sm text-terminal-muted">Opening workspace…</div>}>
           {panels[activePanel] ?? <OverviewPanel />}
