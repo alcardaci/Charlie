@@ -1,8 +1,8 @@
 {
   "name": "bterminal",
   "private": true,
-  "version": "1.0.1",
-  "description": "Charlie is a local-first desktop market workspace with integrated charts, macro data, news, and optional user-managed provider connections.",
+  "version": "1.1.0",
+  "description": "A desktop market research app for tracking a portfolio, researching stocks and indices, and following news, economic indicators, prediction markets, and congressional disclosures.",
   "author": "Alberto Cardaci",
   "type": "module",
   "main": "electron/main.mjs",
@@ -70,6 +70,7 @@
     "executableName": "Charlie",
     "npmRebuild": false,
     "asar": false,
+    "beforePack": "scripts/bundle-desktop-config.cjs",
     "afterSign": "scripts/notarize-macos.cjs",
     "directories": {
       "output": "release"
@@ -151,13 +152,7 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
-      "vite.config.ts",
-      "server/gdelt.ts",
-      "server/companionSearch.ts",
-      "server/congress*.ts",
-      "src/data/**/*.ts",
-      "src/utils/secOpportunityEvidence.ts",
-      "src/utils/openaiConfig.ts",
+      "build-assets/desktop-config.mjs",
       "package.json"
     ]
   }

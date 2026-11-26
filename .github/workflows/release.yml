@@ -30,7 +30,10 @@ jobs:
         run: |
           npm run build
           npm run build:icon
-          npx electron-builder --mac zip dmg --publish never
+          npx electron-builder --mac zip dmg --arm64 --publish never
+
+      - name: Launch the packaged Apple Silicon app
+        run: node scripts/check-packaged-startup.mjs release/mac-arm64/Charlie.app/Contents/MacOS/Charlie
 
       - name: Upload macOS installers
         uses: actions/upload-artifact@v4
@@ -42,8 +45,17 @@ jobs:
           if-no-files-found: error
 
   build-windows:
-    name: Build Windows installers
-    runs-on: windows-latest
+    name: Build Windows ${{ matrix.arch }} installers
+    strategy:
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            output: win-unpacked
+          - arch: arm64
+            runner: windows-11-arm
+            output: win-arm64-unpacked
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
     env:
@@ -56,6 +68,7 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 22
+          architecture: ${{ matrix.arch }}
           cache: npm
 
       - name: Install dependencies
@@ -65,12 +78,15 @@ jobs:
         run: |
           npm run build
           npm run build:icon
-          npx electron-builder --win nsis portable --x64 --arm64 --publish never
+          npx electron-builder --win nsis portable --${{ matrix.arch }} --publish never
+
+      - name: Launch the packaged Windows app
+        run: node scripts/check-packaged-startup.mjs release/${{ matrix.output }}/Charlie.exe
 
       - name: Upload Windows installers
         uses: actions/upload-artifact@v4
         with:
-          name: charlie-windows-installers
+          name: charlie-windows-installers-${{ matrix.arch }}
           path: release/*.exe
           if-no-files-found: error
 
@@ -83,6 +99,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Check out release notes from the tag
+        uses: actions/checkout@v6
+
       - name: Download installer artifacts
         uses: actions/download-artifact@v5
         with:
@@ -100,8 +119,13 @@ jobs:
             exit 1
           fi
 
+          notes=(--generate-notes)
+          if [[ -f "docs/releases/$TAG_NAME.md" ]]; then
+            notes=(--notes-file "docs/releases/$TAG_NAME.md")
+          fi
+
           gh release create "$TAG_NAME" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --title "Charlie ${TAG_NAME#v}" \
-            --generate-notes \
+            "${notes[@]}" \
             --latest
