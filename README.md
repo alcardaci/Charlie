@@ -12,7 +12,7 @@ Charlie is a desktop market research app. Build a dashboard around your portfoli
 
 | News and geopolitics | Macroeconomics |
 | --- | --- |
-| ![News headlines, global event map, and geopolitical risk](docs/screenshots/news-geopolitics.png) | ![Economic indicators and their historical trends in Macro](docs/screenshots/macro.png) |
+| ![News workspace with the global event map on the left, headlines in the center, and the live TV player above the geopolitical risk chart on the right](docs/screenshots/news-geopolitics.png) | ![Economic indicators and their historical trends in Macro](docs/screenshots/macro.png) |
 
 | Equity research | Equity chart |
 | --- | --- |
