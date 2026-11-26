@@ -19,6 +19,7 @@ import {
   CompanySnapshotScore,
   CompanyTechnicalOutlook,
   CompanyWorkbench,
+  ResearchWorkbench,
   ConnectionProvider,
   ConnectionStatusMap,
   CountryNewsCount,
@@ -2281,7 +2282,7 @@ export function buildMarketSentimentSnapshot(quotes: Quote[]): MarketSentimentSn
     },
   ];
   const pillars = readings.map(reading => {
-    const times = reading.symbols.map(symbol => sentimentQuoteTime(quoteMap.get(symbol)?.regularMarketTime));
+    const times = reading.symbols.map(symbol => marketQuoteTime(quoteMap.get(symbol)?.regularMarketTime));
     const quoteTime = times.every((t): t is number => t != null) ? Math.min(...times) : null;
     return { ...reading, quoteTime, signal: scoreSignal(reading.score) };
   });
@@ -2298,17 +2299,22 @@ export function buildMarketSentimentSnapshot(quotes: Quote[]): MarketSentimentSn
   };
 }
 
-export async function fetchCompanyWorkbench(symbol: string, options: EquityReadOptions = {}): Promise<CompanyWorkbench | null> {
+export async function fetchCompanyWorkbench(symbol: string, options: EquityReadOptions = {}): Promise<ResearchWorkbench | null> {
   const quote = await fetchQuote(symbol, options);
   options.signal?.throwIfAborted();
   if (!quote) return null;
+
+  const type = normalizeInstrumentType(quote.quoteType) || normalizeInstrumentType(quote.typeDisp);
+  if (type === 'index' || normalizeInstrumentType(quote.typeDisp) === 'index' || ((!type || type === 'unknown' || type === 'none') && quote.symbol.startsWith('^'))) {
+    return { quote, instrumentKind: 'index', instrumentLabel: 'INDEX' };
+  }
 
   if (quote.dataSource === 'teleborsa-fida') {
     const teleborsaWorkbench = await fetchTeleborsaWorkbench(symbol);
     if (teleborsaWorkbench) return teleborsaWorkbench;
   }
 
-  const instrumentKind = instrumentKindFromQuoteType(quote.quoteType);
+  const instrumentKind = instrumentKindFromQuoteType(type);
   const isFund = instrumentKind === 'fund';
   // Yahoo validates every module in a response together. Keep optional filings and
   // profile data independent, so an unfamiliar form cannot discard valid company data.
@@ -4670,7 +4676,7 @@ function sentimentDailyChange(quote: Quote | undefined): number | undefined {
   return Number.isFinite(change) ? change : undefined;
 }
 
-function sentimentQuoteTime(value: Quote['regularMarketTime']): number | null {
+export function marketQuoteTime(value: Quote['regularMarketTime']): number | null {
   if (value == null) return null;
   const time = typeof value === 'string' ? Date.parse(value) : value < 1e12 ? value * 1000 : value;
   return time > 0 && Number.isFinite(new Date(time).getTime()) ? time : null;

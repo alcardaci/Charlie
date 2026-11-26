@@ -1,3 +1,4 @@
+import { indexProfiles, indexReferenceLevels } from '../data/indexResearch';
 import { fmt } from './formatters';
 import { predictionRowsFromPages, trackedMarketCap } from './marketPanelDisplay';
 import type { InfiniteData, QueryClient } from '@tanstack/react-query';
@@ -266,6 +267,16 @@ async function buildEquityContext({ queryClient, state, renderedText }: BuildPan
 
   if (!workbench) {
     return buildBaseContext('equity', 'query-snapshot', `${symbol} research data is unavailable right now.`, { symbol }, renderedText);
+  }
+
+  if (workbench.instrumentKind === 'index') {
+    const { quote } = workbench;
+    return buildBaseContext('equity', renderedText ? 'visible-panel' : 'query-snapshot',
+      `${quote.longName ?? quote.shortName ?? symbol} · ${fmt.price(quote.regularMarketPrice)} index points`, {
+        symbol, instrumentKind: 'index', level: quote.regularMarketPrice, changePoints: quote.regularMarketChange,
+        changePercent: quote.regularMarketChangePercent, quoteTime: quote.regularMarketTime,
+        benchmark: indexProfiles[symbol], referenceLevels: indexReferenceLevels(quote),
+      }, renderedText);
   }
 
   return buildBaseContext(

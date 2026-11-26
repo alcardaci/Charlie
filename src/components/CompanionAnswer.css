@@ -1,0 +1,9 @@
+.companion-answer { overflow-wrap: anywhere; }
+.companion-answer > * + * { margin-top: 0.6em; }
+.companion-answer :is(h1, h2, h3, h4, h5, h6, strong) { font-weight: 700; }
+.companion-answer p { white-space: pre-line; }
+.companion-answer em { font-style: italic; }
+.companion-answer ul { list-style: disc; padding-inline-start: 1.4em; }
+.companion-answer ol { list-style: decimal; padding-inline-start: 1.6em; }
+.companion-answer pre { white-space: pre-wrap; }
+.companion-answer table { display: block; max-width: 100%; overflow-x: auto; }

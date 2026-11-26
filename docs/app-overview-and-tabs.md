@@ -5,7 +5,7 @@
 Charlie is a terminal-style market workspace built with React, Vite, Tailwind, Zustand, and React Query.
 It keeps a command-driven shell around a routed center panel, then layers persistent market context around it:
 
-- `CommandBar`: command entry, panel routing, search/autocomplete, theme and debug toggles. The Companion shortcut appears on other tabs and when AI Insights is hidden in Overview.
+- `CommandBar`: command entry, panel routing, search/autocomplete, and theme switching. The Companion shortcut appears on other tabs and when AI Insights is hidden in Overview.
 - `MarketTicker`: always-on quote strip
 - `MainPanel`: the active workspace
 - `NewsPanel`: either the top half of the combined `NEWS`/`GEO` workspace or a right-hand rail, depending on the current tab
@@ -113,7 +113,7 @@ What it contains:
 - Watchlist beside the portfolio snapshot, stacking below it on narrow screens, with current quotes, 30-day daily-close charts, and links to equity research
 - Prediction-market snapshot
 - Upcoming macro calendar
-- AI Insights pairs the market summary with a Companion prompt. You can choose a model and set web search to automatic or force a search for the next question. Sending opens the conversation in the side panel. Choose **Open conversation** to return to the chat without sending a question.
+- AI Insights pairs the market summary with the Companion. Type a question or choose a suggested prompt and edit it before sending. GPT-6 Luna is the default model. You can choose another model and set web search to automatic or force a search for the next question. Sending opens the conversation in the side panel. Choose **Open conversation** to return to the chat without sending a question.
 
 Data sources:
 
@@ -143,6 +143,7 @@ What it contains:
 - Ownership and holder context
 - Filings/developments
 - Financial statements and ratio-oriented company workbench sections
+- For indices, a level quoted in points, 30 days of daily closes, and comparisons with available reference levels. The five major indices on Overview also link to their providers’ descriptions.
 
 Data sources:
 
@@ -189,8 +190,8 @@ What it contains:
 - Search/archive mode
 - Compact and extended display modes
 - Official geopolitical risk cards and chart
-- Global event map with linked country hotspots below it
-- Live media player and a saved, editable card layout
+- Global event map with a loading indicator above it, an estimated-impact legend, and linked country hotspots below it
+- Live media player that carries its sound setting across channel changes, and a saved, editable card layout
 
 Data sources:
 

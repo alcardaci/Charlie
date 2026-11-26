@@ -14,6 +14,7 @@ import {
   Users,
 } from 'lucide-react';
 import { fetchCompanyFinancials, fetchCompanyWorkbench, fetchQuotes, fetchSecCompanyData } from '../api/finance';
+import { IndexOverview } from '../components/IndexOverview';
 import { mergeCompanyFilings } from '../data/sec';
 import { resolveEquityProfile } from '../utils/equityProfile';
 import { CompanyFinancials, CompanyWorkbench, FinancialPeriodType, SecCompanyData, SecFiling, SecMetricKey, SecMetricObservation } from '../types';
@@ -65,10 +66,13 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
     staleTime: 60000,
   });
 
+  const isIndex = workbench?.instrumentKind === 'index';
+  const company = isIndex ? undefined : workbench;
+
   const { data: financials, isLoading: loadingFinancials, isFetching: fetchingFinancials, error: financialsError, refetch: refetchFinancials } = useQuery({
     queryKey: ['equity-financials', selectedSymbol, periodType],
     queryFn: ({ signal }) => fetchCompanyFinancials(selectedSymbol, periodType, { signal, refresh: manualRefresh.current === selectedSymbol }),
-    enabled: Boolean(workbench) && workbench?.instrumentKind !== 'fund' && tab === 'financials',
+    enabled: Boolean(company) && company?.instrumentKind !== 'fund' && tab === 'financials',
     staleTime: 10 * 60 * 1000,
     gcTime: 30 * 60 * 1000,
   });
@@ -82,7 +86,7 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
     retry: false,
   });
 
-  const sectorEtf = workbench?.sectorContext.sectorEtf;
+  const sectorEtf = company?.sectorContext.sectorEtf;
   const { data: sectorQuote } = useQuery({
     queryKey: ['sector-etf', sectorEtf],
     queryFn: () => fetchQuotes(sectorEtf ? [sectorEtf] : []).then((quotes) => quotes[0] ?? null),
@@ -92,7 +96,7 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
   });
 
   useEffect(() => {
-    if (!workbench) return;
+    if (!workbench || workbench.instrumentKind === 'index') return;
     const validTabs = workbench.instrumentKind === 'fund' ? FUND_TABS : EQUITY_TABS;
     if (!validTabs.some((item) => item.key === tab)) {
       setTab('overview');
@@ -105,7 +109,7 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
     try {
       const requests: Promise<unknown>[] = [refetch()];
       if (workbench?.instrumentKind === 'equity') requests.push(refetchSec());
-      if (workbench && workbench.instrumentKind !== 'fund' && tab === 'financials') requests.push(refetchFinancials());
+      if (company && company.instrumentKind !== 'fund' && tab === 'financials') requests.push(refetchFinancials());
       await Promise.all(requests);
     } finally {
       if (manualRefresh.current === selectedSymbol) manualRefresh.current = null;
@@ -119,7 +123,7 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
   const isFund = workbench.instrumentKind === 'fund';
   const tabs = isFund ? FUND_TABS : EQUITY_TABS;
   const { quote } = workbench;
-  const resolvedProfile = resolveEquityProfile(workbench.profile, secData);
+  const resolvedProfile = company && resolveEquityProfile(company.profile, secData);
   const chgColor = changeColor(quote.regularMarketChangePercent);
   const isPositive = (quote.regularMarketChangePercent ?? 0) >= 0;
   const marketStateLabel = quote.marketState === 'REGULAR'
@@ -131,7 +135,7 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
         : quote.marketState === 'CLOSED' ? 'MARKET CLOSED' : 'SESSION UNAVAILABLE';
   const descriptorLine = isFund
     ? [workbench.fund?.family, workbench.fund?.categoryName, quote.exchange].filter(Boolean).join(' | ')
-    : [resolvedProfile.profile.sector, resolvedProfile.profile.industry, resolvedProfile.profile.country].filter(Boolean).join(' | ');
+    : [resolvedProfile?.profile.sector, resolvedProfile?.profile.industry, resolvedProfile?.profile.country].filter(Boolean).join(' | ');
 
   const fiftyTwoRange = quote.fiftyTwoWeekHigh > quote.fiftyTwoWeekLow
     ? ((quote.regularMarketPrice - quote.fiftyTwoWeekLow) / (quote.fiftyTwoWeekHigh - quote.fiftyTwoWeekLow)) * 100
@@ -143,8 +147,8 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {error && <div role="status" className="px-4 py-2 text-xs text-terminal-negative">Refresh failed. Showing the last available research data. <button className="underline" onClick={refreshResearch}>Retry</button></div>}
-      {secError && secData && <div role="status" className="px-4 py-2 text-xs text-terminal-muted">SEC refresh failed. Showing the last available filings and metrics.</div>}
-      {financialsError && tab === 'financials' && <div role="alert" className="px-4 py-2 text-xs text-terminal-negative">Financial statements could not be refreshed. Available SEC filings remain separate from these estimates.</div>}
+      {!isIndex && secError && secData && <div role="status" className="px-4 py-2 text-xs text-terminal-muted">SEC refresh failed. Showing the last available filings and metrics.</div>}
+      {!isIndex && financialsError && tab === 'financials' && <div role="alert" className="px-4 py-2 text-xs text-terminal-negative">Financial statements could not be refreshed. Available SEC filings remain separate from these estimates.</div>}
       <div className="instrument-section bg-terminal-panel panel-border-b px-3 sm:px-4 py-3 flex-shrink-0">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between lg:gap-4">
           <div className="min-w-0">
@@ -154,7 +158,7 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
                 {workbench.instrumentLabel}
               </span>
               {quote.exchange && <span className="text-terminal-faint text-[11px] sm:text-xs">{quote.exchange}</span>}
-              <span className="text-terminal-faint text-[11px] sm:text-xs">{quote.currency}</span>
+              <span className="text-terminal-faint text-[11px] sm:text-xs">{isIndex ? 'INDEX POINTS' : quote.currency}</span>
               {!isFund && sectorQuote && sectorEtf && (
                 <button
                   onClick={() => setActivePanel('equity', sectorEtf)}
@@ -170,7 +174,7 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
 
           <div className="flex items-center gap-2 sm:justify-end">
             <button type="button" onClick={refreshResearch} disabled={isFetching || fetchingSec || fetchingFinancials}
-              aria-label="Refresh company research" className="inline-flex items-center gap-1.5 rounded border border-terminal-border px-2 py-1.5 text-xs text-terminal-text hover:bg-terminal-hover disabled:opacity-60">
+              aria-label={isIndex ? 'Refresh index research' : 'Refresh company research'} className="inline-flex items-center gap-1.5 rounded border border-terminal-border px-2 py-1.5 text-xs text-terminal-text hover:bg-terminal-hover disabled:opacity-60">
               <RefreshCw size={12} />Refresh
             </button>
             <button
@@ -254,7 +258,7 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
         </div>
       </div>
 
-      <div className="flex flex-col gap-2 px-3 sm:px-4 py-2 panel-border-b bg-terminal-bg flex-shrink-0">
+      {!isIndex && <div className="flex flex-col gap-2 px-3 sm:px-4 py-2 panel-border-b bg-terminal-bg flex-shrink-0">
         <div className="flex items-center gap-1 overflow-x-auto pb-1">
           {tabs.map((item) => (
             <button
@@ -288,10 +292,10 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
             ))}
           </div>
         )}
-      </div>
+      </div>}
 
       <div className="flex-1 overflow-y-auto">
-        {isFund ? (
+        {isIndex ? <IndexOverview quote={quote} /> : isFund ? (
           <>
             {tab === 'overview' && <FundOverviewTab workbench={workbench} />}
             {tab === 'performance' && <FundPerformanceTab workbench={workbench} />}
@@ -300,7 +304,7 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
           </>
         ) : (
           <>
-            {tab === 'overview' && <OverviewTab workbench={workbench} resolvedProfile={resolvedProfile} sectorQuote={sectorQuote} secData={secData} loadingSec={loadingSec} />}
+            {tab === 'overview' && resolvedProfile && <OverviewTab workbench={workbench} resolvedProfile={resolvedProfile} sectorQuote={sectorQuote} secData={secData} loadingSec={loadingSec} />}
             {tab === 'financials' && <FinancialsTab financials={financials} loading={loadingFinancials} currency={quote.currency} />}
             {tab === 'analysis' && <AnalysisTab workbench={workbench} />}
             {tab === 'ownership' && <OwnershipTab workbench={workbench} secData={secData} loadingSec={loadingSec} />}

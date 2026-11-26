@@ -11,6 +11,8 @@ const profile = mkdtempSync(path.join(tmpdir(), 'charlie-headings-'));
 const day = 86_400_000;
 let sp500HistoryRequests = 0;
 const companionRequests = [];
+const formattedReply = '\n\n**Strong move**, *thin volume*. https://example.com/research/' + 'a'.repeat(220);
+let mapStages;
 const companionQuestions = ['What stands out today?', 'What are the predictions for MSFT next quarter?'];
 const companionModels = ['gpt-6.2-sol', 'gpt-6.2-astra'];
 const overviewCardIds = ['summary', 'sentiment', 'indices', 'portfolio', 'watchlist', 'sectors', 'gainers', 'losers', 'commodities', 'fx', 'predictions', 'calendar'];
@@ -46,6 +48,18 @@ app.once('quit', () => rmSync(profile, { recursive: true, force: true }));
 async function localResponse(request) {
   const url = new URL(request.url);
   if (url.origin !== origin) return new Response(null, { status: 404 });
+  if (mapStages && url.pathname === '/api/gdelt/geopolitics' && url.searchParams.get('timeframeHours') === '168') {
+    await mapStages.feed.promise;
+    return Response.json([{ title: 'Canada announces new sanctions', link: 'https://example.com/canada', publishedAt: Date.now() - 3_600_000 }]);
+  }
+  if (mapStages && url.pathname === '/api/openai/geopolitical-events') {
+    await mapStages.review.promise;
+    return Response.json({ events: [{ link: 'headline-1', countryCodes: ['CA'], severityScore: 5 }] });
+  }
+  if (mapStages && url.pathname === '/api/openai/geopolitical-country-summaries') {
+    await mapStages.summary.promise;
+    return Response.json({ summaries: [{ countryCode: 'CA', summary: 'Canada announced new sanctions.' }] });
+  }
   if (url.pathname === '/api/congress/trades') {
     if (url.searchParams.get('refresh') === '1') return new Response(null, { status: 503 });
     const chamber = url.searchParams.get('chamber'), member = url.searchParams.get('member'), ticker = url.searchParams.get('ticker');
@@ -63,7 +77,7 @@ async function localResponse(request) {
     const body = await request.json();
     companionRequests.push(body);
     return Response.json({
-      answer: 'Fixture companion reply ' + companionRequests.length + '.',
+      answer: 'Fixture companion reply ' + companionRequests.length + '.' + formattedReply,
       panels: body.panels, model: body.model, generatedAt: '2025-01-02T12:00:00Z',
     });
   }
@@ -269,7 +283,15 @@ async function measureHeadings({ theme, width, question, replyNumber, companionM
         suggestion.click();
         await until(() => draft.value === suggestion.innerText.trim(), 'selected suggestion fills the draft');
       }
+      const suggested = companion.querySelectorAll('[aria-label="Suggested prompts"] button');
+      if (suggested.length < 1 || suggested.length > 2) throw new Error('Overview Companion should offer one or two prompts');
+      suggested[0].click();
+      const overviewDraft = companion.querySelector('textarea');
+      await until(() => overviewDraft.value === suggested[0].textContent && document.activeElement === overviewDraft, 'suggestion fills and focuses the Overview draft');
+      setValue(overviewDraft, '', 'input');
+      if (document.querySelector(drawerSelector)) throw new Error('Selecting a prompt opened the side panel before sending');
       if (replyNumber === 1) {
+        if (model(companion).value !== 'gpt-6-luna') throw new Error('A new Companion should default to Luna');
         setValue(model(companion), companionModels[0], 'change');
         web(companion).click();
         companion.querySelector('button[aria-label="Open conversation"]').click();
@@ -303,6 +325,14 @@ async function measureHeadings({ theme, width, question, replyNumber, companionM
       }
       const drawer = await until(() => document.querySelector(drawerSelector), 'Companion side panel opened by Overview');
       await until(() => drawer.innerText.includes('Fixture companion reply ' + replyNumber + '.'), 'Companion answer');
+      const answer = Array.from(drawer.querySelectorAll('.companion-answer')).at(-1);
+      if (answer?.querySelector('strong')?.textContent !== 'Strong move' || answer?.querySelector('em')?.textContent !== 'thin volume') {
+        throw new Error('Assistant emphasis should render as strong and italic text');
+      }
+      const url = answer.querySelector('a[href^="https://example.com/research/"]');
+      if (!url || url.href.length < 220 || answer.scrollWidth > answer.clientWidth + 1 || drawer.scrollWidth > drawer.clientWidth + 1) {
+        throw new Error(width + 'px long assistant URL must remain clickable and fit inside the reply');
+      }
       if (model(drawer).value !== companionModels[replyNumber - 1] || web(companion).getAttribute('aria-pressed') !== 'false' || web(drawer).getAttribute('aria-pressed') !== 'false') {
         throw new Error('The model should be kept and web search should return to automatic after the reply');
       }
@@ -444,6 +474,13 @@ async function measureHeadings({ theme, width, question, replyNumber, companionM
     const openSettings = await until(() => visibleTab('help')?.querySelector('[aria-label="Open Settings"]'), 'Help Settings shortcut');
     openSettings.click();
     await until(() => visibleTab('preferences'), 'Settings command returns to preferences');
+
+    const debug = [...visibleTab('preferences').querySelectorAll('label')].find(label => label.textContent.trim() === 'Debug mode')?.control;
+    if (!debug || document.querySelector('.command-bar button[aria-label*="debug" i]')) throw new Error('Debug control should be in Settings only');
+    debug.click();
+    await until(() => debug.checked, 'enable Debug in Settings');
+    debug.click();
+    await until(() => !debug.checked, 'disable Debug in Settings');
 
     const manager = workspace.querySelector('summary[aria-label="Manage FRED connection"]');
     manager.click();
@@ -719,6 +756,42 @@ async function checkOverviewEditor(win) {
   await clickText('Save layout');
 }
 
+async function checkMapLoading(win) {
+  mapStages = { feed: Promise.withResolvers(), review: Promise.withResolvers(), summary: Promise.withResolvers() };
+  const page = script => win.webContents.executeJavaScript(script);
+  async function waitFor(script, description) {
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      if (await page(script)) return;
+      await new Promise(resolve => setTimeout(resolve, 40));
+    }
+    throw new Error(description);
+  }
+  try {
+    await page("window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true }))");
+    const week = "[...document.querySelectorAll('.regional-news-map button')].find(button => button.textContent === '7D')";
+    await waitFor(week + ' !== undefined', 'Event map should offer a weekly lookback');
+    await page(week + '.click()');
+    for (const [phase, label] of [['feed', 'Fetching feeds'], ['review', 'Reviewing events'], ['summary', 'Preparing country summaries']]) {
+      await waitFor(`(() => {
+        const map = document.querySelector('.regional-news-map .map-surface');
+        const status = document.querySelector('.regional-news-map [role="status"]');
+        const loader = status?.querySelector('svg.lucide-loader2');
+        return map?.getAttribute('aria-busy') === 'true' && status.textContent.includes(${JSON.stringify(label)}) &&
+          loader && getComputedStyle(loader).animationName !== 'none' && loader.getBoundingClientRect().bottom <= map.getBoundingClientRect().top;
+      })()`, 'Animated event map status missing during ' + phase);
+      mapStages[phase].resolve();
+    }
+    await waitFor(`(() => {
+      const map = document.querySelector('.regional-news-map .map-surface');
+      return map?.getAttribute('aria-busy') === 'false' && ['Estimated impact', 'low', 'medium', 'high', 'severe'].every(label => map.textContent.includes(label));
+    })()`, 'Finished map should have the four estimated impact levels and no loader');
+  } finally {
+    for (const step of Object.values(mapStages)) step.resolve();
+    mapStages = undefined;
+  }
+}
+
 async function run() {
   const win = new BrowserWindow({ show: false, webPreferences: { partition: 'heading-check', backgroundThrottling: false } });
   const { session } = win.webContents;
@@ -758,9 +831,10 @@ async function run() {
     assert.deepEqual(request.messages.filter(message => message.role === 'user').map(message => message.content), companionQuestions.slice(0, index + 1));
   });
   assert.deepEqual(companionRequests[1].panels, ['overview'], 'A ticker forecast should not implicitly attach the Predictions panel');
-  assert.ok(companionRequests[1].messages.some(message => message.role === 'assistant' && message.content === 'Fixture companion reply 1.'), 'Follow-up includes the earlier reply');
+  assert.ok(companionRequests[1].messages.some(message => message.role === 'assistant' && message.content === 'Fixture companion reply 1.' + formattedReply), 'Follow-up includes the earlier reply');
   assert.ok(!savedState.includes('fixture-only'), 'Provider keys must stay separate from general app preferences');
   await checkOverviewEditor(win);
+  await checkMapLoading(win);
   win.destroy();
   console.log('Workspace navigation, headings, Help, Settings, Overview layout editing and persistence, AI Insights conversations, and 30-day sparklines passed.');
 }

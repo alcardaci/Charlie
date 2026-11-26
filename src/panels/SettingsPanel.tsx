@@ -162,6 +162,8 @@ function SummaryPreferences() {
 
 export function SettingsPanel() {
   const tab = useTerminalStore(state => state.settingsTab);
+  const debugMode = useTerminalStore(state => state.debugMode);
+  const setDebugMode = useTerminalStore(state => state.setDebugMode);
   const setActivePanel = useTerminalStore(state => state.setActivePanel);
   const appVersion = useAppVersion();
   return <>
@@ -191,6 +193,12 @@ export function SettingsPanel() {
       <div className="max-w-3xl space-y-6">
         <Connections />
         <div className="border-t border-[color:var(--section-rule-color)] pt-5"><SummaryPreferences /></div>
+        <div className="border-t border-[color:var(--section-rule-color)] pt-5">
+          <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-terminal-text">
+            <input type="checkbox" checked={debugMode} onChange={event => setDebugMode(event.target.checked)} />
+            Debug mode
+          </label>
+        </div>
       </div>
     </div>
     <div role="tabpanel" id="settings-view-help" aria-labelledby="settings-tab-help"

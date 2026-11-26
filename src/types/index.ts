@@ -119,6 +119,8 @@ export interface Quote {
   regularMarketDayHigh: number;
   regularMarketDayLow: number;
   fiftyTwoWeekHigh: number;
+  fiftyDayAverage?: number;
+  twoHundredDayAverage?: number;
   fiftyTwoWeekLow: number;
   marketCap?: number;
   trailingPE?: number;
@@ -833,6 +835,8 @@ export interface FundWorkbench {
     categoryThreeYearEarningsGrowth?: number | null;
   };
 }
+
+export type ResearchWorkbench = CompanyWorkbench | { instrumentKind: 'index'; instrumentLabel: 'INDEX'; quote: Quote };
 
 export interface CompanyWorkbench {
   quote: Quote;

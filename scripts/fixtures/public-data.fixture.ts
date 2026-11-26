@@ -3,6 +3,7 @@ import { hydrateTerminalState } from '../../src/utils/bootstrapState';
 import { fetchPublicJson } from '../../src/utils/publicRequests';
 import { fetchChartWindow, fetchCompanyWorkbench, fetchGeopoliticalHeadlineCandidates, fetchMacroDashboard, fetchMacroReleaseCalendar } from '../../src/api/finance';
 import { getScreenCommandPanel, shouldUseSearch } from '../../src/utils/commandParsing';
+import { indexReferenceLevels } from '../../src/data/indexResearch';
 import { fmt } from '../../src/utils/formatters';
 
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message); }
@@ -44,15 +45,32 @@ try {
   };
   for (const ticker of ['BSP', 'ANT', 'AAPL']) {
     const workbench = await fetchCompanyWorkbench(ticker);
-    assert(workbench?.profile.longBusinessSummary === ticker + ' description' && workbench.profile.sector === 'Technology' &&
+    assert(workbench && workbench.instrumentKind !== 'index' && workbench.profile.longBusinessSummary === ticker + ' description' && workbench.profile.sector === 'Technology' &&
       workbench.analysis.totalCash === 23 && workbench.filings.length === (ticker === 'AAPL' ? 1 : 0),
     'Isolate profile and analysis data from filing validation failures for ' + ticker);
   }
   newlyPublished = true;
   const refreshed = await fetchCompanyWorkbench('BSP', { refresh: true });
-  assert(refreshed?.profile.fullTimeEmployees === 150 && refreshed.filings.length === 1, 'Manual refresh picks up a new profile field and restored filings');
+  assert(refreshed && refreshed.instrumentKind !== 'index' && refreshed.profile.fullTimeEmployees === 150 && refreshed.filings.length === 1, 'Manual refresh picks up a new profile field and restored filings');
   const reopened = await fetchCompanyWorkbench('BSP');
-  assert(reopened?.profile.fullTimeEmployees === 150 && reopened.filings.length === 1, 'Reopening reuses the refreshed workbench data');
+  assert(reopened && reopened.instrumentKind !== 'index' && reopened.profile.fullTimeEmployees === 150 && reopened.filings.length === 1, 'Reopening reuses the refreshed workbench data');
+  const indexReads: string[] = [];
+  globalThis.fetch = async input => {
+    const url = new URL(String(input), 'http://localhost');
+    const symbol = url.searchParams.get('symbols');
+    indexReads.push(url.pathname);
+    if (!symbol) throw new Error('Unexpected non-quote request for an index');
+    const classification = symbol === '^VIX' ? {} : symbol === 'INDEX-ALIAS' ? { typeDisp: 'Index' } : { quoteType: 'INDEX' };
+    return Response.json([{ symbol, ...classification, regularMarketPrice: 110, regularMarketPreviousClose: 100, fiftyDayAverage: 0 }]);
+  };
+  for (const ticker of ['^GSPC', '^VIX', 'INDEX-ALIAS']) {
+    const index = await fetchCompanyWorkbench(ticker);
+    assert(index?.instrumentKind === 'index', ticker + ' must open index research');
+    const levels = indexReferenceLevels(index.quote);
+    assert(levels.length === 2 && levels[0].points === 10 && levels[0].percent === 10 && levels[1].percent == null,
+      'Use only reported references and distinguish points from percentage change');
+  }
+  assert(indexReads.length === 3 && indexReads.every(path => path.endsWith('/quotes')), 'Index research must skip issuer-specific requests');
   globalThis.fetch = async () => new Response('unavailable', {status:503});
   await fetchPublicJson('/recovery', {cacheMs:1000}).then(() => { throw new Error('Failure incorrectly returned data'); }, () => undefined);
   globalThis.fetch = async () => new Response('{"recovered":true}');

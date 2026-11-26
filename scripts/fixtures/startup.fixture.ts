@@ -31,16 +31,19 @@ try {
   await hydrateTerminalState();
   assert(useTerminalStore.getState().portfolio[0]?.purchaseDate === '2026-01-02', 'Startup must restore saved portfolio into the live store');
   deepStrictEqual(useTerminalStore.getState().overviewLayout, DEFAULT_OVERVIEW_LAYOUT, 'Existing profiles start with the full Overview');
+  assert(useTerminalStore.getState().openAISettings.companionModel === 'gpt-6-luna' && useTerminalStore.getState().openAISettings.model === 'gpt-6-luna', 'Profiles without a saved model start both Companion and Overview summaries on Luna');
   for (const [saved, expected] of [
+    ['gpt-6-luna', 'gpt-6-luna'], ['gpt-6.2-sol', 'gpt-6.2-sol'], ['gpt-6.2-astra', 'gpt-6.2-astra'],
     ['gpt-5.4-nano', 'gpt-6-luna'], ['gpt-5.4-mini', 'gpt-6-luna'],
     ['gpt-5.6-luna', 'gpt-6.2-sol'], ['gpt-5.4', 'gpt-6.2-sol'], ['gpt-5.6-terra', 'gpt-6.2-sol'],
     ['gpt-5.5', 'gpt-6.2-astra'], ['gpt-5.6-sol', 'gpt-6.2-astra'],
   ]) {
     const state = JSON.parse(disk).state;
-    disk = JSON.stringify({ state: { ...state, openAISettings: { ...state.openAISettings, companionModel: saved } }, version: 0 });
+    disk = JSON.stringify({ state: { ...state, openAISettings: { ...state.openAISettings, model: 'gpt-4.1-mini', companionModel: saved } }, version: 0 });
     await hydrateTerminalState();
     assert(useTerminalStore.getState().openAISettings.companionModel === expected, 'Migrate saved Companion tier for ' + saved);
     assert(JSON.parse(disk).state.openAISettings.companionModel === expected, 'Persist the migrated Companion model');
+    assert(useTerminalStore.getState().openAISettings.model === 'gpt-4.1-mini', 'Keep the saved Overview model even if it matches an older default');
   }
   for (const [saved, expected] of [['line', 'area'], ['area', 'area'], ['ohlc', 'ohlc'], ['candlestick', 'candlestick']]) {
     disk = JSON.stringify({ state: { ...JSON.parse(disk).state, chartStyle: saved }, version: 0 });

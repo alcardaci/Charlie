@@ -1,11 +1,13 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { ArrowUp, MessageSquare, PanelRightOpen } from 'lucide-react';
 import { useTerminalStore } from '../store/useTerminalStore';
 import { useCompanionPrompt } from './CompanionPromptContext';
+import { CompanionSuggestions, overviewPrompts } from './CompanionSuggestions';
 import { CompanionPromptControls } from './CompanionPromptControls';
 
 export function OverviewCompanionPrompt() {
   const [prompt, setPrompt] = useState('');
+  const textarea = useRef<HTMLTextAreaElement>(null);
   const { sendPrompt, isSending } = useCompanionPrompt();
   const setCompanionOpen = useTerminalStore(state => state.setCompanionOpen);
   const canSend = Boolean(prompt.trim()) && !isSending;
@@ -26,10 +28,14 @@ export function OverviewCompanionPrompt() {
           <PanelRightOpen size={14} aria-hidden="true" />
         </button>
       </div>
+      <CompanionSuggestions compact prompts={overviewPrompts} onSelect={suggestion => {
+        setPrompt(suggestion);
+        textarea.current?.focus();
+      }} />
       <div className="overview-companion-input">
         <div className="border-b border-terminal-border pb-2"><CompanionPromptControls /></div>
-        <textarea value={prompt} onChange={event => setPrompt(event.target.value)} rows={2}
-          aria-label="Ask AI Companion" placeholder="Ask about the market…"
+        <textarea ref={textarea} value={prompt} onChange={event => setPrompt(event.target.value)} rows={2}
+          aria-label="Ask AI Companion"
           onKeyDown={event => {
             if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();

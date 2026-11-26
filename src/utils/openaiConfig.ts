@@ -1,10 +1,11 @@
 import type { OpenAIHarness, OpenAIHarnessPrompts } from '../types';
 
-export const OPENAI_MODEL_OPTIONS = ['gpt-5', 'gpt-5-mini', 'gpt-4.1', 'gpt-4.1-mini'] as const;
-export const DEFAULT_OPENAI_MODEL = 'gpt-4.1-mini';
+export const DEFAULT_COMPANION_MODEL = 'gpt-6-luna';
+export const DEFAULT_OPENAI_MODEL = DEFAULT_COMPANION_MODEL;
+export const OPENAI_MODEL_OPTIONS = [DEFAULT_OPENAI_MODEL, 'gpt-5', 'gpt-5-mini', 'gpt-4.1', 'gpt-4.1-mini'] as const;
 export const COMPANION_MODEL_OPTIONS = [
   {
-    value: 'gpt-6-luna',
+    value: DEFAULT_COMPANION_MODEL,
     label: 'Fast',
     description: 'Low-cost reasoning for quick explanations and lookups.',
     reasoningEffort: 'low',
@@ -22,7 +23,6 @@ export const COMPANION_MODEL_OPTIONS = [
     reasoningEffort: 'high',
   },
 ] as const;
-export const DEFAULT_COMPANION_MODEL = COMPANION_MODEL_OPTIONS[0].value;
 export function getCompanionModelOption(model?: string) {
   const [fast, balanced, expert] = COMPANION_MODEL_OPTIONS;
   switch (model?.trim()) {

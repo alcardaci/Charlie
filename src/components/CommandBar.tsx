@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, KeyboardEvent, type CSSProperties } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Bot, Bug, Moon, Sparkles, Star, Sun } from 'lucide-react';
+import { Bot, Moon, Sparkles, Star, Sun } from 'lucide-react';
 import { searchSymbols } from '../api/finance';
 import { useTerminalStore } from '../store/useTerminalStore';
 import { shouldUseSearch } from '../utils/commandParsing';
@@ -25,8 +25,6 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
     goHome,
     navHistory,
     setActivePanel,
-    debugMode,
-    toggleDebugMode,
     activePanel,
     overviewLayout,
     companionOpen,
@@ -106,9 +104,6 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
   };
 
   const open = isMarketOpen();
-  const handleDebugToggle = () => {
-    toggleDebugMode();
-  };
 
   return (
     <div
@@ -225,20 +220,6 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
           <Bot size={12} />
           <span className="hidden lg:inline">AI COMPANION</span>
         </button>}
-        <button
-          onClick={handleDebugToggle}
-          className={`flex items-center gap-1.5 rounded border px-2 py-1 text-xs transition-colors ${
-            debugMode
-              ? 'border-terminal-accent/50 bg-terminal-accent/12 text-terminal-accent'
-              : 'border-terminal-border text-terminal-muted hover:border-terminal-accent/40 hover:bg-terminal-hover hover:text-terminal-accent'
-          }`}
-          title={debugMode ? 'Disable debug mode' : 'Enable debug mode'}
-          aria-label={debugMode ? 'Disable debug mode' : 'Enable debug mode'}
-          style={electronNoDragStyle}
-        >
-          <Bug size={12} />
-          <span className="hidden lg:inline">{debugMode ? 'DEBUG ON' : 'DEBUG'}</span>
-        </button>
         <button
           onClick={toggleTheme}
           className="flex items-center gap-1.5 rounded border border-terminal-border px-2 py-1 text-xs text-terminal-muted transition-colors hover:border-terminal-accent/40 hover:bg-terminal-hover hover:text-terminal-accent"

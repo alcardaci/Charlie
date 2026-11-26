@@ -476,7 +476,7 @@ function useGeopoliticsMonitorState() {
   const [showPayloadDebug, setShowPayloadDebug] = useState(false);
   const { openAISettings, updateOpenAISettings, debugMode } = useTerminalStore();
   const geopoliticsModel = openAISettings.geopoliticsModel?.trim() || DEFAULT_GEOPOLITICS_OPENAI_MODEL;
-  const { data: keyStatus, isPending: checkingKey, isError: keyCheckFailed, refetch: refetchKey } = useQuery({ queryKey: ['openai-key-status'], queryFn: fetchOpenAIKeyStatus, staleTime: 30_000 });
+  const { data: keyStatus, isLoading: checkingKey, isError: keyCheckFailed, refetch: refetchKey } = useQuery({ queryKey: ['openai-key-status'], queryFn: fetchOpenAIKeyStatus, staleTime: 30_000 });
   const aiAvailable = keyStatus?.configured ?? openAISettings.hasStoredApiKey;
   useEffect(() => {
     if (typeof keyStatus?.configured === 'boolean' && keyStatus.configured !== openAISettings.hasStoredApiKey)
@@ -558,12 +558,19 @@ function useGeopoliticsMonitorState() {
     scanStatusLabel = 'Partial coverage';
     analysisLabel = 'Events reviewed with OpenAI using the available headlines.';
   }
+  let activityLabel: string | undefined;
+  if (!aiAvailable && checkingKey) activityLabel = 'Connecting';
+  else if (aiAvailable) {
+    if (analysis.isFetching) activityLabel = 'Reviewing events';
+    else if (yahoo.isFetching || gdelt.isFetching) activityLabel = 'Fetching feeds';
+    else if (summaries.fetchingCountrySummaries) activityLabel = 'Preparing country summaries';
+  }
   return {
     timeframe, setTimeframe, debugMode, geopoliticsModel, openAISettings, scanStatus, scanStatusLabel, source, analysisLabel, hasArchive, hasReview,
     showPromptDebug, setShowPromptDebug, showPayloadDebug, setShowPayloadDebug,
     countryCounts: summaries.countryCounts, fetchingCountrySummaries: summaries.fetchingCountrySummaries,
     fetchingCountryCounts: yahoo.isFetching || gdelt.isFetching || analysis.isFetching,
-    loadingCountryCounts: pendingFeeds && !headlines.length,
+    activityLabel,
     refetchCountryCounts: () => {
       void yahoo.refetch();
       void gdelt.refetch();
@@ -711,7 +718,7 @@ export function NewsEventCard() {
       countryData={state.countryCounts} topicLabel="GEOPOLITICAL" timeframeLabel={timeframe.label}
       timeframeOptions={TIMEFRAMES} activeTimeframeKey={timeframe.key}
       onTimeframeChange={key => { const next = TIMEFRAMES.find(t => t.key === key); if (next) state.setTimeframe(next); }}
-      showDebugSources={state.debugMode} isLoading={state.loadingCountryCounts}
+      showDebugSources={state.debugMode} activityLabel={state.activityLabel}
       scanStatus={state.scanStatus} scanStatusLabel={state.scanStatusLabel} showHotspotsSection={state.hasReview}
       sourceNote={state.source} archiveMode={state.hasArchive} analysisNote={state.analysisLabel}
       headerActions={<GeopoliticsMonitorControls state={state} />}

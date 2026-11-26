@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
@@ -24,13 +24,17 @@ import type {
   PanelType,
 } from '../types';
 import {
-  COMPANION_MODEL_OPTIONS,
+  getCompanionModelOption,
   DEFAULT_PANEL_COMPANION_SYSTEM_PROMPT,
 } from '../utils/openaiConfig';
 import { getPanelReferences, PANEL_MENTION_OPTIONS, type PanelMentionOption } from '../utils/companionPanelReferences';
 import { buildCompanionContexts, getCompanionPanelLabel } from '../utils/panelCompanionContext';
+import { CompanionLink } from './CompanionLink';
+import { CompanionSuggestions, overviewPrompts } from './CompanionSuggestions';
 import { CompanionPromptContext } from './CompanionPromptContext';
 import { CompanionPromptControls } from './CompanionPromptControls';
+
+const CompanionAnswer = lazy(() => import('./CompanionAnswer').then(({ CompanionAnswer }) => ({ default: CompanionAnswer })));
 
 type PanelCompanionProps = {
   children: ReactNode;
@@ -49,7 +53,7 @@ type PanelMentionTrigger = {
 
 const PANEL_SUGGESTIONS: Partial<Record<PanelType, string[]>> = {
   overview: [
-    'What changed most across this market snapshot?',
+    overviewPrompts[0],
     'What cross-asset pattern might a human miss here?',
     'Summarize the biggest risks and opportunities on this page.',
   ],
@@ -116,7 +120,7 @@ const PANEL_SUGGESTIONS: Partial<Record<PanelType, string[]>> = {
 };
 
 const GENERAL_SUGGESTIONS = [
-  'What are the most important market developments from the last hour?',
+  overviewPrompts[1],
   'Research where BTC could trade six months from now and explain the main scenarios.',
   'Explain today’s latest central-bank decisions and why they matter for investors.',
 ];
@@ -284,8 +288,7 @@ export function PanelCompanion({ children, mainPanelRef, sideNewsRef, sideNewsVi
   );
 
   const activePanelLabel = getCompanionPanelLabel(activePanel);
-  const selectedModelOption = COMPANION_MODEL_OPTIONS.find((option) => option.value === openAISettings.companionModel)
-    ?? COMPANION_MODEL_OPTIONS[0];
+  const selectedModelOption = getCompanionModelOption(openAISettings.companionModel);
   const panelSuggestion = PANEL_SUGGESTIONS[activePanel]?.[0]
     ?? `Help me understand the most important takeaway from ${activePanelLabel.toLowerCase()}.`;
   const suggestions = [
@@ -671,7 +674,7 @@ export function PanelCompanion({ children, mainPanelRef, sideNewsRef, sideNewsVi
                 return (
                   <div key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                     <div
-                      className={`max-w-[92%] rounded-2xl border px-3 py-2.5 text-xs leading-relaxed ${
+                      className={`min-w-0 max-w-[92%] [overflow-wrap:anywhere] rounded-2xl border px-3 py-2.5 text-xs leading-relaxed ${
                         message.role === 'user'
                           ? 'border-terminal-accent/30 bg-terminal-accent/10 text-terminal-text'
                           : message.error
@@ -679,23 +682,25 @@ export function PanelCompanion({ children, mainPanelRef, sideNewsRef, sideNewsVi
                             : 'border-terminal-border bg-terminal-elevated text-terminal-text'
                       }`}
                     >
-                      <div className="whitespace-pre-wrap">
-                        {message.content || (message.role === 'assistant' && isLoading ? '...' : '')}
-                      </div>
+                      {message.role === 'assistant' && !message.error ? (
+                        <Suspense fallback={<div className="whitespace-pre-wrap">{message.content}</div>}>
+                          <CompanionAnswer text={message.content || (isLoading ? '…' : '')} />
+                        </Suspense>
+                      ) : (
+                        <div className="whitespace-pre-wrap">{message.content}</div>
+                      )}
                       {message.webSearchCitations && message.webSearchCitations.length > 0 && (
                         <div className="mt-3 space-y-1 border-t border-terminal-border/70 pt-2">
                           <div className="text-[10px] font-bold tracking-[0.16em] text-terminal-faint">SOURCES</div>
                           {message.webSearchCitations.map((citation) => (
-                            <a
+                            <CompanionLink
                               key={`${message.id}-${citation.url}`}
                               href={citation.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="block truncate text-[11px] text-terminal-accent transition-colors hover:text-terminal-text"
+                              className="block text-[11px] text-terminal-accent transition-colors hover:text-terminal-text"
                               title={citation.url}
                             >
-                              {citation.title}
-                            </a>
+                              {citation.title || citation.url}
+                            </CompanionLink>
                           ))}
                         </div>
                       )}
@@ -747,21 +752,10 @@ export function PanelCompanion({ children, mainPanelRef, sideNewsRef, sideNewsVi
               })}
 
               {!hasUserMessages && !isLoading && (
-                <div role="group" aria-label="Suggested prompts">
-                  <h3 className="text-[10px] font-bold tracking-[0.18em] text-terminal-faint">SUGGESTED PROMPTS</h3>
-                  <div className="mt-2 grid gap-1.5">
-                    {suggestions.map((suggestion) => (
-                      <button
-                        key={suggestion}
-                        type="button"
-                        onClick={() => setDraft(suggestion)}
-                        className="rounded border border-terminal-border bg-terminal-elevated px-2.5 py-2 text-left text-[11px] leading-relaxed text-terminal-muted transition-colors hover:border-terminal-accent/35 hover:text-terminal-text"
-                      >
-                        {suggestion}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                <CompanionSuggestions prompts={suggestions} onSelect={suggestion => {
+                  setDraft(suggestion);
+                  textareaRef.current?.focus();
+                }} />
               )}
 
               {isLoading && (

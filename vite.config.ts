@@ -14,6 +14,7 @@ import react from '@vitejs/plugin-react'
 import { getCrumbClear } from 'yahoo-finance2/lib/getCrumb'
 import {
   DEFAULT_GEOPOLITICS_EVENT_SYSTEM_PROMPT,
+  DEFAULT_OPENAI_MODEL,
   DEFAULT_OVERVIEW_SUMMARY_SYSTEM_PROMPT,
   DEFAULT_PANEL_COMPANION_SYSTEM_PROMPT,
   DEFAULT_THEME_DISCOVERY_RECOMMENDATION_SYSTEM_PROMPT,
@@ -4948,14 +4949,13 @@ function marketDataMiddleware(): Plugin {
         try {
           const rawBody = await readRequestBody(req)
           const payload = rawBody ? JSON.parse(rawBody) : {}
-          const model = typeof payload.model === 'string' ? payload.model.trim() : ''
+          const model = (typeof payload.model === 'string' && payload.model.trim()) || DEFAULT_OPENAI_MODEL
           const harness = payload.harness === 'custom' ? 'custom' : 'comprehensive'
           const systemPrompt = typeof payload.systemPrompt === 'string' ? payload.systemPrompt.trim() : ''
           const snapshot = payload.snapshot
 
           const apiKey = await readConnectionSecret('openai')
           if (!apiKey) return sendError(res, 'OpenAI API key is not stored locally yet.', 400)
-          if (!model) return sendError(res, 'OpenAI model is required.', 400)
           if (!snapshot || typeof snapshot !== 'object') return sendError(res, 'Overview snapshot is required.', 400)
 
           const instructions = [DEFAULT_OVERVIEW_SUMMARY_SYSTEM_PROMPT, systemPrompt]
@@ -4964,6 +4964,7 @@ function marketDataMiddleware(): Plugin {
 
           const openAIResponse = await fetchOpenAIResponse(req, res, apiKey, {
               model,
+              ...(model === DEFAULT_OPENAI_MODEL && { reasoning: { effort: 'low' } }),
               instructions,
               input: `Summarize this market overview snapshot for a professional terminal user using only the provided snapshot data.\n\n${JSON.stringify(snapshot, null, 2)}`,
             })

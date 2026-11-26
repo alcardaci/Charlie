@@ -1,7 +1,7 @@
 import type { MutableRefObject, ReactNode } from 'react';
 import { useId, useLayoutEffect, useRef, useState } from 'react';
 import { ComposableMap, Geographies, Geography, Marker, ZoomableGroup } from 'react-simple-maps';
-import { Globe2, Minus, Plus, Zap } from 'lucide-react';
+import { Globe2, Loader2, Minus, Plus, Zap } from 'lucide-react';
 import type { CountryNewsCount, GeopoliticalScanStatus, NewsItem } from '../types';
 import worldCountries110m from '../data/worldCountries110m.json';
 import { fmt } from '../utils/formatters';
@@ -31,11 +31,9 @@ interface RegionalNewsMapProps {
   onTimeframeChange: (key: string) => void;
   onCountrySelect?: (countryKey: string) => void;
   showDebugSources?: boolean;
-  isRefreshing?: boolean;
-  isLoading?: boolean;
+  activityLabel?: string;
   scanStatus?: GeopoliticalScanStatus;
   scanStatusLabel?: string;
-  scanProgressLabel?: string;
   showHotspotsSection?: boolean;
   headerActions?: ReactNode;
   sourceNote: string;
@@ -172,11 +170,9 @@ export function RegionalNewsMap({
   onTimeframeChange,
   onCountrySelect,
   showDebugSources = false,
-  isRefreshing = false,
-  isLoading = false,
+  activityLabel,
   scanStatus = 'idle',
   scanStatusLabel,
-  scanProgressLabel,
   showHotspotsSection = true,
   headerActions,
   sourceNote,
@@ -265,12 +261,12 @@ export function RegionalNewsMap({
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="space-y-1 px-3 py-2 text-[10px] text-terminal-muted" role="status">
           <div className="flex flex-wrap items-center gap-2 text-[11px] text-terminal-faint">
-            {scanStatusLabel && (
-              <span className={`rounded border px-2 py-0.5 font-bold tracking-[0.18em] ${scanStatusTone}`}>
-                {scanStatusLabel.toUpperCase()}
+            {(activityLabel || scanStatusLabel) && (
+              <span className={`inline-flex items-center gap-1.5 rounded border px-2 py-0.5 font-bold uppercase tracking-[0.18em] ${activityLabel ? 'border-terminal-accent/35 text-terminal-accent' : scanStatusTone}`}>
+                {activityLabel && <Loader2 aria-hidden="true" size={14} className="shrink-0 motion-safe:animate-spin" />}
+                {activityLabel || scanStatusLabel}
               </span>
             )}
-            {scanProgressLabel && <span className="text-terminal-faint/70">{scanProgressLabel}</span>}
             {showHotspotsSection && (
               <>
                 <span className="flex items-center gap-1">
@@ -290,8 +286,7 @@ export function RegionalNewsMap({
           </div>
           {assessmentStamp && <time className="text-[10px] text-terminal-faint" title="Last completed review">{assessmentStamp}</time>}
         </div>
-        <div className={`map-surface relative mx-2 min-h-[8rem] overflow-hidden rounded ${showHotspotsSection ? 'h-[43%] shrink-0' : 'mb-2 flex-1'}`}>
-          {isLoading && <div role="status" className="pointer-events-none absolute left-2 top-2 z-10 rounded bg-terminal-panel/95 px-2 py-1 text-[10px] text-terminal-muted">Fetching news feeds…</div>}
+        <div aria-busy={Boolean(activityLabel)} className={`map-surface relative mx-2 min-h-[8rem] overflow-hidden rounded ${showHotspotsSection ? 'h-[43%] shrink-0' : 'mb-2 flex-1'}`}>
           {/* Zoom controls */}
           <div className="absolute right-2 top-2 z-10 flex flex-col gap-1">
             <button
@@ -320,8 +315,8 @@ export function RegionalNewsMap({
           </div>
 
           {/* Legend */}
-          {activeCountries.length > 0 && <div className="absolute bottom-3 left-3 z-10 flex items-center gap-2.5 rounded border border-terminal-border bg-terminal-panel/95 px-3 py-1.5 backdrop-blur-sm pointer-events-none">
-            <span className="text-[9px] font-bold tracking-[0.24em] text-terminal-muted">AI IMPACT</span>
+          {activeCountries.length > 0 && <div className="pointer-events-none absolute bottom-3 left-3 z-10 flex max-w-[calc(100%-1.5rem)] flex-wrap items-center gap-x-2.5 gap-y-1 rounded border border-terminal-border bg-terminal-panel/95 px-3 py-1.5 backdrop-blur-sm">
+            <span className="text-[9px] font-bold uppercase tracking-[0.18em] text-terminal-muted">Estimated impact</span>
             {SEVERITY_LEVELS.map((level) => (
               <span key={level} className="flex items-center gap-1 text-[9px] uppercase text-terminal-text">
                 <span className="inline-block h-2 w-2 rounded-sm" style={{ backgroundColor: MAP_DOT_COLORS[level] }} />

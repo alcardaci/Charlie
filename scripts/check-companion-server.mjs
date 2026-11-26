@@ -10,6 +10,9 @@ import { build } from 'esbuild';
 const profile = await mkdtemp(resolve('node_modules', '.charlie-companion-check-'));
 const originalFetch = globalThis.fetch;
 try {
+  const answerFixture = join(profile, 'companion-answer.mjs');
+  await build({ entryPoints: ['scripts/fixtures/companion-answer.fixture.tsx'], outfile: answerFixture, bundle: true, format: 'esm', platform: 'node', packages: 'external', jsx: 'automatic', loader: { '.css': 'empty' } });
+  await import(pathToFileURL(answerFixture).href);
   const osStub = join(profile, 'os.mjs');
   const bundle = join(profile, 'middleware.mjs');
   await writeFile(osStub, `export const homedir = () => ${JSON.stringify(profile)};`);
@@ -44,7 +47,7 @@ try {
   };
 
   // Drive the registered HTTP handler without opening a listening socket or contacting a provider.
-  async function ask(question, { model = 'gpt-6-luna', history = [], forceWebSearch = false, webSearch = true, search, stream = false } = {}) {
+  async function ask(question, { model, history = [], forceWebSearch = false, webSearch = true, search, stream = false } = {}) {
     searchStatus = search;
     upstream = null;
     const activePanel = 'chart';
@@ -53,7 +56,11 @@ try {
       contexts: [{ panel: activePanel, title: 'Equity chart', summary: 'AAPL chart on screen',
         renderedText: 'AAPL 1Y chart', source: 'visible-panel', data: { symbol: 'AAPL' } }],
     };
-    const req = Object.assign(Readable.from([Buffer.from(JSON.stringify(payload))]), { url: '/api/openai/panel-chat', method: 'POST' });
+    return request('/api/openai/panel-chat', payload);
+  }
+
+  async function request(endpoint, payload) {
+    const req = Object.assign(Readable.from([Buffer.from(JSON.stringify(payload))]), { url: endpoint, method: 'POST' });
     const res = Object.assign(new EventEmitter(), { statusCode: 200, body: '',
       setHeader() {}, writeHead(code) { this.statusCode = code; }, write(text) { this.body += text; },
       end(text = '') { this.body += text; this.writableEnded = true; },
@@ -63,14 +70,23 @@ try {
       await handler(req, res, () => { passed = true; });
       if (!passed) break;
     }
-    assert.ok(res.writableEnded, 'Companion endpoint responded');
+    assert.ok(res.writableEnded, `${endpoint} responded`);
     return res;
   }
+
+  const summary = await request('/api/openai/overview-summary', { snapshot: {} });
+  assert.equal(summary.statusCode, 200);
+  assert.equal(JSON.parse(summary.body).model, 'gpt-6-luna');
+  assert.equal(upstream.reasoning.effort, 'low');
+  await request('/api/openai/overview-summary', { model: 'gpt-4.1-mini', snapshot: {} });
+  assert.equal(upstream.model, 'gpt-4.1-mini');
+  assert.equal(upstream.reasoning, undefined);
 
   const priceQuestion = 'What are the predictions for MSFT next quarter?';
   const history = [{ role: 'user', content: 'Explain this chart.' }, { role: 'assistant', content: 'This chart shows AAPL.' }];
   const researched = await ask(priceQuestion, { history, search: 'completed' });
   assert.equal(researched.statusCode, 200);
+  assert.equal(upstream.model, 'gpt-6-luna');
   assert.equal(upstream.tool_choice, 'required');
   assert.deepEqual(upstream.tools.map(tool => tool.type), ['web_search']);
   assert.equal(upstream.reasoning.effort, 'low');
