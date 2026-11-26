@@ -5,6 +5,7 @@ import { fetchQuotes, searchSymbols } from '../api/finance';
 import { useTerminalStore } from '../store/useTerminalStore';
 import { changeColor, fmt } from '../utils/formatters';
 import { DailyCloseSparkline } from './DailyCloseSparkline';
+import { OverviewSectionHeader } from './OverviewSectionHeader';
 
 export function OverviewWatchlist({ sectionRef }: { sectionRef?: Ref<HTMLElement> }) {
   const { watchlist, addToWatchlist, removeFromWatchlist, setActivePanel, activeSymbol } = useTerminalStore();
@@ -51,8 +52,7 @@ export function OverviewWatchlist({ sectionRef }: { sectionRef?: Ref<HTMLElement
   return (
     <section id="overview-watchlist" aria-label="Watchlist" ref={sectionRef} tabIndex={-1}
       className="min-w-0 scroll-mt-3 [container-type:inline-size] focus-visible:outline focus-visible:outline-1 focus-visible:outline-terminal-accent">
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="instrument-heading text-xs font-bold tracking-wider">WATCHLIST</h2>
+      <OverviewSectionHeader title="WATCHLIST">
         <div className="flex items-center gap-2">
           {dataUpdatedAt > 0 && (
             <time dateTime={new Date(dataUpdatedAt).toISOString()} className="text-[11px] text-terminal-faint">
@@ -70,7 +70,7 @@ export function OverviewWatchlist({ sectionRef }: { sectionRef?: Ref<HTMLElement
             <Plus size={12} />ADD SYMBOL
           </button>
         </div>
-      </div>
+      </OverviewSectionHeader>
 
       {adding && (
         <form onSubmit={event => { event.preventDefault(); addSymbol(input); }}

@@ -1,205 +1,128 @@
-import type { ReactNode } from 'react';
 import { WorkspaceHeader } from '../components/WorkspaceHeader';
 import { workspaceShortcuts } from '../data/workspaceShortcuts';
 import { useTerminalStore } from '../store/useTerminalStore';
 import { useAppVersion } from '../utils/appVersion';
 
-const WORKSPACES = [
-  { title: 'Market Overview', command: 'HOME', summary: 'Cross-asset pulse, movers, sentiment, portfolio snapshot, macro calendar, and prediction-market forecasts.' },
-  { title: 'News + Geopolitics', command: 'NEWS', summary: 'Yahoo Finance and GDELT headlines, live TV, and the published risk index. Connect OpenAI in Settings for the event map and country summaries.' },
-  { title: 'Portfolio', command: 'PORT', summary: 'Lots, cost basis, exposures, and editable portfolio bookkeeping.' },
-  { title: 'Research Workspace', command: 'AAPL', summary: 'Ticker-level company stats, leadership, filings, segment data, and analyst context.' },
-  { title: 'Chart View', command: 'MSFT GP', summary: 'Interactive price action with multiple chart styles and timeframes.' },
-  { title: 'Heatmap', command: 'HEAT', summary: 'Curated equity sample with reported-cap or equal-size views, quote coverage, breadth, and symbol research links.' },
-  { title: 'Macro + Yield Monitor', command: 'MACRO', summary: 'Macro dashboard, release calendar, and Treasury yield-curve tools.' },
-  { title: 'Forex', command: 'FX', summary: 'Currency monitor with custom pair selection and quick conversion.' },
-  { title: 'ETF Monitor', command: 'ETF', summary: 'Sector, fixed income, commodity, and international ETF lookup.' },
-  { title: 'Crypto', command: 'CRYPTO', summary: 'Crypto market breadth, leaders, and ranking-driven workflows.' },
-  { title: 'Prediction Markets', command: 'PRED', summary: 'Market-implied probabilities, themes, liquidity, and event metadata.' },
-  { title: 'Connections & AI Settings', command: 'SETTINGS', summary: 'Manage local provider credentials and the OpenAI model/prompt used by AI-assisted workflows.' },
+const COMMAND_EXAMPLES = [
+  { command: 'AAPL', description: 'Open Apple in Equity Research. You can also search by company name.' },
+  { command: 'MSFT GP', description: 'Open Microsoft’s price chart. Use GP after any ticker.' },
+  { command: 'WL', description: 'Open your watchlist. To add a ticker, type AAPL WL in the command bar.' },
+  { command: 'HOME', description: 'Customize Overview. Choose Edit layout to move, resize, add, or remove cards, then Save layout.' },
 ] as const;
 
-const KEYBOARD = [
-  { key: 'UP / DOWN', desc: 'Navigate command history in the command bar.' },
-  { key: 'ENTER', desc: 'Execute the command or open the first search match.' },
-  { key: 'TAB', desc: 'Accept the top autocomplete result while typing.' },
-  { key: 'ESC', desc: 'Clear the current command or close the dropdown.' },
-  { key: 'F1-F12', desc: workspaceShortcuts.map(({ key, name }) => `${key} ${name}`).join(' · ') },
+const KEYS = [
+  ['Enter', 'Run a command or open the first search result.'],
+  ['Tab', 'Open the first suggestion when matches are visible.'],
+  ['↑ / ↓', 'Recall earlier commands.'],
+  ['Esc', 'Clear the input and leave the command bar.'],
 ] as const;
 
-const DATA_SOURCES = [
-  {
-    name: 'Yahoo Finance',
-    coverage: 'Equities, ETFs, indices, forex, futures, company fundamentals, and headline search/feed data.',
-    note: 'yahoo-finance2 package',
-  },
-  {
-    name: 'SEC EDGAR',
-    coverage: 'Official company filings and reported financial data.',
-    note: 'Public SEC data',
-  },
-  {
-    name: 'Teleborsa / FIDA',
-    coverage: 'Fallback quote/workbench/search data for select mutual funds not reliably covered by Yahoo.',
-    note: 'Public web parsing',
-  },
-  {
-    name: 'BLS',
-    coverage: 'U.S. labour, prices, and productivity statistics.',
-    note: 'Public BLS API',
-  },
-  {
-    name: 'OECD',
-    coverage: 'Cross-country economic indicators and confidence data.',
-    note: 'Public OECD SDMX API',
-  },
-  {
-    name: 'Eurostat',
-    coverage: 'Euro Area / EU labour, prices, production, and retail statistics.',
-    note: 'Public Eurostat API',
-  },
-  {
-    name: 'CoinGecko',
-    coverage: 'Cryptocurrency spot prices, rankings, market cap, and sparkline data.',
-    note: 'Public API',
-  },
-  {
-    name: 'Polymarket',
-    coverage: 'Prediction market probabilities, liquidity, 24-hour volume, and event metadata.',
-    note: 'Public Gamma API',
-  },
-  {
-    name: 'FRED',
-    coverage: 'US and G10 macro series plus release date support for the calendar views.',
-    note: 'Configured in Settings',
-  },
-  {
-    name: 'Finnhub',
-    coverage: 'Earnings calendar data used in macro calendar views.',
-    note: 'Configured in Settings',
-  },
-  {
-    name: 'Caldara-Iacoviello GPR',
-    coverage: 'Official geopolitical risk time series (daily GPR, acts, threats, and moving averages).',
-    note: 'Public dataset',
-  },
-  {
-    name: 'GDELT DOC and Global Knowledge Graph',
-    coverage: 'Search results and quarter-hour archive batches supply linked articles for the event map.',
-    note: 'Public API',
-  },
+const SOURCES = [
+  ['Yahoo Finance', 'Market quotes, charts, fundamentals, and headlines.'],
+  ['SEC EDGAR', 'Company filings and reported financials.'],
+  ['Teleborsa / FIDA', 'Fallback quotes and search for selected funds.'],
+  ['BLS, OECD, Eurostat', 'U.S., European, and cross-country economic indicators.'],
+  ['FRED', 'Economic series and release dates.'],
+  ['Finnhub', 'Earnings calendars.'],
+  ['CoinGecko', 'Crypto prices and market-cap rankings.'],
+  ['Polymarket', 'Market-implied probabilities and trading activity.'],
+  ['GDELT', 'Global coverage from article search and news archives.'],
+  ['Caldara–Iacoviello', 'The Geopolitical Risk Index.'],
 ] as const;
 
-const EXCHANGE_NOTES = [
-  { suffix: '.L', exchange: 'London Stock Exchange (LSE)' },
-  { suffix: '.DE', exchange: 'Deutsche Borse / XETRA (Germany)' },
-  { suffix: '.AS', exchange: 'Euronext Amsterdam' },
-  { suffix: '.PA', exchange: 'Euronext Paris' },
-  { suffix: '.MI', exchange: 'Borsa Italiana (Milan)' },
-  { suffix: '.T', exchange: 'Tokyo Stock Exchange' },
-  { suffix: '.HK', exchange: 'Hong Kong Stock Exchange' },
-  { suffix: '.SS', exchange: 'Shanghai Stock Exchange' },
+const EXCHANGES = [
+  ['.L', 'London'], ['.DE', 'Xetra'], ['.AS', 'Amsterdam'], ['.PA', 'Paris'],
+  ['.MI', 'Milan'], ['.T', 'Tokyo'], ['.HK', 'Hong Kong'], ['.SS', 'Shanghai'],
 ] as const;
 
-function SectionCard({
-  title,
-  children,
-}: {
-  title: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className="instrument-card rounded border border-terminal-border bg-terminal-panel p-4">
-      <h2 className="instrument-heading mb-3 text-xs font-bold tracking-wider">{title}</h2>
-      {children}
-    </section>
-  );
-}
+const heading = 'instrument-heading mb-2 text-xs font-bold tracking-wider';
+const focus = 'focus-visible:outline focus-visible:outline-1 focus-visible:outline-terminal-accent';
+const disclosure = 'cursor-pointer py-3 font-semibold text-terminal-text marker:text-terminal-accent hover:text-terminal-accent ' + focus;
 
 export function HelpPanel() {
-  const { executeCommand } = useTerminalStore();
+  const executeCommand = useTerminalStore(state => state.executeCommand);
   const appVersion = useAppVersion();
-  const workspaces = WORKSPACES;
 
   return (
     <>
       <WorkspaceHeader title="HELP">
         {appVersion && <span className="text-terminal-faint font-mono text-xs">{appVersion}</span>}
       </WorkspaceHeader>
-      <div className="section-stack min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto p-5 xl:p-6">
-        <SectionCard title="DEDICATED WORKSPACES">
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-            {workspaces.map(({ title, command, summary }) => (
-              <button
-                key={title}
-                onClick={() => executeCommand(command)}
-                className="instrument-section rounded border border-terminal-border bg-terminal-elevated p-3 text-left hover:border-terminal-accent/40 hover:bg-terminal-hover transition-colors"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-terminal-text text-xs font-bold">{title}</span>
-                  <span className="text-terminal-accent text-[11px] font-mono">{command}</span>
-                </div>
-                <div className="mt-2 text-terminal-muted text-xs leading-relaxed">{summary}</div>
-              </button>
-            ))}
-          </div>
-        </SectionCard>
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <SectionCard title="KEYBOARD SHORTCUTS">
-            <div className="space-y-2">
-              {KEYBOARD.map(({ key, desc }) => (
-                <div key={key} className="instrument-section flex items-start gap-3 rounded border border-terminal-border bg-terminal-elevated px-3 py-2">
-                  <span className="min-w-20 rounded border border-terminal-border bg-terminal-panel px-2 py-1 text-[11px] font-mono text-terminal-text text-center">
-                    {key}
-                  </span>
-                  <span className="text-terminal-muted text-xs leading-relaxed">{desc}</span>
+      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-4 text-xs text-terminal-muted">
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,19rem),1fr))] items-start gap-x-8 gap-y-6">
+          <section aria-labelledby="help-commands">
+            <h2 className={heading} id="help-commands">COMMAND BAR</h2>
+            <p className="mb-1 leading-relaxed">Type a command in the top bar, or try an example here.</p>
+            <dl className="divide-y divide-[var(--section-rule-color)]">
+              {COMMAND_EXAMPLES.map(({ command, description }) => (
+                <div key={command} className="grid grid-cols-[5.5rem_1fr] items-baseline gap-2 py-2">
+                  <dt>
+                    <button type="button" onClick={() => executeCommand(command)}
+                      className={'rounded border border-terminal-border px-2 py-1 text-terminal-accent hover:bg-terminal-hover ' + focus}>
+                      {command}
+                    </button>
+                  </dt>
+                  <dd className="leading-relaxed">{description}</dd>
                 </div>
               ))}
-            </div>
-          </SectionCard>
-
-          <SectionCard title="DATA SOURCES">
-            <div className="space-y-2">
-              {DATA_SOURCES.map(({ name, coverage, note }) => (
-                <div key={name} className="instrument-section rounded border border-terminal-border bg-terminal-elevated px-3 py-2.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-terminal-text text-xs font-bold">{name}</span>
-                    <span className="text-terminal-faint text-[11px]">{note}</span>
-                  </div>
-                  <div className="mt-1 text-terminal-muted text-xs leading-relaxed">{coverage}</div>
+            </dl>
+            <h3 className="mb-1 mt-4 font-semibold text-terminal-text">Keyboard</h3>
+            <dl>
+              {KEYS.map(([key, description]) => (
+                <div key={key} className="grid grid-cols-[5.5rem_1fr] gap-2 py-1">
+                  <dt><kbd className="font-mono text-terminal-text">{key}</kbd></dt>
+                  <dd>{description}</dd>
                 </div>
               ))}
-            </div>
-          </SectionCard>
+            </dl>
+          </section>
 
-          <SectionCard title="INTERNATIONAL TICKERS">
-            <div className="instrument-section rounded border border-terminal-border bg-terminal-elevated px-3 py-2 text-terminal-faint text-xs leading-relaxed">
-              Non-US listings usually need an exchange suffix. Examples:
-              {' '}<span className="text-terminal-accent font-mono">VWCE.DE</span>,
-              {' '}<span className="text-terminal-accent font-mono">BP.L</span>,
-              {' '}<span className="text-terminal-accent font-mono">7203.T</span>
-            </div>
-            <div className="mt-2 space-y-2">
-              {EXCHANGE_NOTES.map(({ suffix, exchange }) => (
-                <div key={suffix} className="instrument-section flex items-center gap-3 rounded border border-terminal-border bg-terminal-elevated px-3 py-2">
-                  <span className="w-12 flex-shrink-0 text-terminal-accent font-mono text-xs">{suffix}</span>
-                  <span className="text-terminal-muted text-xs">{exchange}</span>
-                </div>
+          <nav aria-label="Workspaces">
+            <h2 className={heading}>WORKSPACES</h2>
+            <ul className="divide-y divide-[var(--section-rule-color)]">
+              {workspaceShortcuts.map(({ key, name, command, panel }) => (
+                <li key={panel}>
+                  <button type="button" aria-label={'Open ' + name} aria-keyshortcuts={key} aria-describedby={'help-command-' + panel}
+                    aria-current={panel === 'help' ? 'page' : undefined}
+                    onClick={() => executeCommand(command)}
+                    className={'grid min-h-8 w-full grid-cols-[2rem_1fr_auto] items-center gap-2 px-1 text-left hover:bg-terminal-hover ' + focus}>
+                    <kbd className="font-mono text-terminal-accent">{key}</kbd>
+                    <span className="text-terminal-text">{name}</span>
+                    <code id={'help-command-' + panel} className="text-[11px] text-terminal-faint">{command}</code>
+                  </button>
+                </li>
               ))}
-            </div>
-          </SectionCard>
+            </ul>
+            <p className="mt-2 leading-relaxed">Settings holds optional keys for OpenAI analysis, FRED economic data, and Finnhub earnings dates.</p>
+          </nav>
         </div>
 
-        <section className="instrument-card rounded border border-terminal-border bg-terminal-panel px-4 py-3">
-          <div className="text-terminal-faint text-xs leading-relaxed">
-            Charlie is an open-source market terminal built with React, Vite, and Tailwind CSS.
-            Market data and event intelligence flow through Yahoo Finance, SEC EDGAR, Teleborsa/FIDA, BLS, OECD, Eurostat, CoinGecko, Polymarket, FRED, Finnhub,
-            Caldara-Iacoviello GPR, and GDELT.
-            Quote updates are near-real-time
-            (provider and polling dependent), not guaranteed tick-level streaming.
-          </div>
-        </section>
+        <div className="mt-5 divide-y divide-[var(--section-rule-color)] border-y border-[var(--section-rule-color)]">
+          <details>
+            <summary className={disclosure}>Data sources</summary>
+            <p className="mb-2">Quotes may be delayed. Coverage and refresh times vary by source.</p>
+            <dl className="grid gap-x-6 gap-y-1.5 pb-3 sm:grid-cols-2">
+              {SOURCES.map(([source, coverage]) => (
+                <div key={source}>
+                  <dt className="font-semibold text-terminal-text">{source}</dt>
+                  <dd>{coverage}</dd>
+                </div>
+              ))}
+            </dl>
+          </details>
+          <details>
+            <summary className={disclosure}>International tickers</summary>
+            <p className="mb-2 leading-relaxed">Include the exchange suffix when searching for a specific listing, such as VWCE.DE, BP.L, or 7203.T.</p>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 pb-3 sm:grid-cols-4">
+              {EXCHANGES.map(([suffix, exchange]) => (
+                <div key={suffix} className="flex items-baseline gap-2">
+                  <dt><code className="text-terminal-accent">{suffix}</code></dt>
+                  <dd>{exchange}</dd>
+                </div>
+              ))}
+            </dl>
+          </details>
+        </div>
       </div>
     </>
   );

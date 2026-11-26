@@ -4,6 +4,10 @@ Charlie’s Phase 0–1 SEC enrichment is available only through the local serve
 
 The proxy resolves a ticker only through the SEC company ticker mapping, pads the verified CIK, and then reads official submissions metadata and selected XBRL company facts. It keeps Yahoo market and fundamental data separate and does not require credentials.
 
+The Equity view uses the SEC registrant record to fill available gaps in industry, business address and website, and links to the source when it does. If Company Facts has no matching financial tags, the metrics card links to the issuer’s financial report or prospectus when available. It can also link directly to financial statements attached as an exhibit. An SEC service outage has its own message.
+
+The Equity **Refresh** button rechecks the upstream data even while Charlie’s caches are fresh. A successful response replaces the cached result for later visits.
+
 ## User-Agent
 
 SEC fair-access requests should identify the client. Local operation uses this safe default when no setting is provided:

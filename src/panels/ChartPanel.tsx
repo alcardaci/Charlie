@@ -35,14 +35,13 @@ const CUSTOM_TIMEFRAME_INDEX = -1;
 const CHART_STYLES: Array<{ key: ChartStyle; label: string }> = [
   { key: 'candlestick', label: 'CANDLE' },
   { key: 'ohlc', label: 'OHLC' },
-  { key: 'line', label: 'LINE' },
   { key: 'area', label: 'AREA' },
 ];
 
 const INDICATORS = ['MA20', 'MA50', 'MA200'] as const;
 const MA_KEYS: Record<string, 'sma20' | 'sma50' | 'sma200'> = { MA20: 'sma20', MA50: 'sma50', MA200: 'sma200' };
 
-type PriceSeries = ISeriesApi<'Candlestick'> | ISeriesApi<'Bar'> | ISeriesApi<'Line'> | ISeriesApi<'Area'>;
+type PriceSeries = ISeriesApi<'Candlestick'> | ISeriesApi<'Bar'> | ISeriesApi<'Area'>;
 type ChartPalette = ReturnType<typeof getThemePalette>;
 
 const movingAverageStyles = {
@@ -108,13 +107,6 @@ function createPriceSeries(chart: IChartApi, chartStyle: ChartStyle): PriceSerie
         openVisible: true,
         thinBars: false,
       });
-    case 'line':
-      return chart.addLineSeries({
-        lineStyle: LineStyle.Dotted,
-        lineWidth: 2,
-        priceLineVisible: true,
-        crosshairMarkerVisible: false,
-      });
     case 'area':
       return chart.addAreaSeries({
         lineStyle: LineStyle.Dotted,
@@ -131,7 +123,6 @@ function createPriceSeries(chart: IChartApi, chartStyle: ChartStyle): PriceSerie
 
 function priceColors(chartStyle: ChartStyle, palette: ChartPalette) {
   switch (chartStyle) {
-    case 'line': return { color: palette.text };
     case 'area': return { lineColor: palette.text, topColor: palette.chartGrid };
     case 'ohlc': return { upColor: palette.positive, downColor: palette.negative };
     case 'candlestick': return {
@@ -168,16 +159,6 @@ function setPriceSeriesData(data: ChartPoint[], chartStyle: ChartStyle, series: 
         low: point.low,
         close: point.close,
         ...(point.close === point.open && { color: flatColor }),
-      }))
-    );
-    return;
-  }
-
-  if (chartStyle === 'line') {
-    (series as ISeriesApi<'Line'>).setData(
-      data.map((point) => ({
-        time: chartTime(point),
-        value: point.close,
       }))
     );
     return;

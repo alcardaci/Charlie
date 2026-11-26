@@ -1,6 +1,7 @@
 import type { Quote } from '../types';
 import { changeColor, fmt } from '../utils/formatters';
 import { DailyCloseSparkline } from './DailyCloseSparkline';
+import { OverviewSectionHeader } from './OverviewSectionHeader';
 import './OverviewIndices.css';
 
 export function OverviewIndices({ symbols, names, quotes, loading, onSelect }: {
@@ -11,7 +12,7 @@ export function OverviewIndices({ symbols, names, quotes, loading, onSelect }: {
   onSelect: (symbol: string) => void;
 }) {
   return <section className="overview-primary-panel" aria-label="Major indices">
-    <h2 className="instrument-heading">MAJOR INDICES</h2>
+    <OverviewSectionHeader title="MAJOR INDICES" />
     <table className="overview-indices-table" aria-label="Major indices" aria-busy={loading}>
       <thead><tr>
         <th scope="col">Index</th>

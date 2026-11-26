@@ -122,7 +122,6 @@
     .sentiment-pillars {
       padding-inline-start: 13px;
       border-block-start: 0;
-      border-inline-start: 1px solid var(--section-rule-color);
     }
   }
 }

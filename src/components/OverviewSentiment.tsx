@@ -4,6 +4,7 @@ import type { MarketSentimentPillar, MarketSentimentSnapshot } from '../types';
 import { changeColor } from '../utils/formatters';
 import { formatSentimentScore } from '../utils/marketPanelDisplay';
 import './OverviewSentiment.css';
+import { OverviewSectionHeader } from './OverviewSectionHeader';
 
 const SENTIMENT_EXPLAINERS: Record<'composite' | MarketSentimentPillar['key'], { description: string; source: string }> = {
   composite: {
@@ -111,7 +112,7 @@ export function OverviewSentiment({ sentiment, isLoading, onSelectSymbol }: {
   const tracked = [...new Set(sentiment?.pillars.flatMap(pillar => pillar.symbols))];
   return (
     <section className="overview-primary-panel overview-sentiment" aria-labelledby={id}>
-      <h2 className="instrument-heading text-xs font-bold" id={id}>MARKET SENTIMENT</h2>
+      <OverviewSectionHeader id={id} title="MARKET SENTIMENT" />
       {!sentiment ? (
         <p className="py-3 text-terminal-faint text-xs" role="status">
           {isLoading ? 'Loading sentiment…' : 'Sentiment inputs are unavailable right now.'}

@@ -6,6 +6,7 @@ import { useTerminalStore } from '../store/useTerminalStore';
 import { shouldUseSearch } from '../utils/commandParsing';
 import { fmt, isMarketOpen } from '../utils/formatters';
 import { useAppVersion } from '../utils/appVersion';
+import { overviewCardOrder } from '../utils/overviewLayout';
 import { useTheme } from '../utils/theme';
 
 interface CommandBarProps {
@@ -20,18 +21,19 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
   const {
     executeCommand,
     commandHistory,
-    activePanel,
-    activeSymbol,
     goBack,
     goHome,
     navHistory,
     setActivePanel,
     debugMode,
     toggleDebugMode,
+    activePanel,
+    overviewLayout,
     companionOpen,
     toggleCompanionOpen,
   } = useTerminalStore();
   const { mode, toggleTheme } = useTheme();
+  const companionInOverview = activePanel === 'overview' && overviewCardOrder(overviewLayout).includes('summary');
   const appVersion = useAppVersion();
   const isElectronDesktop = typeof navigator !== 'undefined' && navigator.userAgent.includes('Electron');
   const electronDragStyle: CSSProperties | undefined = isElectronDesktop
@@ -103,26 +105,6 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
     }
   };
 
-  const panelLabel: Record<string, string> = {
-    overview: 'MARKET OVERVIEW',
-    equity: `${activeSymbol} EQUITY`,
-    chart: `${activeSymbol} CHART`,
-    multiAsset: 'MULTI-ASSET WORKSPACE',
-    news: 'NEWS + GEOPOLITICS',
-    geopolitics: 'NEWS + GEOPOLITICS',
-    predictions: 'PREDICTION MARKETS',
-    macro: 'MACRO + YIELD MONITOR',
-    portfolio: 'PORTFOLIO',
-    heatmap: 'SECTOR HEATMAP',
-    forex: 'FOREX',
-    crypto: 'CRYPTO',
-    yield: 'MACRO + YIELD MONITOR',
-    etf: 'ETF MONITOR',
-    screener: 'SCREENER',
-    help: 'HELP',
-    settings: 'CONNECTIONS & AI SETTINGS',
-  };
-
   const open = isMarketOpen();
   const handleDebugToggle = () => {
     toggleDebugMode();
@@ -160,11 +142,6 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
       >
         ← BACK
       </button>
-
-      {/* Context label */}
-      <div className="order-2 basis-full text-terminal-muted text-[11px] flex-shrink-0 md:order-none md:basis-auto md:mr-3 md:text-xs">
-        {panelLabel[activePanel] ?? activePanel.toUpperCase()}
-      </div>
 
       {/* Command input */}
       <div className="order-3 w-full relative md:order-none md:flex-1 md:w-auto" style={electronNoDragStyle}>
@@ -222,7 +199,7 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
       </div>
 
       {/* Right side status */}
-      <div className="ml-auto flex items-center gap-2 flex-shrink-0 md:ml-4 md:gap-4" style={electronNoDragStyle}>
+      <div className="ml-auto flex items-center gap-1.5 flex-shrink-0 md:ml-4 md:gap-4" style={electronNoDragStyle}>
         {onOpenWatchlist && (
           <button
             onClick={onOpenWatchlist}
@@ -233,9 +210,9 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
             <Star size={12} />
           </button>
         )}
-        <button
+        {!companionInOverview && <button
           onClick={toggleCompanionOpen}
-          className={`flex items-center gap-1.5 rounded border px-2.5 py-1 text-xs font-semibold tracking-wide transition-colors ${
+          className={`flex items-center gap-1.5 rounded border px-2 py-1 text-xs font-semibold tracking-wide transition-colors md:px-2.5 ${
             companionOpen
               ? 'border-terminal-accent/70 bg-terminal-accent/20 text-terminal-accent'
               : 'border-terminal-accent/50 bg-terminal-accent/10 text-terminal-accent hover:border-terminal-accent/70 hover:bg-terminal-accent/15'
@@ -244,10 +221,10 @@ export function CommandBar({ onOpenWatchlist }: CommandBarProps) {
           aria-label={companionOpen ? 'Close AI companion' : 'Open AI companion'}
           style={electronNoDragStyle}
         >
-          <Sparkles size={12} />
+          <Sparkles size={12} className="hidden md:block" />
           <Bot size={12} />
           <span className="hidden lg:inline">AI COMPANION</span>
-        </button>
+        </button>}
         <button
           onClick={handleDebugToggle}
           className={`flex items-center gap-1.5 rounded border px-2 py-1 text-xs transition-colors ${

@@ -103,6 +103,55 @@ const ready = buildSecCompanyData({
 assert(ready.metrics.revenue?.periodType === 'ttm', 'Latest metric selection should prefer derived TTM when available');
 assert(ready.metrics.cash?.value === 0, 'Metric envelopes must preserve zero values');
 assert(ready.metrics.debt?.availability === 'missing', 'Metric envelopes must preserve missing state');
+assert(ready.factsCoverage === 'available', 'A partially populated metric set is available even when individual concepts are missing');
+
+const feeFacts = { facts: { ffd: { FeeRate: { units: { pure: [{ val: 0.000138 }] } } } } };
+const bspIdentity = resolveCikFromTicker('BSP', [{ ticker: 'BSP', cik_str: 2004711, title: 'Bending Spoons S.p.A.' }])!;
+const bspSubmissions = {
+  cik: '0002004711', sicDescription: 'Services-Computer Programming, Data Processing, Etc.',
+  addresses: { business: { city: 'MILAN', country: 'Italy', isForeignLocation: 1 } },
+  filings: { recent: {
+    accessionNumber: ['0002004711-26-000027', '0002004711-26-000026', '0001104659-26-079884'],
+    form: ['6-K', '6-K', '424B4'], filingDate: ['2026-11-19', '2026-11-19', '2026-07-01'],
+    reportDate: ['2026-09-30', '2026-11-19', ''],
+    primaryDocument: ['bsp-20260930x6k.htm', 'bsp-20261119x6k.htm', 'tm2613674-14_424b4.htm'],
+    primaryDocDescription: ['FORM 6-K', 'FORM 6-K', '424B4'],
+  } },
+};
+const bspInput = { ticker: 'BSP', identity: bspIdentity, submissions: bspSubmissions, facts: feeFacts,
+  source: { ...ready.source, submissionsUrl: buildSecSubmissionUrl(bspIdentity.cik), factsUrl: buildSecFactsUrl(bspIdentity.cik) } };
+const bspHit = {
+  _id: '0002004711-26-000027:bsp_ex99-2.htm',
+  _source: { adsh: '0002004711-26-000027', ciks: ['0002004711'], form: '6-K', file_type: 'EX-99.2', file_date: '2026-11-19',
+    file_description: 'QUARTERLY UNAUDITED FINANCIAL STATEMENTS AS OF SEPTEMBER 30, 2026' },
+};
+const bsp = buildSecCompanyData({ ...bspInput, financialDocuments: { hits: { hits: [bspHit] } } });
+assert(bsp.factsCoverage === 'no-mapped-metrics', 'Filing-fee tags must not be interpreted as tagged company financials');
+assert(bsp.financialFiling?.filingUrl === 'https://www.sec.gov/Archives/edgar/data/2004711/000200471126000027/bsp_ex99-2.htm',
+  'Use the financial statements exhibit of the results 6-K rather than an unrelated same-day filing');
+assert(bsp.profile?.industry === bspSubmissions.sicDescription && bsp.profile.country === 'Italy' && bsp.profile.sourceUrl?.startsWith('https://'),
+  'Fallback profile facts retain the official source and the actual business address country');
+const bspWithoutExhibit = buildSecCompanyData(bspInput);
+assert(bspWithoutExhibit.financialFiling?.form === '424B4', 'An ambiguous 6-K must not replace a confirmed prospectus');
+const unrelated = buildSecCompanyData({ ...bspInput, financialDocuments: { hits: { hits: [{
+  ...bspHit, _source: { ...bspHit._source, ciks: ['0000320193'] },
+}] } } });
+assert(unrelated.financialFiling?.form === '424B4', 'Exhibits attributed to another SEC identity cannot become a source');
+const missingFacts = buildSecCompanyData({ ...bspInput, facts: null, status: 'partial',
+  cache: { identity: 'fresh', submissions: 'fresh', facts: 'unavailable' } });
+assert(missingFacts.factsCoverage === 'unavailable', 'A provider outage must not be shown as verified absence of tags');
+
+const antIdentity = resolveCikFromTicker('ANT', [{ ticker: 'ANT', cik_str: 2130357, title: 'Anthropic, PBC' }])!;
+const ant = buildSecCompanyData({ ticker: 'ANT', identity: antIdentity, facts: feeFacts,
+  source: { ...ready.source, submissionsUrl: buildSecSubmissionUrl(antIdentity.cik), factsUrl: buildSecFactsUrl(antIdentity.cik) },
+  submissions: { filings: { recent: {
+    accessionNumber: ['0001628280-26-074944'], form: ['424B4'], filingDate: ['2026-11-19'],
+    primaryDocument: ['anthropicpbc-424b4.htm'],
+  } } },
+});
+assert(ant.factsCoverage === 'no-mapped-metrics' && ant.financialFiling?.filingUrl ===
+  'https://www.sec.gov/Archives/edgar/data/2130357/000162828026074944/anthropicpbc-424b4.htm',
+  'An IPO with fee-only tags links to its issuer prospectus');
 
 const revenueFacts = facts.facts['us-gaap'].RevenueFromContractWithCustomerExcludingAssessedTax.units.USD;
 function withRevenue(rows: unknown[]) {

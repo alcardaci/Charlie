@@ -1,5 +1,5 @@
 import { quoteCurrencyUnit } from '../utils/portfolioValuation';
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   BarChart2,
@@ -7,6 +7,7 @@ import {
   Globe,
   Landmark,
   Plus,
+  RefreshCw,
   Star,
   StarOff,
   TrendingUp,
@@ -14,7 +15,8 @@ import {
 } from 'lucide-react';
 import { fetchCompanyFinancials, fetchCompanyWorkbench, fetchQuotes, fetchSecCompanyData } from '../api/finance';
 import { mergeCompanyFilings } from '../data/sec';
-import { CompanyFinancials, CompanyWorkbench, FinancialPeriodType, SecCompanyData, SecMetricKey, SecMetricObservation } from '../types';
+import { resolveEquityProfile } from '../utils/equityProfile';
+import { CompanyFinancials, CompanyWorkbench, FinancialPeriodType, SecCompanyData, SecFiling, SecMetricKey, SecMetricObservation } from '../types';
 import { useTerminalStore } from '../store/useTerminalStore';
 import { fmt, changeColor } from '../utils/formatters';
 import type { MultiAssetView } from '../store/useTerminalStore';
@@ -47,6 +49,7 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
   const selectedSymbol = (symbol ?? activeSymbol).toUpperCase();
   const [tab, setTab] = useState<WorkspaceTab>('overview');
   const [periodType, setPeriodType] = useState<FinancialPeriodType>('annual');
+  const manualRefresh = useRef<string | null>(null);
 
   const inWatchlist = watchlist.includes(selectedSymbol);
 
@@ -55,24 +58,24 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
     setPeriodType('annual');
   }, [selectedSymbol]);
 
-  const { data: workbench, isLoading, error, refetch } = useQuery({
+  const { data: workbench, isLoading, isFetching, error, refetch } = useQuery({
     queryKey: ['equity-workbench', selectedSymbol],
-    queryFn: () => fetchCompanyWorkbench(selectedSymbol),
+    queryFn: ({ signal }) => fetchCompanyWorkbench(selectedSymbol, { signal, refresh: manualRefresh.current === selectedSymbol }),
     refetchInterval: 120000,
     staleTime: 60000,
   });
 
-  const { data: financials, isLoading: loadingFinancials, error: financialsError } = useQuery({
+  const { data: financials, isLoading: loadingFinancials, isFetching: fetchingFinancials, error: financialsError, refetch: refetchFinancials } = useQuery({
     queryKey: ['equity-financials', selectedSymbol, periodType],
-    queryFn: () => fetchCompanyFinancials(selectedSymbol, periodType),
+    queryFn: ({ signal }) => fetchCompanyFinancials(selectedSymbol, periodType, { signal, refresh: manualRefresh.current === selectedSymbol }),
     enabled: Boolean(workbench) && workbench?.instrumentKind !== 'fund' && tab === 'financials',
     staleTime: 10 * 60 * 1000,
     gcTime: 30 * 60 * 1000,
   });
 
-  const { data: secData, isLoading: loadingSec } = useQuery({
+  const { data: secData, isLoading: loadingSec, isFetching: fetchingSec, error: secError, refetch: refetchSec } = useQuery({
     queryKey: ['equity-sec', selectedSymbol],
-    queryFn: ({ signal }) => fetchSecCompanyData(selectedSymbol, signal),
+    queryFn: ({ signal }) => fetchSecCompanyData(selectedSymbol, signal, { refresh: manualRefresh.current === selectedSymbol }),
     enabled: workbench?.instrumentKind === 'equity',
     staleTime: 10 * 60 * 1000,
     gcTime: 24 * 60 * 60 * 1000,
@@ -96,13 +99,27 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
     }
   }, [tab, workbench]);
 
+  async function refreshResearch() {
+    if (manualRefresh.current === selectedSymbol) return;
+    manualRefresh.current = selectedSymbol;
+    try {
+      const requests: Promise<unknown>[] = [refetch()];
+      if (workbench?.instrumentKind === 'equity') requests.push(refetchSec());
+      if (workbench && workbench.instrumentKind !== 'fund' && tab === 'financials') requests.push(refetchFinancials());
+      await Promise.all(requests);
+    } finally {
+      if (manualRefresh.current === selectedSymbol) manualRefresh.current = null;
+    }
+  }
+
   if (isLoading) return <LoadingState symbol={selectedSymbol} />;
-  if (!workbench) return <ErrorState symbol={selectedSymbol} onRetry={() => { void refetch(); }} />;
+  if (!workbench) return <ErrorState symbol={selectedSymbol} onRetry={refreshResearch} />;
 
   const SymbolHeading = embedded ? 'span' : 'h1';
   const isFund = workbench.instrumentKind === 'fund';
   const tabs = isFund ? FUND_TABS : EQUITY_TABS;
   const { quote } = workbench;
+  const resolvedProfile = resolveEquityProfile(workbench.profile, secData);
   const chgColor = changeColor(quote.regularMarketChangePercent);
   const isPositive = (quote.regularMarketChangePercent ?? 0) >= 0;
   const marketStateLabel = quote.marketState === 'REGULAR'
@@ -114,7 +131,7 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
         : quote.marketState === 'CLOSED' ? 'MARKET CLOSED' : 'SESSION UNAVAILABLE';
   const descriptorLine = isFund
     ? [workbench.fund?.family, workbench.fund?.categoryName, quote.exchange].filter(Boolean).join(' | ')
-    : [workbench.profile.sector, workbench.profile.industry, workbench.profile.country].filter(Boolean).join(' | ');
+    : [resolvedProfile.profile.sector, resolvedProfile.profile.industry, resolvedProfile.profile.country].filter(Boolean).join(' | ');
 
   const fiftyTwoRange = quote.fiftyTwoWeekHigh > quote.fiftyTwoWeekLow
     ? ((quote.regularMarketPrice - quote.fiftyTwoWeekLow) / (quote.fiftyTwoWeekHigh - quote.fiftyTwoWeekLow)) * 100
@@ -125,7 +142,8 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      {error && <div role="status" className="px-4 py-2 text-xs text-terminal-negative">Refresh failed. Showing the last available research data. <button className="underline" onClick={() => { void refetch(); }}>Retry</button></div>}
+      {error && <div role="status" className="px-4 py-2 text-xs text-terminal-negative">Refresh failed. Showing the last available research data. <button className="underline" onClick={refreshResearch}>Retry</button></div>}
+      {secError && secData && <div role="status" className="px-4 py-2 text-xs text-terminal-muted">SEC refresh failed. Showing the last available filings and metrics.</div>}
       {financialsError && tab === 'financials' && <div role="alert" className="px-4 py-2 text-xs text-terminal-negative">Financial statements could not be refreshed. Available SEC filings remain separate from these estimates.</div>}
       <div className="instrument-section bg-terminal-panel panel-border-b px-3 sm:px-4 py-3 flex-shrink-0">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between lg:gap-4">
@@ -151,6 +169,10 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
           </div>
 
           <div className="flex items-center gap-2 sm:justify-end">
+            <button type="button" onClick={refreshResearch} disabled={isFetching || fetchingSec || fetchingFinancials}
+              aria-label="Refresh company research" className="inline-flex items-center gap-1.5 rounded border border-terminal-border px-2 py-1.5 text-xs text-terminal-text hover:bg-terminal-hover disabled:opacity-60">
+              <RefreshCw size={12} />Refresh
+            </button>
             <button
               onClick={() => (inWatchlist ? removeFromWatchlist(selectedSymbol) : addToWatchlist(selectedSymbol))}
               className={`p-1.5 rounded hover:bg-terminal-hover transition-colors ${inWatchlist ? 'text-terminal-accent' : 'text-terminal-faint'}`}
@@ -278,7 +300,7 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
           </>
         ) : (
           <>
-            {tab === 'overview' && <OverviewTab workbench={workbench} sectorQuote={sectorQuote} secData={secData} loadingSec={loadingSec} />}
+            {tab === 'overview' && <OverviewTab workbench={workbench} resolvedProfile={resolvedProfile} sectorQuote={sectorQuote} secData={secData} loadingSec={loadingSec} />}
             {tab === 'financials' && <FinancialsTab financials={financials} loading={loadingFinancials} currency={quote.currency} />}
             {tab === 'analysis' && <AnalysisTab workbench={workbench} />}
             {tab === 'ownership' && <OwnershipTab workbench={workbench} secData={secData} loadingSec={loadingSec} />}
@@ -291,16 +313,20 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
 
 function OverviewTab({
   workbench,
+  resolvedProfile,
   sectorQuote,
   secData,
   loadingSec,
 }: {
   workbench: CompanyWorkbench;
+  resolvedProfile: ReturnType<typeof resolveEquityProfile>;
   sectorQuote: CompanyWorkbench['quote'] | null | undefined;
   secData?: SecCompanyData;
   loadingSec: boolean;
 }) {
-  const { quote, profile, calendar, analysis, sectorContext } = workbench;
+  const { quote, calendar, analysis, sectorContext } = workbench;
+  const { profile, sourceFields, sourceUrl } = resolvedProfile;
+  const description = profile.longBusinessSummary?.trim();
 
   return (
     <div className="section-stack p-3 sm:p-4 space-y-4">
@@ -333,14 +359,23 @@ function OverviewTab({
             )}
             {profile.country && <span>{profile.country}</span>}
             {profile.city && <span>{profile.city}{profile.state ? `, ${profile.state}` : ''}</span>}
-            {profile.fullTimeEmployees && (
+            {profile.fullTimeEmployees != null && (
               <span className="inline-flex items-center gap-1">
                 <Users size={11} />
                 {fmt.integer(profile.fullTimeEmployees)} employees
               </span>
             )}
           </div>
-          <p className="text-terminal-text text-xs leading-relaxed">{profile.longBusinessSummary ?? 'No live company description available.'}</p>
+          {description ? <p className="text-terminal-text text-xs leading-relaxed">{description}</p> : (
+            <div className="space-y-1 text-xs text-terminal-muted">
+              {secData?.identity?.verified && <p>Registered company: {secData.identity.title}</p>}
+              <p>{secData?.financialFiling ? <FilingLink filing={secData.financialFiling} /> : 'Company description unavailable.'}</p>
+            </div>
+          )}
+          {sourceFields.length > 0 && sourceUrl && <p className="mt-2 text-[11px] text-terminal-muted">
+            <a href={sourceUrl} target="_blank" rel="noopener noreferrer" className="text-terminal-accent hover:underline">SEC registrant details</a>
+            {' · '}{sourceFields.join(', ')}
+          </p>}
         </div>
 
         <div className="instrument-card bg-terminal-panel border border-terminal-border rounded p-4">
@@ -352,7 +387,7 @@ function OverviewTab({
             </div>
             <div>
               <div className="text-terminal-faint">Industry</div>
-              <div className="text-terminal-text font-bold">{sectorContext.industry ?? '--'}</div>
+              <div className="text-terminal-text font-bold">{profile.industry ?? '--'}</div>
             </div>
             <div>
               <div className="text-terminal-faint">Sector ETF</div>
@@ -421,7 +456,16 @@ function secStatusLabel(status: SecCompanyData['status']): string {
   }
 }
 
+function FilingLink({ filing }: { filing: SecFiling }) {
+  const label = filing.form.startsWith('424B') ? 'Read prospectus'
+    : filing.form.startsWith('6-K') && filing.documentDescription ? 'Read financial statements' : 'Read financial filing';
+  return <a href={filing.filingUrl} target="_blank" rel="noopener noreferrer" title={filing.documentDescription}
+    className="text-terminal-accent underline underline-offset-2">{label} · {filing.form} · {formatDate(filing.filedDate)}</a>;
+}
+
 function SecMetricsCard({ data, loading }: { data?: SecCompanyData; loading: boolean }) {
+  const hasMetrics = SEC_METRIC_ORDER.some(key => data?.metrics[key]?.availability === 'reported');
+  const unavailable = data?.factsCoverage === 'unavailable' || data?.cache.facts === 'unavailable';
   return (
     <div className="instrument-card bg-terminal-panel border border-terminal-border rounded overflow-hidden">
       <div className="px-4 py-2 panel-border-b flex items-center justify-between gap-3">
@@ -434,19 +478,18 @@ function SecMetricsCard({ data, loading }: { data?: SecCompanyData; loading: boo
       {loading ? (
         <div className="p-4 text-terminal-faint text-xs">Loading verified SEC identity and reported facts…</div>
       ) : !data ? (
-        <div className="p-4 text-terminal-faint text-xs">SEC EDGAR enrichment is not available. Yahoo values remain unchanged.</div>
+        <div className="p-4 text-terminal-muted text-xs">SEC data could not be loaded. Use Refresh to try again.</div>
       ) : data.status === 'unsupported' ? (
         <div className="p-4 text-terminal-faint text-xs">SEC does not list this instrument in its verified ticker mapping.</div>
       ) : (
         <div className="p-4 space-y-3">
           <div className="flex flex-wrap items-center gap-2 text-[10px] text-terminal-faint">
-            <span className={data.status === 'ready' ? 'text-terminal-positive' : data.status === 'rate-limit' ? 'text-terminal-negative' : 'text-terminal-accent'}>
-              {secStatusLabel(data.status)}
+            <span className={data.status === 'ready' && hasMetrics ? 'text-terminal-positive' : data.status === 'rate-limit' ? 'text-terminal-negative' : 'text-terminal-accent'}>
+              {data.status === 'ready' && !hasMetrics && !unavailable ? 'NO MATCHING TAGS' : secStatusLabel(data.status)}
             </span>
             {data.identity && <span>CIK {data.identity.cik}</span>}
-            <span>Yahoo values are retained separately</span>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+          {hasMetrics ? <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
             {SEC_METRIC_ORDER.map((metric) => {
               const observation = data.metrics[metric];
               return (
@@ -458,13 +501,21 @@ function SecMetricsCard({ data, loading }: { data?: SecCompanyData; loading: boo
                   <div className="text-terminal-faint text-[10px] mt-1">
                     {observation?.availability === 'reported'
                       ? `${observation.periodType.toUpperCase()} · ${formatDate(observation.reportPeriodEnd ?? undefined)}`
-                      : 'Not reported'}
+                      : 'No matching SEC tag'}
                   </div>
                 </div>
               );
             })}
-          </div>
-          {data.warnings.length > 0 && <div className="text-terminal-faint text-[10px]">Some SEC endpoints were unavailable; available evidence is shown.</div>}
+          </div> : <p className="text-xs leading-relaxed text-terminal-muted">
+            {unavailable
+              ? 'The SEC Company Facts feed could not be retrieved. Use Refresh to check again.'
+              : 'The SEC Company Facts feed has no matching tagged values for the five metrics Charlie tracks. Financial statements can still be available in the company’s filings.'}
+          </p>}
+          {data.financialFiling
+            ? <div className="text-xs"><FilingLink filing={data.financialFiling} /></div>
+            : !hasMetrics && data.identity?.verified && <a href={`https://www.sec.gov/edgar/browse/?CIK=${data.identity.cik}`} target="_blank"
+                rel="noopener noreferrer" className="text-xs text-terminal-accent underline">Browse company filings on EDGAR</a>}
+          {data.warnings.length > 0 && !unavailable && <div className="text-terminal-faint text-[10px]">Some SEC data could not be refreshed.</div>}
         </div>
       )}
     </div>
@@ -472,7 +523,7 @@ function SecMetricsCard({ data, loading }: { data?: SecCompanyData; loading: boo
 }
 
 function formatSecObservation(observation: SecMetricObservation | null | undefined): string {
-  if (!observation || observation.availability === 'missing' || observation.value == null) return 'Not reported';
+  if (!observation || observation.availability === 'missing' || observation.value == null) return '—';
   if (observation.unit === 'USD') return formatCompactCurrency(observation.value, 'USD');
   return `${fmt.number(observation.value)} ${observation.unit ?? ''}`.trim();
 }
@@ -1358,7 +1409,10 @@ function formatPercentValue(
 
 function formatDate(value?: string): string {
   if (!value) return '--';
-  return new Date(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  return new Date(value).toLocaleDateString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric',
+    timeZone: /^\d{4}-\d{2}-\d{2}$/.test(value) ? 'UTC' : undefined,
+  });
 }
 
 function formatStatementValue(rowKey: string, value: number | null, currency: string): string {

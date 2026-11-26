@@ -2,7 +2,8 @@ import './live-news.fixture';
 import { zipSync, strToU8 } from 'fflate';
 import { aggregateGeopoliticalStoriesToCountries, cachedGeopoliticalEvents, reviewGeopoliticalEvents, selectEventCandidates } from '../../src/api/finance';
 import { getGdeltNews, inWindow, parseGkgHeadlines } from '../../server/gdelt';
-import { DEFAULT_NEWS_LAYOUT, NEWS_CARD_IDS, dropNewsTile, minNewsHeight, newsDropTarget, normalizeNewsLayout, positionNewsTiles, setSplitRatio, tileOrder } from '../../src/utils/newsLayout';
+import { DEFAULT_NEWS_LAYOUT, NEWS_CARD_IDS, dropNewsTile, minNewsHeight, newsDropTarget, normalizeNewsLayout, positionNewsTiles, restoreNewsLayout, setSplitRatio, tileOrder } from '../../src/utils/newsLayout';
+import { split } from '../../src/utils/tileLayout';
 import type { NewsItem } from '../../src/types';
 
 function assert(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(message); }
@@ -102,17 +103,52 @@ assert(tileOrder(custom.tree).join(',') === 'risk,map,headlines,player' && migra
   'Retain the order, full-width rows and sizes of legacy presets, repairing missing and duplicate cards');
 assert(JSON.stringify(normalizeNewsLayout(undefined)) === JSON.stringify(DEFAULT_NEWS_LAYOUT), 'Existing installs get all four default cards');
 const tree = DEFAULT_NEWS_LAYOUT.tree;
+const equalGrid = { ...DEFAULT_NEWS_LAYOUT, tree: split('y', split('x', 'map', 'headlines'), split('x', 'player', 'risk')), version: 1 };
+const oldLayout = { ...DEFAULT_NEWS_LAYOUT, tree: setSplitRatio(setSplitRatio(equalGrid.tree, '', 0.53), '1', 0.43) };
+assert(restoreNewsLayout(oldLayout) === DEFAULT_NEWS_LAYOUT, 'Upgrade the previously persisted factory layout');
+assert(restoreNewsLayout(equalGrid) === DEFAULT_NEWS_LAYOUT, 'Upgrade the previous equal-grid default');
+for (const customized of [
+  { ...oldLayout, height: 900 }, { ...oldLayout, stackedHeights: { player: 320 } },
+  { ...oldLayout, tree: setSplitRatio(oldLayout.tree, '0', 0.62) }, { ...oldLayout, version: 1 },
+  { ...equalGrid, tree: setSplitRatio(equalGrid.tree, '1', 0.55) }, { ...equalGrid, version: 2 },
+  { ...equalGrid, height: 800 }, { ...equalGrid, stackedHeights: { map: 440 } },
+]) {
+  assert(JSON.stringify(restoreNewsLayout(customized)) === JSON.stringify(normalizeNewsLayout(customized)),
+    'Retain saved custom layouts, including deliberate choices that match the previous default');
+}
+for (const [width, height] of [[2245, 1116], [1280, 960], [1001, 551], [855, 440], [854, 440], [579, 800], [390, 844], [390, 2000]]) {
+  const board = positionNewsTiles(DEFAULT_NEWS_LAYOUT, width, height);
+  const [map, feed, player, risk] = board.tiles.map(tile => tile.rect);
+  assert(board.tiles.map(t => t.id).join(',') === 'map,headlines,player,risk', 'News reading order matches the reference layout');
+  assert(board.stacked === (width < 855), 'Stack when three usable columns no longer fit');
+  if (board.stacked) {
+    assert(board.tiles.every(({ rect }) => rect.width === width && rect.height === map.height), 'Stack News cards at full width with equal heights');
+  } else {
+    assert(map.height === board.height && feed.height === board.height && feed.left > map.width, 'Map and headlines span the full height');
+    assert(player.left > feed.left + feed.width && risk.left === player.left && risk.width === player.width &&
+      player.top === 0 && risk.top > player.height && risk.top + risk.height === board.height, 'Player sits above risk in the right column');
+    assert(feed.width >= 280, 'Preserve a readable headline column');
+    if (width === 2245) {
+      assert(Math.abs(map.width / width - 0.5) < 0.01 && Math.abs(feed.width / width - 0.125) < 0.01 &&
+        Math.abs(player.height - risk.height) <= 1, 'Match the screenshot proportions on a wide desktop');
+    }
+  }
+}
 const swapped = dropNewsTile(tree, 'risk', { target: 'map', edge: 'center' });
 assert(tileOrder(swapped).join(',') === 'risk,headlines,player,map', 'Dropping in the center exchanges the two cards');
 const docked = dropNewsTile(swapped, 'map', { target: 'board', edge: 'top' });
 const wide = positionNewsTiles({ ...DEFAULT_NEWS_LAYOUT, tree: docked }, 1280, 1050);
 const first = wide.tiles[0];
 assert(first.id === 'map' && first.rect.width === 1280 && wide.tiles.slice(1).every(t => t.rect.top >= first.rect.height), 'Outer-edge docking spans the whole workspace');
-const enlarged = positionNewsTiles({ ...DEFAULT_NEWS_LAYOUT, tree: setSplitRatio(tree, '0', 0.72) }, 1280, 950);
-assert(enlarged.tiles[0].rect.width > enlarged.tiles[1].rect.width * 2, 'Widening the map gives its neighbor the remaining width');
+const initial = positionNewsTiles(DEFAULT_NEWS_LAYOUT, 1280, 950);
+const enlarged = positionNewsTiles({ ...DEFAULT_NEWS_LAYOUT, tree: setSplitRatio(tree, '', 0.72) }, 1280, 950);
+assert(enlarged.tiles[0].rect.width > initial.tiles[0].rect.width && enlarged.tiles[2].rect.width < initial.tiles[2].rect.width,
+  'Widening the map redistributes the remaining space');
 const feed = enlarged.tiles.find(t => t.id === 'headlines')!.rect;
 assert(newsDropTarget(enlarged, 'map', feed.left + feed.width / 2, feed.height / 2)?.edge === 'center', 'Center of a card is a swap target');
-assert(newsDropTarget(enlarged, 'map', feed.left + feed.width / 2, feed.height - 10)?.edge === 'bottom', 'Interior bottom edges insert a card below the target');
+const lowerFeedDrop = newsDropTarget(enlarged, 'map', feed.left + feed.width / 2, feed.height - 30);
+assert(lowerFeedDrop?.target === 'headlines' && lowerFeedDrop.edge === 'bottom',
+  'Interior bottom edges insert a card below the target');
 for (const width of [320, 390, 650, 860, 1280]) {
   for (const id of NEWS_CARD_IDS) for (const edge of ['left', 'top', 'bottom', 'right'] as const) {
     const next = { ...DEFAULT_NEWS_LAYOUT, tree: dropNewsTile(tree, id, { target: 'headlines', edge }) };

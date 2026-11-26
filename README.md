@@ -61,7 +61,7 @@ npm run desktop:dev
 
 ## Provider Connections
 
-Charlie works with public/no-key sources out of the box. Optional provider credentials are configured in the `SETTINGS` workspace, not in `.env`, and that workspace also lets you adjust the OpenAI model and prompts used by the AI workflows.
+Open **Settings** (F12) to manage optional API keys or change the model and instructions for the Overview summary. Charlie’s public market feeds work without keys.
 
 - OpenAI powers the Global Event Map, country summaries, and the optional AI features.
 - FRED: macro data and release calendars

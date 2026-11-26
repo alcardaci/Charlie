@@ -1,7 +1,7 @@
 import { useTerminalStore } from '../../src/store/useTerminalStore';
 import { hydrateTerminalState } from '../../src/utils/bootstrapState';
 import { fetchPublicJson } from '../../src/utils/publicRequests';
-import { fetchChartWindow, fetchGeopoliticalHeadlineCandidates, fetchMacroDashboard, fetchMacroReleaseCalendar } from '../../src/api/finance';
+import { fetchChartWindow, fetchCompanyWorkbench, fetchGeopoliticalHeadlineCandidates, fetchMacroDashboard, fetchMacroReleaseCalendar } from '../../src/api/finance';
 import { getScreenCommandPanel, shouldUseSearch } from '../../src/utils/commandParsing';
 import { fmt } from '../../src/utils/formatters';
 
@@ -15,6 +15,44 @@ try {
   assert(count === 1 && values.every(value => value.value === 42), 'Concurrent reads should coalesce');
   await fetchPublicJson('/coalesce');
   assert(count === 1, 'A fresh cache should avoid repeated reads');
+  let releaseOldResponse!: (response: Response) => void;
+  globalThis.fetch = () => new Promise(resolve => { releaseOldResponse = resolve; });
+  const pendingOld = fetchPublicJson('/refresh-test', { cacheMs: 60_000 });
+  globalThis.fetch = async () => Response.json('new');
+  await fetchPublicJson('/refresh-test', { cacheMs: 60_000, refresh: true });
+  releaseOldResponse(Response.json('old'));
+  await pendingOld;
+  assert(await fetchPublicJson('/refresh-test') === 'new', 'An older in-flight response must not overwrite refreshed data');
+
+  let newlyPublished = false;
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input), 'http://localhost');
+    const symbol = url.searchParams.get('symbols') ?? url.pathname.split('/').pop();
+    if (newlyPublished) assert(init?.cache === 'no-store', 'Newly published data should be fetched on manual refresh');
+    if (url.pathname.endsWith('/quotes')) return Response.json([{ symbol, quoteType: 'EQUITY', currency: 'USD' }]);
+    if (url.pathname.includes('/insights/')) return Response.json({});
+    const modules = url.searchParams.get('modules')?.split(',') ?? [];
+    if (modules.includes('secFilings') && symbol !== 'AAPL' && !newlyPublished) {
+      return Response.json({ error: 'Failed Yahoo Schema validation' }, { status: 500 });
+    }
+    return Response.json({
+      ...(modules.includes('assetProfile') && { assetProfile: { longBusinessSummary: symbol + ' description' },
+        summaryProfile: { sector: 'Technology', fullTimeEmployees: newlyPublished ? 150 : undefined } }),
+      ...(modules.includes('financialData') && { financialData: { totalCash: 23 } }),
+      ...(modules.includes('secFilings') && { secFilings: { filings: [{ type: '10-K', date: '2026-11-25', title: 'Annual report' }] } }),
+    });
+  };
+  for (const ticker of ['BSP', 'ANT', 'AAPL']) {
+    const workbench = await fetchCompanyWorkbench(ticker);
+    assert(workbench?.profile.longBusinessSummary === ticker + ' description' && workbench.profile.sector === 'Technology' &&
+      workbench.analysis.totalCash === 23 && workbench.filings.length === (ticker === 'AAPL' ? 1 : 0),
+    'Isolate profile and analysis data from filing validation failures for ' + ticker);
+  }
+  newlyPublished = true;
+  const refreshed = await fetchCompanyWorkbench('BSP', { refresh: true });
+  assert(refreshed?.profile.fullTimeEmployees === 150 && refreshed.filings.length === 1, 'Manual refresh picks up a new profile field and restored filings');
+  const reopened = await fetchCompanyWorkbench('BSP');
+  assert(reopened?.profile.fullTimeEmployees === 150 && reopened.filings.length === 1, 'Reopening reuses the refreshed workbench data');
   globalThis.fetch = async () => new Response('unavailable', {status:503});
   await fetchPublicJson('/recovery', {cacheMs:1000}).then(() => { throw new Error('Failure incorrectly returned data'); }, () => undefined);
   globalThis.fetch = async () => new Response('{"recovered":true}');

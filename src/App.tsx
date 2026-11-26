@@ -34,38 +34,27 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <div className="relative flex h-[100dvh] min-h-[100dvh] flex-col overflow-hidden bg-terminal-bg text-terminal-text">
-        {/* Top bar */}
-        <CommandBar onOpenWatchlist={openWatchlist} />
+        <PanelCompanion mainPanelRef={mainPanelRef} sideNewsRef={sideNewsRef} sideNewsVisible={showSideNews}>
+          <CommandBar onOpenWatchlist={openWatchlist} />
+          <MarketTicker />
+          <NewsTicker />
 
-        <MarketTicker />
-        <NewsTicker />
-
-        {/* Main content area */}
-        <div className="relative flex min-h-0 flex-1 pb-14 md:pb-0">
-          {/* Main panel (grows) */}
-          <div ref={mainPanelRef} className="flex-1 min-w-0 overflow-hidden">
-            <MainPanel />
+          <div className="relative flex min-h-0 flex-1 pb-14 md:pb-0">
+            <div ref={mainPanelRef} className="flex-1 min-w-0 overflow-hidden">
+              <MainPanel />
+            </div>
+            {showSideNews && (
+              <div ref={sideNewsRef} className="w-64 xl:w-72 flex-shrink-0 hidden lg:flex flex-col">
+                <NewsPanel className="h-full w-full flex-col" />
+              </div>
+            )}
           </div>
 
-          {/* News side panel */}
-          {showSideNews && (
-            <div ref={sideNewsRef} className="w-64 xl:w-72 flex-shrink-0 hidden lg:flex flex-col">
-              <NewsPanel className="h-full w-full flex-col" />
-            </div>
-        )}
-        </div>
-
-        {/* Status bar */}
-        <div className="hidden md:block">
-          <StatusBar />
-        </div>
-
-        <MobileNavigation onOpenWatchlist={openWatchlist} />
-        <PanelCompanion
-          mainPanelRef={mainPanelRef}
-          sideNewsRef={sideNewsRef}
-          sideNewsVisible={showSideNews}
-        />
+          <div className="hidden md:block">
+            <StatusBar />
+          </div>
+          <MobileNavigation onOpenWatchlist={openWatchlist} />
+        </PanelCompanion>
       </div>
     </QueryClientProvider>
   );

@@ -4,7 +4,6 @@ import type { InfiniteData, QueryClient } from '@tanstack/react-query';
 import { buildPortfolioOverviewSnapshot, normalizePortfolioCurrency, quoteCurrencyUnit, type PortfolioOverviewSnapshot } from './portfolioValuation';
 import { fetchCryptoMarkets } from '../api/crypto';
 import {
-  fetchChart,
   fetchCompanyWorkbench,
   fetchForexPairs,
   fetchGeopoliticalRiskSnapshot,
@@ -17,6 +16,7 @@ import {
 } from '../api/finance';
 import type {
   CompanionPanelContext,
+  ChartWindowResult,
   CryptoAsset,
   ForexPair,
   MacroMetricKey,
@@ -26,6 +26,7 @@ import type {
   PredictionForecastPage,
   Quote,
 } from '../types';
+import { prepareChartPoints } from './chartData';
 
 type CompanionState = {
   macroCountry?: MacroCountryCode;
@@ -87,7 +88,7 @@ const PANEL_LABELS: Record<PanelType, string> = {
   etf: 'ETF Monitor',
   screener: 'Screener',
   help: 'Help',
-  settings: 'AI Settings',
+  settings: 'Settings',
 };
 
 function cleanRenderedText(value?: string): string | undefined {
@@ -335,49 +336,29 @@ async function buildEquityContext({ queryClient, state, renderedText }: BuildPan
   );
 }
 
-async function buildChartContext({ queryClient, state, renderedText }: BuildPanelContextArgs): Promise<CompanionPanelContext> {
-  const symbol = state.activeSymbol;
-  const [quote, chart] = await Promise.all([
-    queryClient.fetchQuery({
-      queryKey: ['chart-quote', symbol],
-      queryFn: () => fetchQuotes([symbol]).then((quotes) => quotes[0] ?? null),
-      staleTime: 10000,
-    }).catch(() => null),
-    queryClient.fetchQuery({
-      queryKey: ['chart-series', symbol, '6mo', '1d'],
-      queryFn: () => fetchChart(symbol, '6mo', '1d'),
-      staleTime: 60 * 1000,
-    }).catch(() => []),
-  ]);
-
-  const points = chart.slice(-30);
-  const first = points[0];
-  const last = points[points.length - 1];
-  const performancePct = first && last && first.close !== 0 ? ((last.close - first.close) / first.close) * 100 : null;
-
-  return buildBaseContext(
-    'chart',
-    renderedText ? 'visible-panel' : 'query-snapshot',
-    `${symbol} ${quote?.regularMarketPrice?.toFixed(2) ?? '—'} | 30-sample move ${performancePct?.toFixed(2) ?? '—'}%`,
-    {
-      symbol,
-      quote: quote ? toCompactQuote(quote) : null,
-      samples: points.map((point) => ({
-        date: point.date,
-        open: point.open,
-        high: point.high,
-        low: point.low,
-        close: point.close,
-        volume: point.volume,
-        sma20: point.sma20 ?? null,
-        sma50: point.sma50 ?? null,
-        sma200: point.sma200 ?? null,
-      })),
-      sampleCount: chart.length,
-      performancePct,
-    },
-    renderedText
-  );
+function buildDisplayedChartContext({ panel, queryClient, state, renderedText }: BuildPanelContextArgs): CompanionPanelContext {
+  const queryKey = panel === 'chart' ? ['chart', state.activeSymbol.toUpperCase()] : ['chart'];
+  const windows = queryClient.getQueriesData<ChartWindowResult>({ queryKey, type: 'active' });
+  const charts = windows.map(([key, result]) => {
+    const [, symbol, range, interval, customStart, customEnd] = key;
+    const points = prepareChartPoints(result?.points ?? []);
+    const first = points[0];
+    const last = points[points.length - 1];
+    // Sample across the entire selected window, keeping the opening and closing observations.
+    const count = Math.min(points.length, 30);
+    const samples = Array.from({ length: count }, (_, i) => {
+      const index = count === 1 ? 0 : Math.round(i * (points.length - 1) / (count - 1));
+      const { timestamp, open, high, low, close, volume, sma20, sma50, sma200 } = points[index];
+      return { time: new Date(timestamp).toISOString(), open, high, low, close, volume, sma20, sma50, sma200 };
+    });
+    return {
+      symbol, range, interval, customStart, customEnd, observations: points.length, samples,
+      performancePct: first?.close && last ? ((last.close - first.close) / first.close) * 100 : null,
+    };
+  });
+  return buildBaseContext(panel, 'visible-panel',
+    charts.length ? 'Price history for each chart’s selected time frame.' : 'No price chart is currently open for this panel.',
+    { charts }, renderedText);
 }
 
 async function buildMacroContext({ queryClient, renderedText, state }: BuildPanelContextArgs): Promise<CompanionPanelContext> {
@@ -620,7 +601,7 @@ function buildLocalOnlyContext(panel: PanelType, state: CompanionState, rendered
     return buildBaseContext(
       panel,
       'local-state',
-      'Local AI configuration panel.',
+      'Provider connections and Overview summary preferences.',
       {
         activePanel: state.activePanel,
         activeSymbol: state.activeSymbol,
@@ -667,7 +648,8 @@ export async function buildPanelCompanionContext(args: BuildPanelContextArgs): P
     case 'equity':
       return buildEquityContext({ ...args, panel: normalizedPanel });
     case 'chart':
-      return buildChartContext({ ...args, panel: normalizedPanel });
+    case 'multiAsset':
+      return buildDisplayedChartContext(args);
     case 'macro':
       return buildMacroContext({ ...args, panel: normalizedPanel });
     case 'portfolio':
@@ -693,20 +675,21 @@ export async function buildPanelCompanionContext(args: BuildPanelContextArgs): P
 
 export async function buildCompanionContexts(args: {
   panels: PanelType[];
+  detailedPanels: PanelType[];
   queryClient: QueryClient;
   state: CompanionState;
   renderedTextByPanel?: Partial<Record<PanelType, string>>;
 }): Promise<CompanionPanelContext[]> {
   const uniquePanels = Array.from(new Set(args.panels.map((panel) => panel === 'yield' ? 'macro' : panel))) as PanelType[];
   const settled = await Promise.allSettled(
-    uniquePanels.map((panel) =>
-      buildPanelCompanionContext({
-        panel,
-        queryClient: args.queryClient,
-        state: args.state,
-        renderedText: args.renderedTextByPanel?.[panel],
-      })
-    )
+    uniquePanels.map(async (panel) => {
+      const renderedText = args.renderedTextByPanel?.[panel];
+      if (panel === args.state.activePanel && panel !== 'chart' && panel !== 'multiAsset' && !args.detailedPanels.includes(panel)) {
+        // Keep the open view available without fetching unrelated markets or holdings for a general question.
+        return buildBaseContext(panel, 'visible-panel', 'Open workspace view, available if relevant.', null, renderedText);
+      }
+      return buildPanelCompanionContext({ panel, queryClient: args.queryClient, state: args.state, renderedText });
+    })
   );
 
   return settled.flatMap((result, index) => {

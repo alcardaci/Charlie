@@ -1,3 +1,9 @@
+import { deepStrictEqual } from 'node:assert';
+import {
+  addOverviewCard, DEFAULT_OVERVIEW_LAYOUT, normalizeOverviewLayout, overviewCardOrder, removeOverviewCard,
+  type OverviewLayout,
+} from '../../src/utils/overviewLayout';
+
 // Import the real store only after a browser-like environment is present: this
 // catches startup callbacks persisting empty defaults before the disk GET.
 const cache = new Map<string, string>();
@@ -22,6 +28,52 @@ try {
   assert(writes.length === 0, 'Import must not overwrite saved holdings with default empty state');
   await hydrateTerminalState();
   assert(useTerminalStore.getState().portfolio[0]?.purchaseDate === '2026-01-02', 'Startup must restore saved portfolio into the live store');
+  deepStrictEqual(useTerminalStore.getState().overviewLayout, DEFAULT_OVERVIEW_LAYOUT, 'Existing profiles start with the full Overview');
+  for (const [saved, expected] of [
+    ['gpt-5.4-nano', 'gpt-6-luna'], ['gpt-5.4-mini', 'gpt-6-luna'],
+    ['gpt-5.6-luna', 'gpt-6.2-sol'], ['gpt-5.4', 'gpt-6.2-sol'], ['gpt-5.6-terra', 'gpt-6.2-sol'],
+    ['gpt-5.5', 'gpt-6.2-astra'], ['gpt-5.6-sol', 'gpt-6.2-astra'],
+  ]) {
+    const state = JSON.parse(disk).state;
+    disk = JSON.stringify({ state: { ...state, openAISettings: { ...state.openAISettings, companionModel: saved } }, version: 0 });
+    await hydrateTerminalState();
+    assert(useTerminalStore.getState().openAISettings.companionModel === expected, 'Migrate saved Companion tier for ' + saved);
+    assert(JSON.parse(disk).state.openAISettings.companionModel === expected, 'Persist the migrated Companion model');
+  }
+  for (const [saved, expected] of [['line', 'area'], ['area', 'area'], ['ohlc', 'ohlc'], ['candlestick', 'candlestick']]) {
+    disk = JSON.stringify({ state: { ...JSON.parse(disk).state, chartStyle: saved }, version: 0 });
+    await hydrateTerminalState();
+    assert(useTerminalStore.getState().chartStyle === expected, 'Restore the correct Equity chart style for ' + saved);
+    assert(JSON.parse(disk).state.chartStyle === expected, 'Persist the restored Equity chart style');
+  }
+  const legacyGrid = [{ id: 'fx', span: 3, height: 245 }, { id: 'watchlist', span: 1 }];
+  const custom: OverviewLayout = { tree: { axis: 'x', ratio: 0.75, first: 'fx', second: 'watchlist' }, height: 245, stackedHeights: { fx: 245 } };
+  disk = JSON.stringify({ state: { ...JSON.parse(disk).state, overviewLayout: legacyGrid }, version: 0 });
+  await hydrateTerminalState();
+  deepStrictEqual(useTerminalStore.getState().overviewLayout, custom, 'Previous grid restores its selected cards, widths and explicit heights');
+  const empty: OverviewLayout = { tree: null, height: 0, stackedHeights: {} };
+  for (const layout of [custom, empty]) {
+    useTerminalStore.getState().setOverviewLayout(layout);
+    await hydrateTerminalState();
+    deepStrictEqual(JSON.parse(disk).state.overviewLayout, layout, 'Saving mirrors the Overview layout to disk');
+    deepStrictEqual(useTerminalStore.getState().overviewLayout, layout, 'Hydration preserves order, sizing and hidden cards');
+  }
+  deepStrictEqual(normalizeOverviewLayout([null, { id: 'retired' }]), DEFAULT_OVERVIEW_LAYOUT);
+  deepStrictEqual(normalizeOverviewLayout([]), empty);
+  deepStrictEqual(normalizeOverviewLayout([
+    { id: 'indices', span: 30, height: 10_000 }, { id: 'indices', span: 1 },
+    { id: 'retired' }, { id: 'fx', span: 1, height: 'invalid' },
+  ]), { tree: { axis: 'x', first: 'indices', second: 'fx', ratio: 2 / 3 }, height: 1600, stackedHeights: { indices: 1600 } });
+  deepStrictEqual(normalizeOverviewLayout({
+    tree: { axis: 'x', ratio: 0.1, first: 'fx', second: { axis: 'y', first: 'fx', second: 'retired' } },
+    stackedHeights: { fx: 244, retired: 999 },
+  }), { tree: 'fx', height: 0, stackedHeights: { fx: 244 } });
+  const row = removeOverviewCard(custom, 'fx');
+  deepStrictEqual(row, { tree: 'watchlist', height: 245, stackedHeights: {} });
+  deepStrictEqual(removeOverviewCard(row, 'watchlist'), empty);
+  const restored = addOverviewCard(row, 'fx');
+  deepStrictEqual(overviewCardOrder(restored), ['watchlist', 'fx']);
+  deepStrictEqual(addOverviewCard(restored, 'fx'), restored, 'Adding a visible card is idempotent');
   useTerminalStore.getState().setActivePanel('portfolio');
   assert(writes.every(value => JSON.parse(value).state.portfolio.length === 1), 'Hydration callbacks and navigation must preserve restored holdings');
   const { terminalStateStorage, hydrateLocalStateCache } = await import('../../src/utils/localStateStorage');

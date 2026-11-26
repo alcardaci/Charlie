@@ -5,7 +5,7 @@
 Charlie is a terminal-style market workspace built with React, Vite, Tailwind, Zustand, and React Query.
 It keeps a command-driven shell around a routed center panel, then layers persistent market context around it:
 
-- `CommandBar`: command entry, panel routing, search/autocomplete, theme toggle, debug toggle, and AI companion toggle
+- `CommandBar`: command entry, panel routing, search/autocomplete, theme and debug toggles. The Companion shortcut appears on other tabs and when AI Insights is hidden in Overview.
 - `MarketTicker`: always-on quote strip
 - `MainPanel`: the active workspace
 - `NewsPanel`: either the top half of the combined `NEWS`/`GEO` workspace or a right-hand rail, depending on the current tab
@@ -82,6 +82,8 @@ It keeps a command-driven shell around a routed center panel, then layers persis
 
 ### 1. Market Overview (`HOME`, `OVERVIEW`, `WB`, `WL`)
 
+Choose **Edit layout** to arrange cards as you would in News. Drop a card in the center of another to swap them, or at an edge to place them side by side or one above the other. Drag a divider or corner to resize. You can also remove cards and add them back. **Save layout** keeps the arrangement when Charlie reopens. On narrow screens, cards stack in your saved order.
+
 What it contains:
 
 - Major US index cards
@@ -93,7 +95,7 @@ What it contains:
 - Watchlist beside the portfolio snapshot, stacking below it on narrow screens, with current quotes, 30-day daily-close charts, and links to equity research
 - Prediction-market snapshot
 - Upcoming macro calendar
-- Optional AI-written market summary
+- AI Insights pairs the market summary with a Companion prompt. You can choose a model and set web search to automatic or force a search for the next question. Sending opens the conversation in the side panel. Choose **Open conversation** to return to the chat without sending a question.
 
 Data sources:
 
@@ -127,12 +129,15 @@ What it contains:
 Data sources:
 
 - Yahoo Finance for the primary workbench and financial statements
+- SEC EDGAR for tagged metrics, linked financial filings, and verified registrant details when Yahoo leaves a field blank
 - Teleborsa / FIDA fallback for selected fund-like symbols
 - Yahoo quotes for sector ETF comparison
 
 How it is processed:
 
 - The panel fetches a normalized company workbench object plus a separate financials payload
+- Company profiles and filings load independently. When the SEC feed has no matching financial tags, the Overview links to an official report or prospectus when available.
+- **Refresh** checks Yahoo and EDGAR for updates. On the Financials tab it also refreshes the selected statement period.
 - It resolves sector ETF context from the company metadata, then fetches that ETF quote as a lightweight benchmark
 - Symbol changes automatically invalidate the relevant research queries
 
@@ -323,41 +328,13 @@ How it is processed:
 
 ### 13. Help (`HELP`)
 
-What it contains:
-
-- Command reference
-- Workspace index
-- Data-source summary
-- Keyboard shortcuts
-
-Data sources:
-
-- Static in-app documentation plus some runtime debug-mode conditionals
-
-How it is processed:
-
-- This is a descriptive panel rather than a data panel
-- It documents the live command surface, including the local Connections and AI Settings panel
+Open **Help** (F11) for command examples and keyboard shortcuts. The workspace directory uses the same names, commands, and function keys as the navigation bar. Expand the data-source or international ticker reference for details.
 
 ### 14. Settings (`SETTINGS`, `SETUP`, `CONFIG`, `AI`)
 
-What it contains:
+Open **Settings** (F12) to see which optional provider keys are saved on this device. Expand OpenAI, FRED, or Finnhub to add, replace, or remove its key. The status reports local key storage. It does not test the provider account.
 
-- Local connection status for OpenAI, FRED, and Finnhub
-- Per-provider add/remove actions
-- Model selection
-- Prompt controls for overview workflows
-- Bottom-bar shortcut access on `F12`
-
-Data sources:
-
-- Local Keychain-backed provider credential state
-- Local persisted OpenAI settings
-
-How it is processed:
-
-- The panel never stores raw provider secrets in browser state
-- It keeps only non-sensitive status or model metadata in app state, while the actual secrets live in local machine storage
+The Overview summary has its own model selector and expandable instructions. Model and prompt preferences are saved separately from API keys.
 
 ## Non-panel areas that change panel behavior
 
@@ -369,10 +346,10 @@ How it is processed:
 ### Panel companion
 
 - Answers general questions independently of the current Charlie workspace
-- Decides automatically whether web search is useful, returns source links when research is performed, and offers a per-request “force web” override
-- Offers seven model choices from low-cost Nano through GPT-5.6 Sol, with the lowest-cost model selected by default
+- Uses the displayed data for chart questions, general knowledge for definitions, and web research for ticker outlooks, recent news, and upcoming events. A question can use both the workspace and current sources. Force Web requests a search for the next answer.
+- Offers three reasoning models. Fast (GPT-6 Luna) is the default, Balanced (GPT-6.2 Sol) uses medium reasoning, and Expert (GPT-6.2 Astra) uses high reasoning.
 - Places model selection and web-search mode inside the message composer
-- Always receives the active panel as supporting context and decides whether it is relevant; typing `@` in the composer opens an autocomplete menu for explicitly forcing additional panel context
+- The current view is available as background. Refer to a panel by name or type `@` to include additional workspace data. Asking for a stock prediction researches that security.
 - Panel context uses visible text and supplements it with structured snapshots fetched through React Query
 - Stores up to 30 recent conversations locally, capped at 60 messages per conversation
 - Expands from the side companion into a dedicated full-page workspace without resetting the active conversation, draft, model, web mode, panel mentions, or history view

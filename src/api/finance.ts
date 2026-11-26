@@ -603,8 +603,6 @@ const CURRENCY_NAMES: Record<string, string> = {
 };
 
 const EQUITY_SUMMARY_MODULES = [
-  'assetProfile',
-  'summaryProfile',
   'quoteType',
   'summaryDetail',
   'calendarEvents',
@@ -615,13 +613,11 @@ const EQUITY_SUMMARY_MODULES = [
   'majorHoldersBreakdown',
   'netSharePurchaseActivity',
   'insiderTransactions',
-  'secFilings',
 ] as const;
 
 const FUND_SUMMARY_MODULES = [
   'quoteType',
   'summaryDetail',
-  'summaryProfile',
   'fundProfile',
   'fundPerformance',
   'topHoldings',
@@ -689,6 +685,9 @@ interface YahooSummaryResponse {
     shortName?: string | null;
   };
   summaryProfile?: {
+    sector?: string;
+    industry?: string;
+    fullTimeEmployees?: number;
     website?: string;
     country?: string;
     city?: string;
@@ -1353,19 +1352,22 @@ function normalizeDateString(value?: string | null): string | undefined {
   return parsed.toISOString();
 }
 
-export async function fetchQuotes(symbols: string[]): Promise<Quote[]> {
+type EquityReadOptions = { refresh?: boolean; signal?: AbortSignal };
+
+export async function fetchQuotes(symbols: string[], options: EquityReadOptions = {}): Promise<Quote[]> {
   if (!symbols.length) return [];
   const params = new URLSearchParams({ symbols: symbols.join(',') });
   let yahooError: Error | null = null;
   let yahooQuotes: Quote[] = [];
 
   try {
-    const payload = await fetchPublicJson<Quote[]>(`${YF}/quotes?${params}`, { cacheMs: 15_000 });
+    const payload = await fetchPublicJson<Quote[]>(`${YF}/quotes?${params}`, { cacheMs: 15_000, ...options });
     yahooQuotes = payload.map((quote) => ({
       ...quote,
       dataSource: 'yahoo' as const,
     }));
   } catch (error) {
+    options.signal?.throwIfAborted();
     yahooError = error instanceof Error ? error : new Error(String(error));
   }
 
@@ -1390,13 +1392,14 @@ export async function fetchQuotes(symbols: string[]): Promise<Quote[]> {
   return [];
 }
 
-export async function fetchQuote(symbol: string): Promise<Quote | null> {
-  const results = await fetchQuotes([symbol]);
+export async function fetchQuote(symbol: string, options: EquityReadOptions = {}): Promise<Quote | null> {
+  const results = await fetchQuotes([symbol], options);
   return results[0] ?? null;
 }
 
-export async function fetchSecCompanyData(symbol: string, signal?: AbortSignal): Promise<SecCompanyData> {
-  const res = await fetch(`${SEC}/company/${encodeURIComponent(symbol.trim().toUpperCase())}`, { signal });
+export async function fetchSecCompanyData(symbol: string, signal?: AbortSignal, { refresh = false } = {}): Promise<SecCompanyData> {
+  const url = `${SEC}/company/${encodeURIComponent(symbol.trim().toUpperCase())}${refresh ? '?refresh=1' : ''}`;
+  const res = await fetch(url, { signal, cache: refresh ? 'no-store' : 'default' });
   const data = await res.json() as SecCompanyData | { error?: string };
   if (!res.ok && !('status' in data)) throw new Error(('error' in data && data.error) || `SEC data fetch failed: ${res.status}`);
   return data as SecCompanyData;
@@ -1653,28 +1656,29 @@ function normalizeChartRows(
   );
 }
 
-async function fetchSummary<T>(symbol: string, modules: string[]): Promise<T> {
+async function fetchSummary<T>(symbol: string, modules: readonly string[], options: EquityReadOptions = {}): Promise<T> {
   const params = new URLSearchParams({ modules: modules.join(',') });
-  return fetchPublicJson<T>(`${YF}/summary/${encodeURIComponent(symbol)}?${params}`, { cacheMs: 60_000 });
+  return fetchPublicJson<T>(`${YF}/summary/${encodeURIComponent(symbol)}?${params}`, { cacheMs: 60_000, ...options });
 }
 
-async function fetchInsights(symbol: string, reportsCount = 5): Promise<YahooInsightsResponse | null> {
+async function fetchInsights(symbol: string, reportsCount = 5, options: EquityReadOptions = {}): Promise<YahooInsightsResponse | null> {
   const params = new URLSearchParams({ reportsCount: String(reportsCount) });
-  return fetchPublicJson<YahooInsightsResponse>(`${YF}/insights/${encodeURIComponent(symbol)}?${params}`, { cacheMs: 5 * 60_000 }).catch(() => null);
+  return fetchPublicJson<YahooInsightsResponse>(`${YF}/insights/${encodeURIComponent(symbol)}?${params}`, { cacheMs: 5 * 60_000, ...options }).catch(() => null);
 }
 
 async function fetchFundamentals(
   symbol: string,
   periodType: FinancialPeriodType,
   module: 'financials' | 'balance-sheet' | 'cash-flow',
-  period1: string
+  period1: string,
+  options: EquityReadOptions = {},
 ): Promise<FundamentalRecord[]> {
   const params = new URLSearchParams({
     type: periodType,
     module,
     period1,
   });
-  return fetchPublicJson<FundamentalRecord[]>(`${YF}/fundamentals/${encodeURIComponent(symbol)}?${params}`, { cacheMs: 5 * 60_000 });
+  return fetchPublicJson<FundamentalRecord[]>(`${YF}/fundamentals/${encodeURIComponent(symbol)}?${params}`, { cacheMs: 5 * 60_000, ...options });
 }
 
 export async function fetchChart(
@@ -2294,8 +2298,9 @@ export function buildMarketSentimentSnapshot(quotes: Quote[]): MarketSentimentSn
   };
 }
 
-export async function fetchCompanyWorkbench(symbol: string): Promise<CompanyWorkbench | null> {
-  const quote = await fetchQuote(symbol);
+export async function fetchCompanyWorkbench(symbol: string, options: EquityReadOptions = {}): Promise<CompanyWorkbench | null> {
+  const quote = await fetchQuote(symbol, options);
+  options.signal?.throwIfAborted();
   if (!quote) return null;
 
   if (quote.dataSource === 'teleborsa-fida') {
@@ -2304,17 +2309,26 @@ export async function fetchCompanyWorkbench(symbol: string): Promise<CompanyWork
   }
 
   const instrumentKind = instrumentKindFromQuoteType(quote.quoteType);
-  const summaryModules = instrumentKind === 'fund' ? [...FUND_SUMMARY_MODULES] : [...EQUITY_SUMMARY_MODULES];
-
-  const [summaryRes, insightsRes] = await Promise.allSettled([
-    fetchSummary<YahooSummaryResponse>(symbol, summaryModules as string[]),
-    instrumentKind === 'fund' ? Promise.resolve(null) : fetchInsights(symbol, 5),
+  const isFund = instrumentKind === 'fund';
+  // Yahoo validates every module in a response together. Keep optional filings and
+  // profile data independent, so an unfamiliar form cannot discard valid company data.
+  const [profileRes, summaryRes, filingsRes, insightsRes] = await Promise.allSettled([
+    fetchSummary<YahooSummaryResponse>(symbol, isFund ? ['summaryProfile'] : ['assetProfile', 'summaryProfile'], options),
+    fetchSummary<YahooSummaryResponse>(symbol, isFund ? FUND_SUMMARY_MODULES : EQUITY_SUMMARY_MODULES, options),
+    isFund ? Promise.resolve(null) : fetchSummary<YahooSummaryResponse>(symbol, ['secFilings'], options),
+    isFund ? Promise.resolve(null) : fetchInsights(symbol, 5, options),
   ]);
-
-  const summary = summaryRes.status === 'fulfilled' ? summaryRes.value : {};
+  options.signal?.throwIfAborted();
+  const summary = {
+    ...(summaryRes.status === 'fulfilled' ? summaryRes.value : undefined),
+    ...(profileRes.status === 'fulfilled' ? profileRes.value : undefined),
+  };
+  const filings = filingsRes.status === 'fulfilled' ? filingsRes.value?.secFilings?.filings : undefined;
   const insights = insightsRes.status === 'fulfilled' ? insightsRes.value : null;
   const profile = summary.assetProfile ?? {};
   const summaryProfile = summary.summaryProfile ?? {};
+  const sector = profile.sector?.trim() || summaryProfile.sector?.trim();
+  const industry = profile.industry?.trim() || summaryProfile.industry?.trim();
   const calendar = summary.calendarEvents;
   const financialData = summary.financialData ?? {};
   const summaryDetail = summary.summaryDetail ?? {};
@@ -2328,14 +2342,14 @@ export async function fetchCompanyWorkbench(symbol: string): Promise<CompanyWork
     instrumentKind,
     instrumentLabel,
     profile: {
-      sector: profile.sector,
-      industry: profile.industry,
-      website: profile.website ?? summaryProfile.website,
-      country: profile.country ?? summaryProfile.country,
-      city: profile.city ?? summaryProfile.city,
-      state: profile.state ?? summaryProfile.state,
-      longBusinessSummary: profile.longBusinessSummary ?? summaryProfile.longBusinessSummary ?? summaryProfile.description ?? fund?.description,
-      fullTimeEmployees: profile.fullTimeEmployees,
+      sector,
+      industry,
+      website: profile.website?.trim() || summaryProfile.website?.trim(),
+      country: profile.country?.trim() || summaryProfile.country?.trim(),
+      city: profile.city?.trim() || summaryProfile.city?.trim(),
+      state: profile.state?.trim() || summaryProfile.state?.trim(),
+      longBusinessSummary: profile.longBusinessSummary?.trim() || summaryProfile.longBusinessSummary?.trim() || summaryProfile.description?.trim() || fund?.description,
+      fullTimeEmployees: profile.fullTimeEmployees ?? summaryProfile.fullTimeEmployees,
       overallRisk: profile.overallRisk,
       officers: (profile.companyOfficers ?? [])
         .slice()
@@ -2349,9 +2363,9 @@ export async function fetchCompanyWorkbench(symbol: string): Promise<CompanyWork
         })),
     },
     sectorContext: {
-      sector: profile.sector,
-      industry: profile.industry,
-      sectorEtf: profile.sector ? SECTOR_ETF_BY_NAME[profile.sector] : undefined,
+      sector,
+      industry,
+      sectorEtf: sector ? SECTOR_ETF_BY_NAME[sector] : undefined,
     },
     calendar: calendar
       ? {
@@ -2436,7 +2450,7 @@ export async function fetchCompanyWorkbench(symbol: string): Promise<CompanyWork
       netInsiderShares: summary.netSharePurchaseActivity?.netInfoShares,
       netInsiderCount: summary.netSharePurchaseActivity?.netInfoCount,
     },
-    filings: (summary.secFilings?.filings ?? []).slice(0, 8).map((filing): CompanyFiling => ({
+    filings: (filings ?? []).slice(0, 8).map((filing): CompanyFiling => ({
       date: filing.date,
       type: filing.type,
       title: filing.title,
@@ -2449,14 +2463,16 @@ export async function fetchCompanyWorkbench(symbol: string): Promise<CompanyWork
 
 export async function fetchCompanyFinancials(
   symbol: string,
-  periodType: FinancialPeriodType = 'annual'
+  periodType: FinancialPeriodType = 'annual',
+  options: EquityReadOptions = {},
 ): Promise<CompanyFinancials> {
   const period1 = periodType === 'annual' ? relativeDateYears(6) : relativeDateYears(3);
   const [incomeRes, balanceRes, cashRes] = await Promise.allSettled([
-    fetchFundamentals(symbol, periodType, 'financials', period1),
-    fetchFundamentals(symbol, periodType, 'balance-sheet', period1),
-    fetchFundamentals(symbol, periodType, 'cash-flow', period1),
+    fetchFundamentals(symbol, periodType, 'financials', period1, options),
+    fetchFundamentals(symbol, periodType, 'balance-sheet', period1, options),
+    fetchFundamentals(symbol, periodType, 'cash-flow', period1, options),
   ]);
+  options.signal?.throwIfAborted();
   if ([incomeRes, balanceRes, cashRes].every(result => result.status === 'rejected')) throw new Error('Financial statements temporarily unavailable');
 
   const incomeRecords = normalizeFundamentalRecords(incomeRes.status === 'fulfilled' ? incomeRes.value : []);

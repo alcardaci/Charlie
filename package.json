@@ -28,6 +28,7 @@
     "check:public-data": "node scripts/check-public-data.mjs",
     "check:news-coverage": "node scripts/check-news-coverage.mjs",
     "check:startup": "node scripts/check-startup.mjs",
+    "check:companion": "node scripts/check-companion-server.mjs",
     "check:workspace-headings": "electron scripts/check-workspace-headings.cjs"
   },
   "dependencies": {
@@ -147,6 +148,7 @@
       "electron/**/*",
       "vite.config.ts",
       "server/gdelt.ts",
+      "server/companionSearch.ts",
       "src/data/**/*.ts",
       "src/utils/secOpportunityEvidence.ts",
       "src/utils/openaiConfig.ts",

@@ -18,6 +18,7 @@ try {
   });
 
   await import(`${pathToFileURL(outfile).href}?run=${Date.now()}`);
+  await import('./fixtures/sec-refresh.fixture.mjs');
 } finally {
   await rm(scratchDir, { recursive: true, force: true });
 }

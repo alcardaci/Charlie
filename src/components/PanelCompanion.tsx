@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
@@ -25,12 +25,15 @@ import type {
 } from '../types';
 import {
   COMPANION_MODEL_OPTIONS,
-  DEFAULT_COMPANION_MODEL,
   DEFAULT_PANEL_COMPANION_SYSTEM_PROMPT,
 } from '../utils/openaiConfig';
+import { getPanelReferences, PANEL_MENTION_OPTIONS, type PanelMentionOption } from '../utils/companionPanelReferences';
 import { buildCompanionContexts, getCompanionPanelLabel } from '../utils/panelCompanionContext';
+import { CompanionPromptContext } from './CompanionPromptContext';
+import { CompanionPromptControls } from './CompanionPromptControls';
 
 type PanelCompanionProps = {
+  children: ReactNode;
   mainPanelRef: RefObject<HTMLDivElement | null>;
   sideNewsRef: RefObject<HTMLDivElement | null>;
   sideNewsVisible: boolean;
@@ -38,50 +41,11 @@ type PanelCompanionProps = {
 
 type LocalMessage = CompanionConversationMessage;
 
-type PanelMentionOption = {
-  panel: PanelType;
-  token: string;
-  aliases?: string[];
-};
-
 type PanelMentionTrigger = {
   start: number;
   end: number;
   query: string;
 };
-
-const PANEL_MENTION_OPTIONS: PanelMentionOption[] = [
-  { panel: 'overview', token: 'overview', aliases: ['home', 'market'] },
-  { panel: 'news', token: 'news', aliases: ['headlines'] },
-  { panel: 'macro', token: 'macro', aliases: ['rates', 'economy', 'yield'] },
-  { panel: 'geopolitics', token: 'geopolitics', aliases: ['geo'] },
-  { panel: 'predictions', token: 'predictions', aliases: ['pred', 'polymarket'] },
-  { panel: 'portfolio', token: 'portfolio', aliases: ['holdings', 'positions'] },
-  { panel: 'heatmap', token: 'heatmap', aliases: ['sectors'] },
-  { panel: 'forex', token: 'forex', aliases: ['fx', 'currencies'] },
-  { panel: 'crypto', token: 'crypto', aliases: ['bitcoin'] },
-  { panel: 'etf', token: 'etf', aliases: ['funds'] },
-];
-
-const PANEL_MENTION_LOOKUP = new Map(
-  PANEL_MENTION_OPTIONS.flatMap((option) => [
-    [option.token, option.panel] as const,
-    ...(option.aliases ?? []).map((alias) => [alias, option.panel] as const),
-  ])
-);
-
-const PANEL_HINT_PATTERNS: Array<{ panel: PanelType; pattern: RegExp }> = [
-  { panel: 'overview', pattern: /\b(home|overview|market overview)\b/i },
-  { panel: 'news', pattern: /\b(news|headlines|headline feed)\b/i },
-  { panel: 'macro', pattern: /\b(macro|yield|economic|economy|rates)\b/i },
-  { panel: 'geopolitics', pattern: /\b(geo|geopolitics|geopolitical|hotspots)\b/i },
-  { panel: 'predictions', pattern: /\b(predictions|prediction markets|polymarket)\b/i },
-  { panel: 'portfolio', pattern: /\b(portfolio|holdings|positions|book)\b/i },
-  { panel: 'heatmap', pattern: /\b(heatmap|sector map|leadership map)\b/i },
-  { panel: 'forex', pattern: /\b(forex|fx|currency|currencies)\b/i },
-  { panel: 'crypto', pattern: /\b(crypto|bitcoin|ethereum|altcoins)\b/i },
-  { panel: 'etf', pattern: /\b(etf|fund monitor|sector etf)\b/i },
-];
 
 const PANEL_SUGGESTIONS: Partial<Record<PanelType, string[]>> = {
   overview: [
@@ -152,8 +116,18 @@ const GENERAL_SUGGESTIONS = [
   'Explain today’s latest central-bank decisions and why they matter for investors.',
 ];
 
-const INITIAL_COMPANION_MESSAGE =
-  'Ask me anything. I can explain topics, research the web for current information, follow breaking news, and use Charlie workspace context whenever it is relevant.';
+const LEGACY_GREETINGS = new Set([
+  'Ask me anything. I can explain topics, research the web for current information, follow breaking news, and use Charlie workspace context whenever it is relevant.',
+  'Ask for clarifications, comparisons, or hidden patterns in the current panel. Mention another panel like macro, geopolitics, portfolio, or news if you want cross-tab context.',
+]);
+
+function conversationTurns(messages: LocalMessage[]): LocalMessage[] {
+  const first = messages[0];
+  // Older chats stored a UI greeting as the first assistant turn, without response metadata.
+  return first?.role === 'assistant' && !first.model && !first.panels?.length && LEGACY_GREETINGS.has(first.content)
+    ? messages.slice(1)
+    : messages;
+}
 
 function createMessage(role: LocalMessage['role'], content: string, extras?: Partial<LocalMessage>): LocalMessage {
   return {
@@ -170,29 +144,6 @@ function getVisibleText(ref: RefObject<HTMLDivElement | null>): string {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 12000);
-}
-
-function inferMentionedPanels(input: string): PanelType[] {
-  const normalized = input.trim();
-  if (!normalized) return [];
-
-  return PANEL_HINT_PATTERNS
-    .filter(({ pattern }) => pattern.test(normalized))
-    .map(({ panel }) => panel);
-}
-
-function extractForcedPanelMentions(input: string): PanelType[] {
-  const panels: PanelType[] = [];
-  const mentionPattern = /@([a-z0-9-]+)/gi;
-  let match = mentionPattern.exec(input);
-
-  while (match) {
-    const panel = PANEL_MENTION_LOOKUP.get(match[1].toLowerCase());
-    if (panel) panels.push(panel);
-    match = mentionPattern.exec(input);
-  }
-
-  return Array.from(new Set(panels));
 }
 
 function getPanelMentionTrigger(input: string, caretPosition: number): PanelMentionTrigger | null {
@@ -219,7 +170,7 @@ function formatConversationTimestamp(value: string): string {
   });
 }
 
-export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: PanelCompanionProps) {
+export function PanelCompanion({ children, mainPanelRef, sideNewsRef, sideNewsVisible }: PanelCompanionProps) {
   const queryClient = useQueryClient();
   const {
     activePanel,
@@ -250,14 +201,12 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
   const initialConversation = companionConversations.find(
     (conversation) => conversation.id === activeCompanionConversationId
   );
-  const [messages, setMessages] = useState<LocalMessage[]>(
-    initialConversation?.messages ?? [createMessage('assistant', INITIAL_COMPANION_MESSAGE)]
-  );
+  const [messages, setMessages] = useState(() => conversationTurns(initialConversation?.messages ?? []));
   const [isLoading, setIsLoading] = useState(false);
-  const [pendingWebSearch, setPendingWebSearch] = useState(false);
   const [pendingForcedWebSearch, setPendingForcedWebSearch] = useState(false);
   const [composerError, setComposerError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const drawerHeadingRef = useRef<HTMLHeadingElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const activeRequestRef = useRef<AbortController | null>(null);
   const loadedConversationIdRef = useRef<string | null>(initialConversation?.id ?? null);
@@ -280,7 +229,7 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
     if (!conversation) return;
 
     loadedConversationIdRef.current = conversation.id;
-    setMessages(conversation.messages);
+    setMessages(conversationTurns(conversation.messages));
     setDraft('');
     setComposerCaret(0);
     setMentionMenuDismissed(false);
@@ -309,19 +258,7 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
     return () => window.clearTimeout(timer);
   }, [activeCompanionConversationId, messages, upsertCompanionConversation]);
 
-  const mentionedPanels = useMemo(
-    () => inferMentionedPanels(draft).filter((panel) => panel !== activePanel),
-    [activePanel, draft]
-  );
-  const forcedMentionPanels = useMemo(
-    () => extractForcedPanelMentions(draft).filter((panel) => panel !== activePanel),
-    [activePanel, draft]
-  );
-
-  const selectedPanels = useMemo(
-    () => Array.from(new Set([activePanel, ...mentionedPanels, ...forcedMentionPanels])),
-    [activePanel, forcedMentionPanels, mentionedPanels]
-  );
+  const draftReferences = useMemo(() => getPanelReferences(draft, activePanel), [draft, activePanel]);
   const panelMentionTrigger = useMemo(
     () => getPanelMentionTrigger(draft, composerCaret),
     [composerCaret, draft]
@@ -342,8 +279,7 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
   );
 
   const activePanelLabel = getCompanionPanelLabel(activePanel);
-  const selectedModel = openAISettings.companionModel?.trim() || DEFAULT_COMPANION_MODEL;
-  const selectedModelOption = COMPANION_MODEL_OPTIONS.find((option) => option.value === selectedModel)
+  const selectedModelOption = COMPANION_MODEL_OPTIONS.find((option) => option.value === openAISettings.companionModel)
     ?? COMPANION_MODEL_OPTIONS[0];
   const panelSuggestion = PANEL_SUGGESTIONS[activePanel]?.[0]
     ?? `Help me understand the most important takeaway from ${activePanelLabel.toLowerCase()}.`;
@@ -379,7 +315,7 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
     if (isLoading) return;
     loadedConversationIdRef.current = null;
     setActiveCompanionConversationId(null);
-    setMessages([createMessage('assistant', INITIAL_COMPANION_MESSAGE)]);
+    setMessages([]);
     setDraft('');
     setComposerCaret(0);
     setMentionMenuDismissed(false);
@@ -392,7 +328,7 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
     if (isLoading) return;
     loadedConversationIdRef.current = conversation.id;
     setActiveCompanionConversationId(conversation.id);
-    setMessages(conversation.messages);
+    setMessages(conversationTurns(conversation.messages));
     setDraft('');
     setComposerCaret(0);
     setMentionMenuDismissed(false);
@@ -406,7 +342,7 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
     deleteCompanionConversation(conversationId);
     if (removingActiveConversation) {
       loadedConversationIdRef.current = null;
-      setMessages([createMessage('assistant', INITIAL_COMPANION_MESSAGE)]);
+      setMessages([]);
       setDraft('');
       setComposerCaret(0);
       setMentionMenuDismissed(false);
@@ -418,17 +354,20 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
     activeRequestRef.current?.abort();
   };
 
+  function canSend(content: string) {
+    return Boolean(content.trim()) && !isLoading && !activeRequestRef.current;
+  }
+
   const handleSubmit = async (options?: { content?: string; forceWebSearch?: boolean }) => {
     const content = (options?.content ?? draft).trim();
-    if (!content || isLoading) return;
+    if (!canSend(content)) return;
+    const abortController = new AbortController();
+    activeRequestRef.current = abortController;
 
-    const requestModel = selectedModel;
+    const requestModel = selectedModelOption.value;
     const useForcedWebSearch = options?.forceWebSearch ?? forceWebSearch;
-    const requestPanels = Array.from(new Set([
-      activePanel,
-      ...inferMentionedPanels(content),
-      ...extractForcedPanelMentions(content),
-    ]));
+    const references = getPanelReferences(content, activePanel);
+    const requestPanels = references.panels;
     const conversationId = activeCompanionConversationId
       ?? `conversation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     if (!activeCompanionConversationId) {
@@ -442,11 +381,14 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
     });
     const baseMessages = [...messages, userMessage];
     setMessages(baseMessages);
+    if (options?.content === undefined) {
+      setDraft('');
+      setComposerCaret(0);
+      setMentionMenuDismissed(false);
+    }
+    setComposerError(null);
     setIsLoading(true);
-    setPendingWebSearch(true);
     setPendingForcedWebSearch(useForcedWebSearch);
-    const abortController = new AbortController();
-    activeRequestRef.current = abortController;
     let assistantMessageId: string | null = null;
 
     try {
@@ -461,6 +403,7 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
 
       const contexts: CompanionPanelContext[] = await buildCompanionContexts({
         panels: requestPanels,
+        detailedPanels: references.detailed,
         queryClient,
         state: {
           activePanel,
@@ -482,10 +425,6 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
       assistantMessageId = assistantMessage.id;
       const nextMessages = [...baseMessages, assistantMessage];
       setMessages(nextMessages);
-      setDraft('');
-      setComposerCaret(0);
-      setMentionMenuDismissed(false);
-      setComposerError(null);
 
       const history: CompanionMessagePayload[] = nextMessages
         .filter((message) => message.role === 'user' || (message.role === 'assistant' && message.content.trim()))
@@ -539,7 +478,10 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
         return;
       }
 
-      const message = error instanceof Error ? error.message : 'Unable to reach the companion right now.';
+      const detail = error instanceof Error ? error.message : 'Unable to reach the companion right now.';
+      const message = detail === 'OpenAI API key is not stored locally yet.'
+        ? 'Add your OpenAI API key in Settings to use the AI Companion.'
+        : detail;
       setComposerError(message);
       setMessages((current) => [
         ...current.filter((entry) => entry.content.trim() || entry.role === 'user'),
@@ -555,14 +497,26 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
         activeRequestRef.current = null;
       }
       setIsLoading(false);
-      setPendingWebSearch(false);
       setPendingForcedWebSearch(false);
       if (useForcedWebSearch) setForceWebSearch(false);
     }
   };
 
+  function sendPrompt(content: string) {
+    if (!canSend(content)) return false;
+    setHistoryOpen(false);
+    setCompanionOpen(true);
+    void handleSubmit({ content });
+    window.requestAnimationFrame(() => drawerHeadingRef.current?.focus({ preventScroll: true }));
+    return true;
+  }
+
   return (
-    <>
+    <CompanionPromptContext.Provider value={{
+      sendPrompt, isSending: isLoading, model: selectedModelOption.value,
+      setModel: model => updateOpenAISettings({ companionModel: model }), forceWebSearch, setForceWebSearch,
+    }}>
+      {children}
       {companionOpen && (
         <>
           {!companionExpanded && (
@@ -588,24 +542,10 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
                   : 'contents'
               }
             >
-            <div className="instrument-section flex items-start justify-between gap-3 border-b border-terminal-border px-4 py-4">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <Sparkles size={14} className="text-terminal-accent" />
-                  <h2 className="workspace-title">{historyOpen ? 'CHAT HISTORY' : 'CHARLIE COMPANION'}</h2>
-                </div>
-                {!historyOpen && (
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {selectedPanels.map((panel) => (
-                      <span
-                        key={panel}
-                        className="rounded border border-terminal-accent/30 bg-terminal-accent/10 px-2 py-1 text-[11px] text-terminal-accent"
-                      >
-                        {getCompanionPanelLabel(panel)}
-                      </span>
-                    ))}
-                  </div>
-                )}
+            <div className="instrument-section flex items-center justify-between gap-3 border-b border-terminal-border px-4 py-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <Sparkles size={14} className="shrink-0 text-terminal-accent" aria-hidden="true" />
+                <h2 ref={drawerHeadingRef} tabIndex={-1} className="workspace-title">{historyOpen ? 'CHAT HISTORY' : 'CHARLIE COMPANION'}</h2>
               </div>
               <div className="flex flex-shrink-0 gap-2">
                 <button
@@ -702,17 +642,10 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
             ) : (
               <>
 
-            <div className="instrument-section border-b border-terminal-border px-4 py-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="text-[11px] font-bold tracking-[0.18em] text-terminal-faint">WORKSPACE CONTEXT</div>
-                <div className="rounded bg-terminal-accent/10 px-2 py-1 text-[10px] font-bold tracking-[0.12em] text-terminal-accent">
-                  AUTOMATIC
-                </div>
-              </div>
-              <div className="mt-1 text-[11px] leading-relaxed text-terminal-faint">
-                Charlie automatically receives the current panel and decides whether workspace context is relevant. Type <span className="text-terminal-accent">@</span> in your prompt only when you want to force a specific panel into the request.
-              </div>
-            </div>
+            <aside aria-label="Companion guidance" className="shrink-0 px-4 pt-3 text-[11px] leading-relaxed text-terminal-muted">
+              Charlie can use {draftReferences.panels.map(getCompanionPanelLabel).join(', ')} when relevant. Type @ to include another panel.{' '}
+              {forceWebSearch ? 'Force Web requires a search for your next question.' : 'Forecasts and current events use web search.'}
+            </aside>
 
             {debugMode && (
               <div className="instrument-section border-b border-terminal-border px-4 py-3">
@@ -809,8 +742,8 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
               })}
 
               {!hasUserMessages && !isLoading && (
-                <div className="instrument-section rounded-2xl border border-terminal-border bg-terminal-bg/35 p-3">
-                  <div className="text-[10px] font-bold tracking-[0.18em] text-terminal-faint">SUGGESTED PROMPTS</div>
+                <div role="group" aria-label="Suggested prompts">
+                  <h3 className="text-[10px] font-bold tracking-[0.18em] text-terminal-faint">SUGGESTED PROMPTS</h3>
                   <div className="mt-2 grid gap-1.5">
                     {suggestions.map((suggestion) => (
                       <button
@@ -830,9 +763,7 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
                 <div className="flex justify-start">
                   <div className="inline-flex items-center gap-2 rounded-2xl border border-terminal-border bg-terminal-elevated px-3 py-2 text-xs text-terminal-muted">
                     <Loader2 size={12} className="animate-spin" />
-                    {pendingWebSearch
-                      ? (pendingForcedWebSearch ? 'Searching the web and reviewing workspace context...' : 'Thinking and researching if fresh information is useful...')
-                      : 'Reviewing workspace context and thinking...'}
+                    {pendingForcedWebSearch ? 'Searching the web…' : 'Thinking…'}
                     <button
                       type="button"
                       onClick={stopActiveResponse}
@@ -870,7 +801,7 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
                           key={option.panel}
                           type="button"
                           role="option"
-                          aria-selected={forcedMentionPanels.includes(option.panel)}
+                          aria-selected={draftReferences.mentions.includes(option.panel)}
                           onMouseDown={(event) => event.preventDefault()}
                           onClick={() => selectPanelMention(option)}
                           className="flex items-center justify-between gap-3 rounded border border-transparent px-2 py-2 text-left transition-colors hover:border-terminal-accent/30 hover:bg-terminal-accent/10"
@@ -884,36 +815,8 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
                 )}
 
                 <div className="overflow-hidden rounded border border-terminal-border bg-terminal-elevated focus-within:border-terminal-accent/50">
-                  <div className="flex items-center gap-2 border-b border-terminal-border px-2 py-2">
-                    <select
-                      value={selectedModelOption.value}
-                      onChange={(event) => updateOpenAISettings({ companionModel: event.target.value })}
-                      disabled={isLoading}
-                      className="min-w-0 flex-1 bg-transparent px-1 text-[11px] font-bold text-terminal-text focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-                      aria-label="Companion model"
-                    >
-                      {COMPANION_MODEL_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label} · {option.value}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => setForceWebSearch((forced) => !forced)}
-                      disabled={isLoading}
-                      aria-pressed={forceWebSearch}
-                      aria-label={`Web search mode: ${forceWebSearch ? 'Required' : 'Automatic'}`}
-                      title={forceWebSearch ? 'Web search is required for the next request' : 'Charlie decides whether to search the web'}
-                      className={`inline-flex flex-shrink-0 items-center gap-1.5 rounded border px-2 py-1 text-[10px] font-bold tracking-[0.1em] transition-colors ${
-                        forceWebSearch
-                          ? 'border-terminal-accent/50 bg-terminal-accent/15 text-terminal-accent'
-                          : 'border-terminal-border text-terminal-faint hover:border-terminal-accent/35 hover:text-terminal-accent'
-                      }`}
-                    >
-                      <Globe2 size={11} />
-                      {forceWebSearch ? 'FORCE WEB' : 'WEB AUTO'}
-                    </button>
+                  <div className="border-b border-terminal-border p-2">
+                    <CompanionPromptControls />
                   </div>
                   <div className="flex items-stretch gap-2">
                     <textarea
@@ -943,7 +846,8 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
                           void handleSubmit();
                         }
                       }}
-                      placeholder="Ask a question, research a topic, or type @ to cite a panel."
+                      aria-label="Message to Companion"
+                      placeholder="Ask a question…"
                       className="min-h-[5.5rem] min-w-0 flex-1 resize-none bg-transparent px-3 py-2 text-xs text-terminal-text placeholder-terminal-faint focus:outline-none"
                     />
                     <button
@@ -960,13 +864,6 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
                   </div>
                 </div>
               </div>
-              <div className="mt-2 text-[11px] leading-relaxed text-terminal-faint">
-                <span className="text-terminal-text">{selectedModelOption.description}</span>
-                {forceWebSearch
-                  ? ' Web search is required for the next request.'
-                  : ' Charlie decides when web search is useful.'}
-                {` ${activePanelLabel} workspace context is always available.`}
-              </div>
             </div>
               </>
             )}
@@ -974,6 +871,6 @@ export function PanelCompanion({ mainPanelRef, sideNewsRef, sideNewsVisible }: P
           </section>
         </>
       )}
-    </>
+    </CompanionPromptContext.Provider>
   );
 }

@@ -8,6 +8,9 @@ import { fmt } from '../utils/formatters';
 import './RegionalNewsMap.css';
 
 const GEO_DATA = worldCountries110m;
+// At projection scale 148 the world spans about 800 × 415 map units.
+// Frame those bounds with a small ocean margin, even in a short News tile.
+const WORLD_VIEW = { width: 820, height: 430, scale: 148, zoom: 1, center: [0, -1] as [number, number] };
 // ISO 3166-1 alpha-2 → numeric (world-atlas TopoJSON IDs)
 const ISO2_TO_NUM: Record<string, number> = {
   US: 840, CA: 124, MX: 484, BR: 76,  AR: 32,
@@ -184,8 +187,10 @@ export function RegionalNewsMap({
   const mapRef = useRef<SVGSVGElement>(null);
   const [svgScale, setSvgScale] = useState(1);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [zoom, setZoom] = useState(1.1);
-  const [center, setCenter] = useState<[number, number]>([12, 20]);
+  const [zoom, setZoom] = useState(WORLD_VIEW.zoom);
+  const [center, setCenter] = useState(WORLD_VIEW.center);
+  const canResetView = zoom !== WORLD_VIEW.zoom
+    || Math.hypot(center[0] - WORLD_VIEW.center[0], center[1] - WORLD_VIEW.center[1]) > 0.01;
   const hotspotRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   // The same map can occupy a short tile or an entire column. Size dots and
@@ -303,10 +308,10 @@ export function RegionalNewsMap({
             >
               <Minus size={12} />
             </button>
-            {zoom !== 1.1 && (
+            {canResetView && (
               <button
                 aria-label="Reset event map zoom"
-                onClick={() => { setZoom(1.1); setCenter([12, 20]); }}
+                onClick={() => { setZoom(WORLD_VIEW.zoom); setCenter(WORLD_VIEW.center); }}
                 className="flex h-7 w-7 items-center justify-center rounded border border-terminal-border bg-terminal-panel/95 text-terminal-muted hover:bg-terminal-hover hover:text-terminal-text text-[8px] font-bold tracking-tight transition-colors backdrop-blur-sm"
               >
                 ⊡
@@ -327,8 +332,10 @@ export function RegionalNewsMap({
 
           <ComposableMap
             ref={mapRef}
+            width={WORLD_VIEW.width}
+            height={WORLD_VIEW.height}
             projection="geoNaturalEarth1"
-            projectionConfig={{ scale: 148, center: [12, 15] }}
+            projectionConfig={{ scale: WORLD_VIEW.scale, center: WORLD_VIEW.center }}
             style={{ width: '100%', height: '100%' }}
           >
             <defs>

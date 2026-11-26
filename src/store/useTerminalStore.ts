@@ -1,4 +1,5 @@
-import { DEFAULT_NEWS_LAYOUT, normalizeNewsLayout, type NewsLayout } from '../utils/newsLayout';
+import { DEFAULT_NEWS_LAYOUT, normalizeNewsLayout, restoreNewsLayout, type NewsLayout } from '../utils/newsLayout';
+import { DEFAULT_OVERVIEW_LAYOUT, normalizeOverviewLayout, type OverviewLayout } from '../utils/overviewLayout';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import {
@@ -14,11 +15,11 @@ import {
 import { TERMINAL_STORAGE_KEY, terminalStateStorage } from '../utils/localStateStorage';
 import {
   buildDefaultOpenAISystemPrompts,
-  COMPANION_MODEL_OPTIONS,
   DEFAULT_COMPANION_MODEL,
   DEFAULT_GEOPOLITICS_EVENT_SYSTEM_PROMPT,
   DEFAULT_GEOPOLITICS_OPENAI_MODEL,
   DEFAULT_OPENAI_MODEL,
+  getCompanionModelOption,
   getOpenAISystemPromptForHarness,
   OPENAI_HARNESS_OPTIONS,
 } from '../utils/openaiConfig';
@@ -69,6 +70,8 @@ interface TerminalState {
   activePanel: PanelType;
   activeSymbol: string;
   debugMode: boolean;
+  overviewLayout: OverviewLayout;
+  setOverviewLayout: (layout: OverviewLayout) => void;
   newsLayout: NewsLayout;
   setNewsLayout: (layout: NewsLayout) => void;
   watchlist: string[];
@@ -125,7 +128,7 @@ interface TerminalState {
 
 type PersistedTerminalState = Pick<
   TerminalState,
-  | 'newsLayout'
+  | 'overviewLayout'
   | 'watchlist'
   | 'portfolio'
   | 'commandHistory'
@@ -136,11 +139,17 @@ type PersistedTerminalState = Pick<
   | 'openAISettings'
   | 'companionConversations'
   | 'activeCompanionConversationId'
->;
+> & { newsLayout: NewsLayout & { version?: number } };
 
 function normalizeCurrencyCode(currency?: string | null): string {
   const normalized = (currency ?? '').trim().toUpperCase();
   return /^[A-Z]{3}$/.test(normalized) ? normalized : DEFAULT_PORTFOLIO_CURRENCY;
+}
+
+function restoreChartStyle(value: unknown): ChartStyle {
+  if (value === 'line') return 'area';
+  if (value === 'area' || value === 'ohlc') return value;
+  return 'candlestick';
 }
 
 function isObsoleteOverviewPrompt(prompt: string): boolean {
@@ -187,10 +196,7 @@ function normalizeOpenAISettings(value?: Partial<OpenAISettings> | null): OpenAI
     : rawGeopoliticsPrompt;
 
   const rawModel = typeof value?.model === 'string' ? value.model.trim() : '';
-  const rawCompanionModel = typeof value?.companionModel === 'string' ? value.companionModel.trim() : '';
-  const companionModel = COMPANION_MODEL_OPTIONS.some((option) => option.value === rawCompanionModel)
-    ? rawCompanionModel
-    : DEFAULT_COMPANION_MODEL;
+  const companionModel = getCompanionModelOption(typeof value?.companionModel === 'string' ? value.companionModel : undefined).value;
   const hasObsoleteOverviewPrompt =
     isObsoleteOverviewPrompt(value?.systemPrompts?.comprehensive?.trim() ?? '') ||
     (harness === 'comprehensive' && typeof value?.systemPrompt === 'string' && isObsoleteOverviewPrompt(value.systemPrompt));
@@ -316,6 +322,8 @@ export const useTerminalStore = create<TerminalState>()(
     (set, get) => ({
       macroCountry: 'US',
       setMacroCountry: macroCountry => set({ macroCountry }),
+      overviewLayout: DEFAULT_OVERVIEW_LAYOUT,
+      setOverviewLayout: layout => set({ overviewLayout: normalizeOverviewLayout(layout) }),
       newsLayout: DEFAULT_NEWS_LAYOUT,
       setNewsLayout: layout => set({ newsLayout: normalizeNewsLayout(layout) }),
       activePanel: 'overview',
@@ -687,7 +695,9 @@ export const useTerminalStore = create<TerminalState>()(
         return {
           ...currentState,
           ...persisted,
-          newsLayout: normalizeNewsLayout(persisted.newsLayout),
+          overviewLayout: normalizeOverviewLayout(persisted.overviewLayout),
+          newsLayout: restoreNewsLayout(persisted.newsLayout),
+          chartStyle: restoreChartStyle(persisted.chartStyle),
           debugMode: false,
           portfolioDisplayCurrency: normalizeCurrencyCode(persisted.portfolioDisplayCurrency),
           openAISettings: normalizeOpenAISettings(persisted.openAISettings),
@@ -700,7 +710,8 @@ export const useTerminalStore = create<TerminalState>()(
         state.updateOpenAISettings({ hasStoredApiKey: state.openAISettings.hasStoredApiKey });
       },
       partialize: (state): PersistedTerminalState => ({
-        newsLayout: state.newsLayout,
+        overviewLayout: state.overviewLayout,
+        newsLayout: { ...state.newsLayout, version: 2 },
         watchlist: state.watchlist,
         portfolio: state.portfolio,
         commandHistory: state.commandHistory,

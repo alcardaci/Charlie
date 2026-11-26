@@ -1,6 +1,7 @@
 import { PredictionForecast } from '../types';
 import { fmt } from '../utils/formatters';
 import { formatPredictionMove, formatPredictionProbability } from '../utils/marketPanelDisplay';
+import { OverviewSectionHeader } from './OverviewSectionHeader';
 
 function formatPredictionDate(value: string | null): string {
   if (!value) return '—';
@@ -25,15 +26,14 @@ export function PredictionMarketsSection({
   onOpenPanel?: () => void;
 }) {
   const gridClassName = compact
-    ? 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2'
+    ? 'grid grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))] gap-2'
     : 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3';
   const placeholderCount = compact ? 4 : 6;
 
   return (
     <div>
       {showHeader && (
-        <div className="flex items-center justify-between gap-3 mb-2">
-          <div className="instrument-heading text-terminal-muted text-xs font-bold tracking-wider">PREDICTION MARKETS</div>
+        <OverviewSectionHeader title="PREDICTION MARKETS">
           <div className="flex items-center gap-2">
             {onOpenPanel && compact && (
               <button
@@ -48,7 +48,7 @@ export function PredictionMarketsSection({
               {updatedAt ? ` | Updated ${new Date(updatedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}` : ''}
             </div>
           </div>
-        </div>
+        </OverviewSectionHeader>
       )}
 
       {loading ? (
