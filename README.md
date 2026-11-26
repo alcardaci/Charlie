@@ -1,27 +1,37 @@
 # Charlie
 
-Charlie is a local-first desktop market workspace built with React, Vite, and Electron. It runs as a native app on macOS, Windows, and Linux, and keeps your workspace data, preferences, watchlists, and provider connections local to the machine you are using.
+Charlie is a desktop market research app. Build a dashboard around your portfolio and watchlist, investigate a move in a stock or index, and follow the headlines and economic releases behind it. Charlie uses public market data and saves your holdings, layouts, and conversations on your device. An optional AI Companion can explain the chart you’re viewing or search the web with your own OpenAI key.
+
+**Download Charlie 1.1 for Apple Silicon Macs or Windows** from the [GitHub release](https://github.com/alcardaci/Charlie/releases/tag/v1.1.0). Linux users can run the app from source.
 
 ## Screenshots
 
-| Market Overview | News + Geopolitics |
+**Market Overview** brings the sentiment gauges, index history, and your own watchlist into one customizable dashboard.
+
+![Market Overview in Charlie’s graphite theme](docs/screenshots/charlie-overview.png)
+
+| News and geopolitics | Macroeconomics |
 | --- | --- |
-| ![Charlie market overview](docs/screenshots/charlie-overview.png) | ![News and geopolitics workspace](docs/screenshots/news-geopolitics.png) |
-| AAPL Research | AAPL Chart |
-| ![AAPL research workspace](docs/screenshots/aapl-research.png) | ![AAPL chart workspace](docs/screenshots/aapl-chart.png) |
+| ![News headlines, global event map, and geopolitical risk](docs/screenshots/news-geopolitics.png) | ![Economic indicators and their historical trends in Macro](docs/screenshots/macro.png) |
+
+| Equity research | Equity chart |
+| --- | --- |
+| ![Apple’s quote and company research](docs/screenshots/aapl-research.png) | ![Apple’s historical price and trading volume](docs/screenshots/aapl-chart.png) |
 
 ## Current Feature Set
 
-- Command-driven terminal UI with a top command bar, live market ticker, watchlist sidebar, main panel, status bar, and optional live player.
-- Dedicated workspaces for market overview, ticker research, charts, news and geopolitics, prediction markets, macro and yield monitoring, portfolio tracking, sector heatmaps, forex, crypto, ETF monitoring, help, and settings.
-- Fast ticker shortcuts such as `AAPL`, `AAPL GP`, `AAPL NEWS`, and `AAPL WL`.
-- Optional AI-assisted market summaries, geopolitics extraction, and a general-purpose research companion with autonomous web access and workspace awareness.
-- Local persistence for watchlists, portfolio lots, command history, companion conversations, chart style, forex pair selection, and provider settings.
+- **Overview and Portfolio.** Arrange the Overview cards, track symbols with 30-day price charts, and see how your positions, cost basis, and allocation change over time.
+- **Equity Research.** Read company profiles and SEC filings, chart prices and moving averages, or open an index to compare its level with its recent history.
+- **News and Macro.** Follow a scrolling headline feed, review geographic hotspots with source links, and explore economic releases, policy rates, and yields. News tiles can be moved and resized.
+- **Predictions and Congressional Trades.** Compare leading Polymarket outcomes side by side. Browse disclosed House and Senate trades by member, ticker, or chamber, with reported amount ranges, filing delays, and links to the original reports.
+- **Navigation.** Twelve workspaces share a command bar and keyboard shortcuts. Heatmap, Forex, ETFs, and Crypto provide dedicated market views. Settings includes Help & Shortcuts.
 
 ## Install and Run
 
+For a source installation of 1.1.0, download the [tagged source](https://github.com/alcardaci/Charlie/archive/refs/tags/v1.1.0.zip) and run these commands from its directory.
+
 ```bash
-npm install
+npm ci
 npm run desktop:dev
 ```
 
@@ -40,15 +50,16 @@ npm run desktop:dev
   - `AAPL GP` or `AAPL CHART` opens the chart workspace
   - `AAPL NEWS` opens ticker-specific news
   - `AAPL WL` adds the symbol to the watchlist
-- `NEWS`, `GEO`, `PRED`, `MACRO`, `PORT`, `HEAT`, `FX`, `CRYPTO`, `ETF`, `HELP`, and `SETTINGS` jump straight to the matching workspace.
+- `NEWS`, `GEO`, `PRED`, `MACRO`, `PORT`, `HEAT`, `FX`, `CRYPTO`, `ETF`, `CONGRESS`, and `SETTINGS` jump straight to the matching workspace.
 - `ENTER` runs the command, `UP` and `DOWN` browse command history, `TAB` accepts autocomplete, and `ESC` clears or closes the command dropdown.
-- `F1` through `F12` provide shortcut-bar navigation for the core workspaces.
+- `F11` or `CONGRESS` opens Congressional Trades. `F12` or `SETTINGS` opens preferences. `HELP` opens Help & Shortcuts directly.
 
 ## Data Sources
 
 - Yahoo Finance via `yahoo-finance2`: equities, ETFs, indices, forex, futures, company fundamentals, search, charts, news, portfolio repricing, and most market screens.
 - Teleborsa / FIDA fallback parsing: quote and chart fallback for some fund-like instruments that Yahoo does not cover reliably.
 - CoinGecko: crypto prices, rankings, market caps, and breadth inputs.
+- U.S. House Clerk, the NexusTrade congressional disclosure snapshot, and congress-legislators supply Congressional Trades. [Coverage and personal-research terms](docs/congressional-trades.md).
 - Polymarket Gamma API: prediction-market contracts, probabilities, liquidity, and volume.
 - FRED: macro series and release dates used in the macro and calendar views.
 - Finnhub: earnings calendar support used in macro views.
@@ -61,7 +72,7 @@ npm run desktop:dev
 
 ## Provider Connections
 
-Charlie works with public/no-key sources out of the box. Optional provider credentials are configured in the `SETTINGS` workspace, not in `.env`, and that workspace also lets you adjust the OpenAI model and prompts used by the AI workflows.
+Open **Settings** (F12) to manage optional API keys or change the model and instructions for the Overview summary. Charlie’s public market feeds work without keys.
 
 - OpenAI powers the Global Event Map, country summaries, and the optional AI features.
 - FRED: macro data and release calendars
