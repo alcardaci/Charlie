@@ -22,13 +22,9 @@ export type OpenAIHarness = 'comprehensive' | 'custom';
 
 export type OpenAIHarnessPrompts = Record<OpenAIHarness, string>;
 
-export type ConnectionProvider = 'openai' | 'fred' | 'finnhub';
+export type ConnectionProvider = 'openai' | 'fred' | 'finnhub' | 'equibles';
 
-export interface ConnectionStatusMap {
-  openai: boolean;
-  fred: boolean;
-  finnhub: boolean;
-}
+export type ConnectionStatusMap = Record<ConnectionProvider, boolean>;
 
 export interface AIMarketSummary {
   summary: string;
@@ -527,6 +523,8 @@ export interface CalendarEvent {
   source?: string;
   country?: string;
   symbol?: string;
+  fiscalYear?: number;
+  fiscalQuarter?: number;
   value?: number | null;
   estimate?: number | null;
   previous?: number | null;

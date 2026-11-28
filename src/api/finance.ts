@@ -2853,7 +2853,8 @@ export async function fetchMacroReleaseCalendar(from: string, to: string): Promi
 
   const earningsEvents = earningsRes.status === 'fulfilled'
     ? earningsRes.value
-        .filter((earning) => MAJOR_EARNINGS_SYMBOLS.has(earning.symbol))
+        .filter((earning) => MAJOR_EARNINGS_SYMBOLS.has(earning.symbol)
+          && /^\d{4}-\d{2}-\d{2}$/.test(earning.date) && Number.isFinite(Date.parse(earning.date)))
         .map((earning): CalendarEvent => ({
           date: earning.date,
           title: `${earning.symbol} Earnings`,
@@ -2865,6 +2866,8 @@ export async function fetchMacroReleaseCalendar(from: string, to: string): Promi
           ].filter(Boolean).join(' | '),
           source: 'Finnhub',
           symbol: earning.symbol,
+          fiscalYear: earning.year > 0 ? earning.year : undefined,
+          fiscalQuarter: earning.quarter >= 1 && earning.quarter <= 4 ? earning.quarter : undefined,
         }))
     : [];
 

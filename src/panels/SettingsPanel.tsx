@@ -13,6 +13,7 @@ const PROVIDERS = [
   { id: 'openai', name: 'OpenAI', purpose: 'Overview summaries, the AI companion and event map analysis.', url: 'https://platform.openai.com/api-keys' },
   { id: 'fred', name: 'FRED', purpose: 'Economic indicators and release dates.', url: 'https://fredaccount.stlouisfed.org/apikeys' },
   { id: 'finnhub', name: 'Finnhub', purpose: 'Company earnings dates in the calendar.', url: 'https://finnhub.io/dashboard' },
+  { id: 'equibles', name: 'Equibles', purpose: 'Earnings call briefs, transcripts, analyst Q&A, and trends in Equity Research and the Events Calendar.', url: 'https://equibles.com/dashboard/apikeys' },
 ] as const;
 
 const fieldClass = 'min-w-0 rounded border border-terminal-border bg-terminal-elevated px-2.5 py-1.5 text-xs text-terminal-text focus:border-terminal-accent';
@@ -49,6 +50,10 @@ function Connections() {
       if (provider === 'openai') {
         updateOpenAISettings({ hasStoredApiKey: configured });
         queryClient.setQueryData(['openai-key-status'], { configured });
+      }
+      if (provider === 'equibles') {
+        await queryClient.cancelQueries({ queryKey: ['equibles'] });
+        queryClient.removeQueries({ queryKey: ['equibles'] });
       }
       await queryClient.invalidateQueries({ queryKey: ['connection-status'] });
     },

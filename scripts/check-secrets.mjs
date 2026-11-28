@@ -19,6 +19,7 @@ const ENV_ASSIGNMENT_PATTERNS = [
   /\bOPENAI(?:_API)?_KEY\s*=\s*.+/g,
   /\bFRED_API_KEY\s*=\s*.+/g,
   /\bFINNHUB_API_KEY\s*=\s*.+/g,
+  /\bEQUIBLES_API_KEY\s*=\s*.+/g,
   /\bTHE_NEWS_API_TOKEN\s*=\s*.+/g,
 ];
 

@@ -1,5 +1,6 @@
 import { selectPolymarketForecasts, type PolymarketEvent } from './src/data/polymarket'
 import { createCongressService } from './server/congress'
+import { createEquiblesService, EquiblesError } from './server/equibles'
 import { getGdeltNews } from './server/gdelt'
 import { companionSearchChoice } from './server/companionSearch'
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
@@ -37,7 +38,7 @@ import {
   selectSecFinancialFiling,
   normalizeSecFilings,
 } from './src/data/sec'
-import type { PredictionForecastPage, SecCompanyData } from './src/types'
+import type { ConnectionProvider, PredictionForecastPage, SecCompanyData } from './src/types'
 import type { SecTickerMapping } from './src/data/sec'
 import { selectSecEvidenceForTheme } from './src/utils/secOpportunityEvidence'
 import { EUROSTAT_PUBLIC_SERIES, EUROSTAT_SCHEMA_VERSION, EUROSTAT_SERIES } from './src/data/eurostatRegistry'
@@ -55,7 +56,6 @@ const execFileAsync = promisify(execFile)
 const KEYCHAIN_ACCOUNT = 'default'
 const LOCAL_CONNECTIONS_DIR = join(homedir(), '.charlie')
 const LOCAL_CONNECTIONS_PATH = join(LOCAL_CONNECTIONS_DIR, 'connections.json')
-type ConnectionProvider = 'openai' | 'fred' | 'finnhub'
 const CONNECTION_PROVIDER_CONFIG: Record<ConnectionProvider, {
   service: string
   legacyServices?: readonly string[]
@@ -73,6 +73,10 @@ const CONNECTION_PROVIDER_CONFIG: Record<ConnectionProvider, {
   finnhub: {
     service: 'Charlie Finnhub API Key',
     requiredLabel: 'Finnhub API key',
+  },
+  equibles: {
+    service: 'Charlie Equibles API Key',
+    requiredLabel: 'Equibles API key',
   },
 }
 const GPR_SOURCE_URL = 'https://www.matteoiacoviello.com/gpr.htm'
@@ -2430,7 +2434,7 @@ function parseOpenAIJsonText<T>(value: string): T | null {
 }
 
 function isConnectionProvider(value: string): value is ConnectionProvider {
-  return value === 'openai' || value === 'fred' || value === 'finnhub'
+  return Object.prototype.hasOwnProperty.call(CONNECTION_PROVIDER_CONFIG, value)
 }
 
 async function readKeychainValueForService(service: string): Promise<string | null> {
@@ -2460,6 +2464,7 @@ async function readLocalConnectionSecrets(): Promise<Partial<Record<ConnectionPr
       openai: typeof parsed.openai === 'string' ? parsed.openai : undefined,
       fred: typeof parsed.fred === 'string' ? parsed.fred : undefined,
       finnhub: typeof parsed.finnhub === 'string' ? parsed.finnhub : undefined,
+      equibles: typeof parsed.equibles === 'string' ? parsed.equibles : undefined,
     }
   } catch (error) {
     const execError = error as NodeJS.ErrnoException
@@ -3399,9 +3404,26 @@ function marketDataMiddleware(): Plugin {
   const eurostatInFlight = new Map<string, Promise<unknown>>()
 
   const congress = createCongressService(join(APP_SUPPORT_DIR, 'cache', 'congress'))
+  const equibles = createEquiblesService()
 
   const registerMarketDataMiddlewares = (server: ViteDevServer | PreviewServer) => {
     registerLocalStateMiddleware(server)
+    server.middlewares.use(async (req, res, next) => {
+      const url = new URL(req.url ?? '/', 'http://localhost')
+      if (!url.pathname.startsWith('/api/equibles/')) return next()
+      if (req.method !== 'GET') return sendError(res, 'Method not allowed', 405)
+      try {
+        const key = await readConnectionSecret('equibles')
+        const data = await equibles.get(url.pathname.slice('/api/equibles/'.length), url.searchParams, key)
+        return sendJSON(res, data)
+      } catch (error) {
+        if (error instanceof EquiblesError) {
+          if (error.retryAt) res.setHeader('Retry-After', Math.max(1, Math.ceil((error.retryAt - Date.now()) / 1000)))
+          return sendError(res, error.message, error.status)
+        }
+        return sendError(res, 'Could not read the Equibles connection on this device.', 503)
+      }
+    })
     server.middlewares.use(async (req, res, next) => {
       const url = new URL(req.url ?? '/', 'http://localhost')
       if (url.pathname !== '/api/congress/trades') return next()
@@ -3913,19 +3935,20 @@ function marketDataMiddleware(): Plugin {
             const secret = typeof payload.secret === 'string' ? payload.secret.trim() : ''
             if (!secret) return sendError(res, `${CONNECTION_PROVIDER_CONFIG[provider].requiredLabel} is required.`, 400)
             await writeConnectionSecret(provider, secret)
+            if (provider === 'equibles') equibles.clear()
             return sendJSON(res, { configured: true })
           }
 
           if (req.method === 'DELETE') {
             await deleteConnectionSecret(provider)
+            if (provider === 'equibles') equibles.clear()
             return sendJSON(res, { configured: false })
           }
 
           return sendError(res, 'method not allowed', 405)
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err)
-          console.error('[vite-connections]', msg)
-          return sendError(res, msg)
+        } catch {
+          // Native keychain errors can contain the command arguments, including the secret.
+          return sendError(res, 'Could not update the connection on this device.')
         }
       })
 

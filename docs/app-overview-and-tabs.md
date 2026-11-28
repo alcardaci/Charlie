@@ -66,6 +66,8 @@ The desktop shortcut bar and mobile menu offer the same twelve workspaces.
   - Macro dashboard series, cross-country macro snapshots, and rate/growth/inflation indicators
 - Finnhub
   - Earnings-calendar support used inside the macro calendar flow
+- Equibles
+  - Historical earnings calls, briefs, transcripts, analyst exchanges, topic history, phrase counts, and transcript availability for calendar earnings events
 - Local policy calendar registry
   - Static policy-event schedule data bundled in `src/data/policyCalendar.ts`
 
@@ -142,6 +144,11 @@ What it contains:
 - Recommendation trends
 - Ownership and holder context
 - Filings/developments
+- **Earnings Calls** on company pages. Choose a fiscal quarter or open a matching event from the Overview or Macro calendar. Recordings, webcast links and slides appear when available. The shared reader has four views.
+  - **Call Brief** shows Equibles’ executive summary, bullish and bearish points, management guidance, and notable quotes with the speaker and timestamp when known. When a brief lacks guidance, you can check the earnings release separately.
+  - **Transcript** lets you search by word or speaker. Equibles’ filing corrections show the spoken and filed figures with the filing form and date when available.
+  - **Analyst Q&A** identifies analysts, firms and responding executives. Open an answer to read the original exchange, or follow it directly to that section of the transcript.
+  - **Trends** lists the selected quarter’s themes and keyword counts. Expand the comparison to see new, recurring, or discontinued topics across the company’s latest scored calls. Track a word or phrase across the latest 4, 8, or 12 calls using raw counts and mentions per 10,000 words. Missing text and unscored quarters are marked separately from zero mentions.
 - Financial statements and ratio-oriented company workbench sections
 - For indices, a level quoted in points, 30 days of daily closes, and comparisons with available reference levels. The five major indices on Overview also link to their providers’ descriptions.
 
@@ -353,7 +360,7 @@ Browse House and Senate transaction disclosures by filing date. Filter by member
 
 Choose **Help & Shortcuts** or enter `HELP` to see command examples, the workspace directory, keyboard shortcuts, data sources, and international ticker suffixes.
 
-Open **Settings** (F12) to see which optional provider keys are saved on this device. Expand OpenAI, FRED, or Finnhub to add, replace, or remove its key. The status reports local key storage. It does not test the provider account.
+Open **Settings** (F12) to see which optional provider keys are saved on this device. Expand OpenAI, FRED, Finnhub, or Equibles to add, replace, or remove its key. The status reports local key storage.
 
 The Overview summary has its own model selector and expandable instructions. Model and prompt preferences are saved separately from API keys.
 

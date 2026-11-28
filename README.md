@@ -21,7 +21,7 @@ Charlie is a desktop market research app. Build a dashboard around your portfoli
 ## Current Feature Set
 
 - **Overview and Portfolio.** Arrange the Overview cards, track symbols with 30-day price charts, and see how your positions, cost basis, and allocation change over time.
-- **Equity Research.** Read company profiles and SEC filings, chart prices and moving averages, or open an index to compare its level with its recent history.
+- **Equity Research.** Read company profiles and SEC filings, search quarterly earnings call transcripts, chart prices and moving averages, or open an index to compare its level with its recent history.
 - **News and Macro.** Follow a scrolling headline feed, review geographic hotspots with source links, and explore economic releases, policy rates, and yields. News tiles can be moved and resized.
 - **Predictions and Congressional Trades.** Compare leading Polymarket outcomes side by side. Browse disclosed House and Senate trades by member, ticker, or chamber, with reported amount ranges, filing delays, and links to the original reports.
 - **Navigation.** Twelve workspaces share a command bar and keyboard shortcuts. Heatmap, Forex, ETFs, and Crypto provide dedicated market views. Settings includes Help & Shortcuts.
@@ -63,6 +63,7 @@ npm run desktop:dev
 - Polymarket Gamma API: prediction-market contracts, probabilities, liquidity, and volume.
 - FRED: macro series and release dates used in the macro and calendar views.
 - Finnhub: earnings calendar support used in macro views.
+- Equibles supplies earnings-call briefs, searchable transcripts, analyst Q&A, and cross-quarter topic and phrase counts. Coverage varies by company and quarter. [Earnings calls API](https://equibles.com/docs/api/endpoints/earnings)
 - GDELT DOC 2.0 and Global Knowledge Graph supply articles for the event map and country hotspots.
 - Caldara-Iacoviello GPR dataset: geopolitical risk time series and charting.
 - Local policy calendar registry: bundled policy-event schedule data.
@@ -77,6 +78,7 @@ Open **Settings** (F12) to manage optional API keys or change the model and inst
 - OpenAI powers the Global Event Map, country summaries, and the optional AI features.
 - FRED: macro data and release calendars
 - Finnhub: earnings calendar support
+- Equibles connects **Equity → Earnings Calls** and matching earnings events in the **Events Calendar**. Both open the same four-tab reader. The free plan includes the call analytics and allows 100 requests per day across the REST API and MCP. Charlie caches results and looks up earlier calls, answer text, and phrase counts as you request them. [Get a key](https://equibles.com/dashboard/apikeys) · [Plan limits](https://equibles.com/docs/rate-limits)
 
 On macOS, these credentials are stored in Keychain. On Windows and Linux, they are stored in a local `connections.json` file in the user's Charlie data directory. No private provider keys should be committed to the repository.
 

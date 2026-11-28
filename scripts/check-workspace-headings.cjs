@@ -4,6 +4,7 @@ const { tmpdir } = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { app, BrowserWindow, net } = require('electron');
+const { earningsFixture, exerciseEarningsCalls } = require('./fixtures/earnings-calls-ui.cjs');
 
 const origin = 'https://charlie.test';
 const dist = path.resolve(__dirname, '../dist');
@@ -32,7 +33,7 @@ const congressRows = [
     chamber: 'Senate', ticker: null, asset: 'Fixture asset', owner: null, action: 'Purchase', amendment: true,
     filingDate: '2026-11-23', filingUrl: 'https://efdsearch.senate.gov/search/view/ptr/fixture/' },
 ];
-const connections = { openai: true, fred: false, finnhub: false };
+const connections = { openai: true, fred: false, finnhub: false, equibles: false };
 let failFirstFredSave = true;
 let savedState = JSON.stringify({ version: 0, state: {
   watchlist: ['^GSPC', 'FLAT', 'NOHIST'],
@@ -48,6 +49,8 @@ app.once('quit', () => rmSync(profile, { recursive: true, force: true }));
 async function localResponse(request) {
   const url = new URL(request.url);
   if (url.origin !== origin) return new Response(null, { status: 404 });
+  const earningsResponse = await earningsFixture(request, url, connections);
+  if (earningsResponse) return earningsResponse;
   if (mapStages && url.pathname === '/api/gdelt/geopolitics' && url.searchParams.get('timeframeHours') === '168') {
     await mapStages.feed.promise;
     return Response.json([{ title: 'Canada announces new sanctions', link: 'https://example.com/canada', publishedAt: Date.now() - 3_600_000 }]);
@@ -97,7 +100,8 @@ async function localResponse(request) {
   if (url.pathname === '/api/yf/quotes') {
     const symbols = (url.searchParams.get('symbols') || '').split(',');
     return Response.json(symbols.map(symbol => ({
-      symbol, currency: 'USD', exchangeTimezoneName: 'America/New_York', shortName: symbol, quoteType: 'EQUITY', regularMarketPrice: 100,
+      symbol, currency: 'USD', exchangeTimezoneName: 'America/New_York', shortName: symbol,
+      quoteType: symbol.startsWith('^') ? 'INDEX' : symbol === 'SPY' ? 'ETF' : 'EQUITY', regularMarketPrice: 100,
     })));
   }
   if (url.pathname.startsWith('/api/yf/chart/') && url.searchParams.has('period1') && url.searchParams.get('interval') === '1d') {
@@ -800,6 +804,11 @@ async function run() {
   });
   session.protocol.handle('https', localResponse);
   await win.loadURL(origin);
+  if (process.argv.includes('--earnings-calls')) {
+    await exerciseEarningsCalls(win);
+    win.destroy();
+    return;
+  }
   for (const width of [1440, 2560, 390, 320]) {
     win.setContentSize(width, 900);
     for (const theme of ['dark', 'light']) {
@@ -835,6 +844,7 @@ async function run() {
   assert.ok(!savedState.includes('fixture-only'), 'Provider keys must stay separate from general app preferences');
   await checkOverviewEditor(win);
   await checkMapLoading(win);
+  await exerciseEarningsCalls(win);
   win.destroy();
   console.log('Workspace navigation, headings, Help, Settings, Overview layout editing and persistence, AI Insights conversations, and 30-day sparklines passed.');
 }

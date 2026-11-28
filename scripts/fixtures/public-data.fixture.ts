@@ -1,9 +1,12 @@
+import './equibles-service.fixture';
 import { useTerminalStore } from '../../src/store/useTerminalStore';
 import { hydrateTerminalState } from '../../src/utils/bootstrapState';
 import { fetchPublicJson } from '../../src/utils/publicRequests';
 import { fetchChartWindow, fetchCompanyWorkbench, fetchGeopoliticalHeadlineCandidates, fetchMacroDashboard, fetchMacroReleaseCalendar } from '../../src/api/finance';
 import { getScreenCommandPanel, shouldUseSearch } from '../../src/utils/commandParsing';
 import { indexReferenceLevels } from '../../src/data/indexResearch';
+import { calendarCallLookups, matchCalendarCall } from '../../src/utils/calendarEarningsCalls';
+import type { EarningsCallEvent } from '../../src/types/earningsCalls';
 import { fmt } from '../../src/utils/formatters';
 
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message); }
@@ -110,11 +113,45 @@ try {
   const releaseReads: string[] = [];
   globalThis.fetch = async input => {
     const url = String(input); releaseReads.push(url);
+    if (url.includes('/calendar/earnings')) return Response.json({ earningsCalendar: [
+      { symbol: 'NVDA', date: '2026-11-25', year: 2027, quarter: 3 },
+      { symbol: 'AAPL', date: null },
+    ] });
     return new Response(url.includes('/api/fred/') ? JSON.stringify({release_dates:[{date:'2026-11-25'}]}) : '[]');
   };
   const calendar = await fetchMacroReleaseCalendar('2026-11-01','2026-11-30');
   assert(releaseReads.some(url => url.includes('release_id=53')) && !releaseReads.some(url => url.includes('/releases?')), 'GDP must use official release identity, not a fuzzy catalog match');
   assert(calendar.events.find(event => event.title === 'US GDP')?.description === 'Gross Domestic Product', 'GDP calendar identity must not become a debt/GDP release');
+  const earnings = calendar.events.find(event => event.symbol === 'NVDA');
+  assert(earnings?.fiscalYear === 2027 && earnings.fiscalQuarter === 3, 'Keep the source reporting quarter even when the calendar year differs');
+  assert(!calendar.events.some(event => event.symbol === 'AAPL'), 'Undated releases cannot be placed on a calendar');
+  const call: EarningsCallEvent = {
+    id: 'nvda-call', ticker: 'NVDA', title: null, fiscalYear: 2027, fiscalQuarter: 3, callDate: '2026-11-27T00:00:00Z',
+    callDateIsPeriodEnd: false, hasTranscript: true, hasAudio: false, hasSlides: false, presentationOnly: false, partialRecording: false,
+    status: 'Concluded', statusName: 'Concluded', webcastUrl: null, replayUrl: null, materials: { transcript: null, audio: null, slides: null },
+  };
+  const asOf = '2026-12-08';
+  assert(matchCalendarCall(earnings, [call], asOf) === call, 'A reported quarter can link across separate earnings release and call dates');
+  for (const candidate of [{ ...call, ticker: 'AMD' }, { ...call, fiscalQuarter: 2 }, { ...call, hasTranscript: false },
+    { ...call, callDate: '2026-12-09T17:00:00Z' }]) {
+    assert(!matchCalendarCall(earnings, [candidate], asOf), 'No link for other tickers, quarters, future calls, or unavailable transcripts');
+  }
+  const unqualified = { ...earnings, fiscalYear: undefined, fiscalQuarter: undefined };
+  const midnight = { ...call, callDate: '2026-11-25T00:00:00Z' };
+  const lateInNewYork = { ...call, callDate: '2026-11-26T01:00:00Z' };
+  assert(matchCalendarCall(unqualified, [midnight], asOf) === midnight && matchCalendarCall(unqualified, [lateInNewYork], asOf) === lateInNewYork,
+    'Date-only recordings preserve the stated date and timed US calls use the exchange-local date');
+  assert(!matchCalendarCall(unqualified, [{ ...midnight, callDateIsPeriodEnd: true }], asOf)
+    && !matchCalendarCall(unqualified, [midnight, lateInNewYork], asOf)
+    && !matchCalendarCall(unqualified, [call], asOf), 'Never guess between competing calls or match a period-end placeholder as a real date');
+  const future = { ...earnings, date: '2026-12-10' };
+  assert(!matchCalendarCall(future, [call], asOf) && calendarCallLookups([future], asOf).length === 0, 'Future releases do not fetch or link past calls');
+  const lookups = calendarCallLookups([
+    ...Array.from({ length: 26 }, (_, i) => ({ ...earnings, symbol: 'T' + i, date: '2026-11-01' })),
+    { ...earnings, date: '2026-11-30' },
+  ], asOf);
+  assert(lookups.every(batch => batch.symbols.length <= 25 && (Date.parse(batch.until) - Date.parse(batch.since)) / 86400000 <= 31)
+    && lookups.some(batch => batch.symbols.includes('NVDA') && batch.until > '2026-12-01'), 'Group only displayed issuers, respect API limits, and cover calls just past month end');
   globalThis.fetch = async input => {
     const url = String(input);
     if (url.includes('/connections/status')) return new Response('{"fred":true,"openai":false,"finnhub":false}');

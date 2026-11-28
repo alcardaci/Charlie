@@ -24,6 +24,7 @@ const SOURCES = [
   ['BLS, OECD, Eurostat', 'U.S., European, and cross-country economic indicators.'],
   ['FRED', 'Economic series and release dates.'],
   ['Finnhub', 'Earnings calendars.'],
+  ['Equibles', 'Earnings call briefs, transcripts, analyst exchanges, phrase trends, and available webcasts.'],
   ['CoinGecko', 'Crypto prices and market-cap rankings.'],
   ['Polymarket', 'Market-implied probabilities and trading activity.'],
   ['House Clerk and NexusTrade', 'U.S. House and Senate financial disclosures and links to the original filings.'],
@@ -90,7 +91,7 @@ export function HelpContent() {
                 </li>
               ))}
             </ul>
-            <p className="mt-2 leading-relaxed">Settings holds optional keys for OpenAI analysis, FRED economic data, and Finnhub earnings dates.</p>
+            <p className="mt-2 leading-relaxed">Manage optional provider keys in Settings → Preferences → API Connections.</p>
           </nav>
         </div>
 

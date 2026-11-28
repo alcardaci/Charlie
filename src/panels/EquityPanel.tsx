@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { fetchCompanyFinancials, fetchCompanyWorkbench, fetchQuotes, fetchSecCompanyData } from '../api/finance';
 import { IndexOverview } from '../components/IndexOverview';
+import { EarningsCalls } from '../components/EarningsCalls';
 import { mergeCompanyFilings } from '../data/sec';
 import { resolveEquityProfile } from '../utils/equityProfile';
 import { CompanyFinancials, CompanyWorkbench, FinancialPeriodType, SecCompanyData, SecFiling, SecMetricKey, SecMetricObservation } from '../types';
@@ -22,7 +23,7 @@ import { useTerminalStore } from '../store/useTerminalStore';
 import { fmt, changeColor } from '../utils/formatters';
 import type { MultiAssetView } from '../store/useTerminalStore';
 
-type WorkspaceTab = 'overview' | 'financials' | 'analysis' | 'ownership' | 'performance' | 'holdings' | 'details';
+type WorkspaceTab = 'overview' | 'financials' | 'analysis' | 'ownership' | 'performance' | 'holdings' | 'details' | 'calls';
 
 const EQUITY_TABS: Array<{ key: WorkspaceTab; label: string }> = [
   { key: 'overview', label: 'OVERVIEW' },
@@ -30,6 +31,8 @@ const EQUITY_TABS: Array<{ key: WorkspaceTab; label: string }> = [
   { key: 'analysis', label: 'ANALYSIS' },
   { key: 'ownership', label: 'OWNERSHIP / FILINGS' },
 ];
+
+const COMPANY_TABS: typeof EQUITY_TABS = [...EQUITY_TABS, { key: 'calls', label: 'EARNINGS CALLS' }];
 
 const FUND_TABS: Array<{ key: WorkspaceTab; label: string }> = [
   { key: 'overview', label: 'OVERVIEW' },
@@ -68,6 +71,10 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
 
   const isIndex = workbench?.instrumentKind === 'index';
   const company = isIndex ? undefined : workbench;
+  // ETFs share the equity workbench but do not hold company earnings calls.
+  const hasCompanyCalls = company?.instrumentKind === 'equity' && company.instrumentLabel !== 'ETF'
+    && (company.quote.quoteType || company.instrumentLabel).trim().toUpperCase() === 'EQUITY';
+  const tabs = company?.instrumentKind === 'fund' ? FUND_TABS : hasCompanyCalls ? COMPANY_TABS : EQUITY_TABS;
 
   const { data: financials, isLoading: loadingFinancials, isFetching: fetchingFinancials, error: financialsError, refetch: refetchFinancials } = useQuery({
     queryKey: ['equity-financials', selectedSymbol, periodType],
@@ -97,11 +104,10 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
 
   useEffect(() => {
     if (!workbench || workbench.instrumentKind === 'index') return;
-    const validTabs = workbench.instrumentKind === 'fund' ? FUND_TABS : EQUITY_TABS;
-    if (!validTabs.some((item) => item.key === tab)) {
+    if (!tabs.some((item) => item.key === tab)) {
       setTab('overview');
     }
-  }, [tab, workbench]);
+  }, [tab, workbench, tabs]);
 
   async function refreshResearch() {
     if (manualRefresh.current === selectedSymbol) return;
@@ -121,7 +127,6 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
 
   const SymbolHeading = embedded ? 'span' : 'h1';
   const isFund = workbench.instrumentKind === 'fund';
-  const tabs = isFund ? FUND_TABS : EQUITY_TABS;
   const { quote } = workbench;
   const resolvedProfile = company && resolveEquityProfile(company.profile, secData);
   const chgColor = changeColor(quote.regularMarketChangePercent);
@@ -308,6 +313,7 @@ export function EquityPanel({ symbol, embedded = false, onOpenParallel, onSwitch
             {tab === 'financials' && <FinancialsTab financials={financials} loading={loadingFinancials} currency={quote.currency} />}
             {tab === 'analysis' && <AnalysisTab workbench={workbench} />}
             {tab === 'ownership' && <OwnershipTab workbench={workbench} secData={secData} loadingSec={loadingSec} />}
+            {tab === 'calls' && hasCompanyCalls && <EarningsCalls symbol={selectedSymbol} />}
           </>
         )}
       </div>
