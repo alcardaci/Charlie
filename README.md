@@ -21,7 +21,8 @@ Charlie is a desktop market research app. Build a dashboard around your portfoli
 ## Current Feature Set
 
 - **Overview and Portfolio.** Arrange the Overview cards, track symbols with 30-day price charts, and see how your positions, cost basis, and allocation change over time.
-- **Equity Research.** Read company profiles and SEC filings, search quarterly earnings call transcripts, chart prices and moving averages, or open an index to compare its level with its recent history.
+- **Equity Research.** Read company profiles and SEC filings, chart prices and moving averages, or open an index to compare its level with its recent history.
+- **Earnings Calls.** Open a quarter from Equity Research or a matching earnings event in the calendar. Read management guidance, follow an analyst’s question to the executive’s answer, and compare topics and phrase counts across calls with a free Equibles key.
 - **News and Macro.** Follow a scrolling headline feed, review geographic hotspots with source links, and explore economic releases, policy rates, and yields. News tiles can be moved and resized.
 - **Predictions and Congressional Trades.** Compare leading Polymarket outcomes side by side. Browse disclosed House and Senate trades by member, ticker, or chamber, with reported amount ranges, filing delays, and links to the original reports.
 - **Navigation.** Twelve workspaces share a command bar and keyboard shortcuts. Heatmap, Forex, ETFs, and Crypto provide dedicated market views. Settings includes Help & Shortcuts.
